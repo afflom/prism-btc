@@ -21,18 +21,27 @@ use crate::shapes::hasher::Sha256dHasher;
 /// pair via foundation's typed-iso pipeline.
 ///
 /// The 80-byte canonical wire-format header is wrapped in
-/// [`MiningInput`], passed to `BitcoinMiningModel::forward`, which
-/// delegates to `pipeline::run_route` (ADR-022 D5). The bytes are
-/// folded through `Sha256dHasher` to derive the input-binding's
-/// `content_address`; `pipeline::run` then folds the CompileUnit
-/// metadata through the same Hasher to produce the
-/// `ContentFingerprint` and `unit_address` carried on the resulting
-/// `Grounded`. The Grounded therefore attests the typed-iso path the
-/// `MiningInput` traversed under
-/// `(DefaultHostTypes, PrismBtcBounds, Sha256dHasher)`; the
-/// 32-byte block-hash bytes themselves are carried alongside on
-/// [`MiningOutcome::digest`] (computed by prism-btc's runtime via
-/// `sha256d_display`, the same algorithm body as `Sha256dHasher`).
+/// [`MiningInput`] and passed to `BitcoinMiningModel::forward`, which
+/// delegates to `pipeline::run_route` (ADR-022 D5). Three things
+/// happen:
+///
+/// 1. `Sha256dHasher` folds the 80 input bytes to derive the
+///    input-binding's `content_address` (ADR-023).
+/// 2. Foundation 0.3.3's catamorphism evaluator runs the route's term
+///    tree (`hash(input)`, lowered to `Term::HasherProjection`) and
+///    attaches the result as the Grounded's `output_bytes` (ADR-028,
+///    ADR-029).
+/// 3. `pipeline::run` folds the canonical CompileUnit metadata through
+///    `Sha256dHasher` to compute `ContentFingerprint` and
+///    `unit_address`.
+///
+/// The 32-byte Bitcoin block hash in display order is on
+/// [`MiningOutcome::digest`], computed by prism-btc's runtime
+/// (`sha256d_display`) using the same `Sha256dHasher` algorithm body
+/// the foundation evaluator invokes inside `HasherProjection`. The
+/// evaluator's `output_bytes` carries `Sha256dHasher` of the input
+/// prefix that fits in foundation's `TERM_VALUE_MAX_BYTES = 32`
+/// per-value ceiling.
 fn mint_witness(header_bytes: [u8; 80]) -> MiningWitness {
     let grounded = <BitcoinMiningModel as PrismModel<
         DefaultHostTypes,

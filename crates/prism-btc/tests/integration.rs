@@ -86,11 +86,12 @@ fn mine_outcome_digest_matches_sha256d_hasher_body() {
 }
 
 #[test]
-fn forward_grounded_is_invariant_across_inputs() {
-    // The Grounded foundation 0.3.2 mints carries a content_fingerprint
-    // and unit_address derived from CompileUnit metadata, not input
-    // bytes. Two distinct admitted inputs must produce Groundeds that
-    // are bit-identical at the substrate level.
+fn forward_grounded_path_identity_is_input_invariant() {
+    // The Grounded's content_fingerprint and unit_address come from
+    // CompileUnit metadata, not input bytes (foundation 0.3.3
+    // `fold_unit_digest`). Two distinct admitted inputs therefore
+    // agree on those substrate bits — they identify the typed-iso
+    // **path**, not bytewise input identity.
     let header_a = easy_header();
     let mut header_b = easy_header();
     header_b.timestamp = Timestamp(header_a.timestamp.0 + 1);
@@ -99,8 +100,10 @@ fn forward_grounded_is_invariant_across_inputs() {
     let oa = mine(&header_a, target, &NeverCancel).expect("a admits");
     let ob = mine(&header_b, target, &NeverCancel).expect("b admits");
 
-    // The digests differ (input-dependent).
+    // The block-hash digests differ (input-dependent, full SHA-256d
+    // over all 80 bytes computed by prism-btc's runtime).
     assert_ne!(oa.digest, ob.digest);
+
     // The Grounded substrate bits do not.
     assert_eq!(
         oa.witness.content_fingerprint(),
@@ -108,6 +111,30 @@ fn forward_grounded_is_invariant_across_inputs() {
     );
     assert_eq!(oa.witness.unit_address(), ob.witness.unit_address());
     assert_eq!(oa.witness.witt_level_bits(), ob.witness.witt_level_bits());
+}
+
+#[test]
+fn forward_grounded_output_bytes_is_input_derived() {
+    // Foundation 0.3.3 attaches the catamorphism evaluator's result to
+    // the Grounded as `output_bytes`. With the route `hash(input)`,
+    // distinct inputs that share their first 32 bytes produce identical
+    // output_bytes; distinct inputs whose first 32 bytes differ produce
+    // distinct output_bytes. Pin the input-derivation by varying a byte
+    // inside the 32-byte prefix (the version field).
+    let mut header_a = easy_header();
+    let mut header_b = easy_header();
+    header_a.version = Version(1);
+    header_b.version = Version(2); // first 4 bytes differ; rest identical
+
+    let target = Target::new(0x207fffff);
+    let oa = mine(&header_a, target, &NeverCancel).expect("a admits");
+    let ob = mine(&header_b, target, &NeverCancel).expect("b admits");
+
+    let out_a = oa.witness.output_bytes();
+    let out_b = ob.witness.output_bytes();
+    assert_eq!(out_a.len(), 32);
+    assert_eq!(out_b.len(), 32);
+    assert_ne!(out_a, out_b);
 }
 
 #[test]
