@@ -704,9 +704,11 @@ are the boundary's responsibility. Per invocation of `pipeline::run`:
 The pipeline itself has no abort mechanism. A `pipeline::run` in
 flight runs to completion; if its result is for a stale parent, the
 boundary discards the result without submitting. At realistic CPU
-hash rates (~30 MH/s on 8 cores), one W32 traversal completes in
-~140 seconds; tip changes on testnet4/mainnet average 600 seconds, so
-the discard rate is acceptable.
+SHA-256d evaluation rates (~30 MH/s on 8 cores) **for prism-btc's W32
+traversal**, one full pass over `Z/(2^32)Z` completes in ~140 seconds;
+tip changes on testnet4/mainnet average 600 seconds, so the discard
+rate is acceptable. (This rate is a property of the search loop in
+`prism_btc::ops::traversal`, not of `pipeline::run_route` — see §13.3.)
 
 ### 6.6 Replay (Runtime View Scenario 2)
 
@@ -1326,6 +1328,61 @@ belong to the prism implementor. Reconciling prism-btc to the
 architecture is therefore a matter of prism-btc writing what is its
 responsibility to write — which it now does, in full, against
 foundation 0.3.4's typed-iso surface.
+
+### 13.3 Difficulty does not couple to prism's typed-iso operation
+
+A natural confusion is to read "Bitcoin mining" as one thing and
+assume difficulty parameterises every layer of it. Under prism's
+substrate-vs-implementor split (§13), it does not. Two distinct axes
+share the same algorithm body (`Sha256dHasher`) but nothing else:
+
+**Search axis — prism-btc, not prism.** The W32 fiber traversal in
+`prism_btc::ops::traversal` evaluates `sha256d_display(serialize_header(prefix, nonce))`
+per fiber visit and tests the digest against the 32-byte target
+threshold. Expected fiber-visit count before admission scales with
+`1 / Pr[digest ≤ target]` — that is, with Bitcoin's protocol
+difficulty. **This is where the cryptographic-work cost of mining
+lives.** It is outside prism's vocabulary; prism does not know about
+"difficulty," "nonces," or "search."
+
+**Typed-iso axis — prism, not prism-btc.** Foundation's
+`pipeline::run_route` → `pipeline::evaluate_term_tree` runs **exactly
+once per `mine()` invocation**, on the admitting 80-byte input. Cost
+is `O(arena_depth × TERM_VALUE_MAX_BYTES)` — constant in difficulty,
+constant in `nBits`, constant in `target`. The Hasher fold here is
+deterministic σ-projection evaluation that mints the typed-iso
+`Grounded`, not a search. **`forward()`'s cost is a pure function of
+the route's term tree, not of the chain it ran on.**
+
+The two axes are fully decoupled. prism-btc's mining algorithm is a
+fixed structural commitment: same `BitcoinMiningModel`, same `Route`,
+same `Sha256dHasher`, same `PrismBtcBounds`, same W32 traversal —
+across regtest, signet, testnet, testnet4, and mainnet. **The code
+path does not branch on network.** The only network-dependent value
+is what `getblocktemplate` returns in the `bits` field of the
+template, which becomes the byte threshold the W32 traversal
+compares digests against. Difficulty is *runtime input*, not
+configuration.
+
+What does change between networks:
+
+| Property | Regtest | Mainnet | Why |
+|---|---|---|---|
+| `BitcoinMiningModel` impl | identical | identical | same const term arena |
+| `Sha256dHasher` body | identical | identical | one substitution-axis selection |
+| W32 traversal code | identical | identical | one runtime in `ops/traversal` |
+| `forward()` cost | `O(1)` | `O(1)` | constant in difficulty |
+| Wall-clock to first admission | µs | years on CPU | search-axis property of the chain's `nBits`, not of prism-btc |
+| Bytes submitted | `serialize_header(prefix, nonce)` | `serialize_header(prefix, nonce)` | same wire format |
+
+When prism-btc mines on testnet or mainnet under a real difficulty,
+nothing in this repository runs differently. The `mine_one_block`
+single-shot succeeds on regtest because the very first nonce admits;
+on testnet/mainnet `MiningSession` runs the same traversal across
+extranonce-rolled prefixes until admission. The structural attestation
+the typed-iso surface produces — `Grounded::output_bytes` ≡ the block
+hash, `unit_address` ≡ the path identity — is bit-identical regardless
+of which chain anchored it.
 
 ---
 
