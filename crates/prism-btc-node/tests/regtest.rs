@@ -18,10 +18,21 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+use bitcoin::hashes::Hash;
 use bitcoin::Network;
 use bitcoincore_rpc::{Auth, Client, RpcApi};
 
 use prism_btc_node::{MiningSession, PrismMiner, SessionConfig};
+
+/// Both `MiningWitness::output_bytes()` and `BlockHash::to_byte_array()`
+/// return SHA-256d in **internal** (wire / Hasher-finalize) byte order.
+/// They are bit-equal when the catamorphism evaluator produced the same
+/// digest bitcoind anchored.
+fn witness_block_hash_internal(witness: &prism_btc::MiningWitness) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out.copy_from_slice(witness.output_bytes());
+    out
+}
 
 fn env_or_skip(key: &str) -> Option<String> {
     match std::env::var(key) {
@@ -76,6 +87,16 @@ fn mines_a_block_and_advances_the_chain() {
         32,
         "W32 level must propagate from the const-validated CompileUnit"
     );
+
+    // Foundation 0.3.4 catamorphism (ADR-028, ADR-029): the Grounded's
+    // output_bytes IS the block hash bitcoind accepted, in the Hasher's
+    // internal byte order — bit-equal to BlockHash::to_byte_array().
+    let from_witness = witness_block_hash_internal(&mined.witness);
+    let from_bitcoind: [u8; 32] = mined.hash.to_byte_array();
+    assert_eq!(
+        from_witness, from_bitcoind,
+        "Grounded::output_bytes must equal the bitcoind-anchored block hash"
+    );
 }
 
 #[test]
@@ -114,4 +135,11 @@ fn session_mines_a_block_and_advances_the_chain() {
     let tip = observer.get_best_block_hash().expect("getbestblockhash");
     assert_eq!(tip, mined.hash);
     assert_eq!(mined.witness.witt_level_bits(), 32);
+
+    // Same end-to-end pin as the single-shot path: the typed-iso
+    // evaluator's output_bytes equals the bitcoind-anchored block hash
+    // (both internal byte order).
+    let from_witness = witness_block_hash_internal(&mined.witness);
+    let from_bitcoind: [u8; 32] = mined.hash.to_byte_array();
+    assert_eq!(from_witness, from_bitcoind);
 }
