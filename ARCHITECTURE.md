@@ -1329,60 +1329,122 @@ architecture is therefore a matter of prism-btc writing what is its
 responsibility to write — which it now does, in full, against
 foundation 0.3.4's typed-iso surface.
 
-### 13.3 Difficulty does not couple to prism's typed-iso operation
+### 13.3 The mining inference is one structural commitment
 
-A natural confusion is to read "Bitcoin mining" as one thing and
-assume difficulty parameterises every layer of it. Under prism's
-substrate-vs-implementor split (§13), it does not. Two distinct axes
-share the same algorithm body (`Sha256dHasher`) but nothing else:
+Per the wiki Conceptual-Model and §13's three-layer closure (ADR-024),
+prism-btc's mining inference is a single structural commitment
+declared via the framework's verb / route / model vocabulary. It is
+not "two layers, search and attestation" with separate cost models —
+it is one verb (`nonce_fiber_traversal`, §13.4) whose evaluation
+produces an admitting input plus the typed-iso path attestation, in
+one mint, with `Grounded::output_bytes` carrying the block hash per
+ADR-028.
 
-**Search axis — prism-btc, not prism.** The W32 fiber traversal in
-`prism_btc::ops::traversal` evaluates `sha256d_display(serialize_header(prefix, nonce))`
-per fiber visit and tests the digest against the 32-byte target
-threshold. Expected fiber-visit count before admission scales with
-`1 / Pr[digest ≤ target]` — that is, with Bitcoin's protocol
-difficulty. **This is where the cryptographic-work cost of mining
-lives.** It is outside prism's vocabulary; prism does not know about
-"difficulty," "nonces," or "search."
-
-**Typed-iso axis — prism, not prism-btc.** Foundation's
-`pipeline::run_route` → `pipeline::evaluate_term_tree` runs **exactly
-once per `mine()` invocation**, on the admitting 80-byte input. Cost
-is `O(arena_depth × TERM_VALUE_MAX_BYTES)` — constant in difficulty,
-constant in `nBits`, constant in `target`. The Hasher fold here is
-deterministic σ-projection evaluation that mints the typed-iso
-`Grounded`, not a search. **`forward()`'s cost is a pure function of
-the route's term tree, not of the chain it ran on.**
-
-The two axes are fully decoupled. prism-btc's mining algorithm is a
-fixed structural commitment: same `BitcoinMiningModel`, same `Route`,
-same `Sha256dHasher`, same `PrismBtcBounds`, same W32 traversal —
-across regtest, signet, testnet, testnet4, and mainnet. **The code
-path does not branch on network.** The only network-dependent value
-is what `getblocktemplate` returns in the `bits` field of the
-template, which becomes the byte threshold the W32 traversal
-compares digests against. Difficulty is *runtime input*, not
-configuration.
-
-What does change between networks:
+prism-btc's code path does not branch on network. Same
+`BitcoinMiningModel`, same `BitcoinMiningRoute`, same
+`nonce_fiber_traversal` verb, same `Sha256dHasher`, same
+`PrismBtcBounds`, same runtime that evaluates the verb's structural
+declaration — across regtest, signet, testnet, testnet4, and mainnet.
+The only network-dependent value is what `getblocktemplate` returns
+in the `bits` field of the template, which the verb's runtime uses
+as the byte threshold for admission. Difficulty is *runtime input*,
+not configuration.
 
 | Property | Regtest | Mainnet | Why |
 |---|---|---|---|
 | `BitcoinMiningModel` impl | identical | identical | same const term arena |
+| `nonce_fiber_traversal_term_arena()` | identical | identical | same verb declaration |
 | `Sha256dHasher` body | identical | identical | one substitution-axis selection |
-| W32 traversal code | identical | identical | one runtime in `ops/traversal` |
-| `forward()` cost | `O(1)` | `O(1)` | constant in difficulty |
-| Wall-clock to first admission | µs | years on CPU | search-axis property of the chain's `nBits`, not of prism-btc |
+| Verb runtime evaluator | identical | identical | one runtime in `ops/traversal` |
+| `Grounded::output_bytes` semantics | block hash | block hash | ADR-028 invariant |
+| Wall-clock to first admission | µs | very long on CPU | property of the chain's `nBits` and the runtime's hardware speed, not of prism-btc's structure |
 | Bytes submitted | `serialize_header(prefix, nonce)` | `serialize_header(prefix, nonce)` | same wire format |
 
-When prism-btc mines on testnet or mainnet under a real difficulty,
-nothing in this repository runs differently. The `mine_one_block`
-single-shot succeeds on regtest because the very first nonce admits;
-on testnet/mainnet `MiningSession` runs the same traversal across
-extranonce-rolled prefixes until admission. The structural attestation
-the typed-iso surface produces — `Grounded::output_bytes` ≡ the block
-hash, `unit_address` ≡ the path identity — is bit-identical regardless
-of which chain anchored it.
+The wall-clock entry is a property of the **runtime evaluator's
+hardware speed plus the chain's `nBits`** — not of prism-btc's
+declaration. A faster `Hasher` substitution-axis selection (e.g.,
+SHA-NI intrinsics behind the `Hasher` trait, contributed under
+ADR-007's three-position pattern) reduces wall-clock without
+changing the verb declaration or the runtime's structure. The
+declaration `first_admit(W32, |nonce| hash(input))` is one
+commitment everywhere; the substitution axes parameterise its cost.
+
+### 13.4 Layer-3 verb declarations (ADR-024 + ADR-026 G16)
+
+prism-btc declares its mining-domain verbs in
+[`crate::verbs`](crates/prism-btc/src/verbs.rs) via the
+`uor-foundation-sdk::verb!` macro. Each verb's term-tree fragment is
+a `&'static [Term]` slice emitted at the application's compile time;
+the SDK runs the verb-closure check (closure under foundation
+primitives ∪ own-implementation verbs ∪ imported verbs; acyclicity
+through non-`recurse` operators); the implementation provides the
+runtime that evaluates the declaration per ADR-026 G16's three-way
+responsibility split.
+
+#### `nonce_fiber_traversal`
+
+| Field | Value |
+|---|---|
+| Body | `first_admit(WittLevel::W32, \|nonce\| hash(input))` |
+| Lowering | `Term::Recurse { measure: Literal(256), base: Literal(0), step: HasherProjection { input_index } }` (per ADR-026 G16 + G19) |
+| Implementation runtime | [`crate::ops::traversal::traverse_sequential`](crates/prism-btc/src/ops/traversal.rs) (sequential) and [`traverse_parallel`](crates/prism-btc/src/ops/traversal.rs) (parallel coset partition over `Z/(2^32)Z`) |
+| Conformance test | ADR-026 G16: "for any (domain, predicate) pair, the implementation's runtime produces the same first-admitting index as a reference sequential traversal would." prism-btc's `traverse_sequential` IS the reference sequential traversal. |
+
+Pinned by [`crate::verbs::tests`](crates/prism-btc/src/verbs.rs):
+- `verb_term_arena_is_emitted_and_nonempty`
+- `verb_arena_contains_a_recurse_node` (ADR-026 G16 lowering)
+- `verb_arena_contains_a_hasher_projection` (ADR-026 G19 lowering)
+
+#### Closure-body grammar limits in SDK 0.3.4
+
+The wiki's intended verb body for `nonce_fiber_traversal` is:
+
+```text
+first_admit(WittLevel::W32, |nonce| {
+    hash(serialize_with_nonce(prefix, nonce)) <= target
+})
+```
+
+SDK 0.3.4's closure-body grammar (ADR-022 D3 G1–G11 + ADR-026
+G12–G19) admits `first_admit` (G16) and `hash` (G19) but does not
+yet admit:
+
+- The lexicographic byte comparison `<=` — there is no comparison
+  operator in G1–G19.
+- Byte-level packing `prefix || nonce` into the 80-byte canonical
+  wire-format header — no shift / concat `PrimitiveOp` is in the
+  substrate (closest is `xor` over a common Witt-level operand pair).
+
+The body in `verbs.rs` uses `hash(input)` as the structural form —
+the abstract σ-projection of the verb's input. The implementation
+runtime ([`crate::ops::traversal`]) realises the full predicate
+`hash(serialize_with_nonce(prefix, nonce)) ≤ target` per ADR-026
+G16's three-way split. When foundation amends the SDK closure-body
+grammar to admit comparison operators and substrate to admit the
+byte-packing primitives, the body can be tightened to the wiki's
+full form without changes to the runtime.
+
+#### Foundation 0.3.4 gap to ADR-029
+
+ADR-029 specifies normatively that foundation's `pipeline::run`
+evaluates `Term::Recurse` recursively (with measure decreasing,
+terminating at base when measure reaches zero). Foundation 0.3.4's
+`pipeline::evaluate_term_tree` implements `Term::Recurse` as a
+**one-step** evaluator (the variant comment in foundation's source
+acknowledges: "Bounded recursion: evaluate one step. […] deeper
+unrolling is implementation-controlled (ADR-026 G14 maps higher
+counts to recursion)."). This is non-conformant to ADR-029.
+
+Per ADR-026 G16's three-way split, the implementation owns the
+runtime; this gap does not block prism-btc. prism-btc's
+[`crate::ops::traversal`] is the implementation runtime. When
+foundation 0.3.5+ ships the recursive `Recurse` evaluator, prism-btc
+will be able to express the search through `pipeline::run_route`
+end-to-end (the verb's term arena will be foundation-evaluable);
+until then, the prism-btc runtime evaluates the structural
+declaration outside the typed-iso surface, then hands the admitting
+input to `BitcoinMiningModel::forward` for the typed-iso shape
+attestation.
 
 ---
 

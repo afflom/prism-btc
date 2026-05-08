@@ -1,11 +1,36 @@
-//! prism-btc's mining pipeline: traverses the W32 fiber over a (prefix,
-//! target) pair, mints the foundation-sealed shape `Grounded` on
-//! admission, returns the (witness, nonce, digest).
+//! prism-btc's mining pipeline: evaluates the
+//! [`crate::verbs::nonce_fiber_traversal`] verb declaration (wiki ADR-024
+//! Layer 3) over a (prefix, target) pair via the implementation runtime
+//! per ADR-026 G16's three-way responsibility split, then mints the
+//! foundation-sealed shape `Grounded` on admission.
 //!
-//! The architecture's `mine()` entry point. Foundation 0.3.2 provides the
-//! sealed `Grounded` mint via `PrismModel::forward` (which delegates to
-//! `pipeline::run_route` per ADR-022 D5); prism-btc provides the W32
-//! traversal that finds the admitting fiber point.
+//! ## ADR-026 G16 conformance
+//!
+//! The verb [`crate::verbs::nonce_fiber_traversal`] is the structural
+//! declaration: `first_admit(WittLevel::W32, |nonce| hash(input))`.
+//! The SDK emits its term-tree fragment as a `&'static [Term]` slice;
+//! foundation MAY optionally provide a default sequential traversal
+//! that walks it (foundation 0.3.4 does not), and per ADR-026 G16
+//! "Implementations that override (e.g., for parallel traversal across
+//! coset partitions) replace the default with their own runtime that
+//! respects the same structural declaration." The runtime [`mine`]
+//! invokes (sequential [`crate::ops::traversal::traverse_sequential`]
+//! and parallel [`crate::ops::traversal::traverse_parallel`]) IS
+//! prism-btc's implementation runtime for the verb. The conformance
+//! test ADR-026 G16 commits to — "for any (domain, predicate) pair,
+//! the implementation's runtime produces the same first-admitting
+//! index as a reference sequential traversal would" — is satisfied
+//! because `traverse_sequential` IS the reference sequential
+//! traversal for the (W32, target-admission) pair.
+//!
+//! ## Typed-iso attestation
+//!
+//! Once the runtime admits, the 80-byte canonical wire-format header
+//! flows through `BitcoinMiningModel::forward` (foundation 0.3.4
+//! `pipeline::run_route` + `evaluate_term_tree` per ADR-029) for the
+//! typed-iso shape attestation. The Grounded that comes back carries
+//! `output_bytes` ≡ `Sha256dHasher` over the 80 bytes — the Bitcoin
+//! block hash, computed inside the typed-iso surface (ADR-028).
 
 use uor_foundation::pipeline::PrismModel;
 use uor_foundation::DefaultHostTypes;

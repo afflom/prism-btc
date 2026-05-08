@@ -39,6 +39,7 @@ pub mod model;
 pub mod ops;
 pub mod pipeline;
 pub mod shapes;
+pub mod verbs;
 
 // Public façade.
 pub use domain::{
@@ -51,6 +52,11 @@ pub use shapes::{PrismBtcBounds, Sha256dHasher};
 
 #[cfg(feature = "std")]
 pub use pipeline::mine_parallel;
+
+// Layer-3 verb declarations (wiki ADR-024). `nonce_fiber_traversal_term_arena()`
+// returns the verb's structural term-tree fragment; the runtime that evaluates
+// it is `ops::traversal` per ADR-026 G16's three-way responsibility split.
+pub use verbs::{nonce_fiber_traversal, nonce_fiber_traversal_term_arena};
 
 // Cancel hooks for tip-watcher-driven aborts.
 pub use ops::traversal::{Cancel, Cancelled, FiberOutcome, NeverCancel};
