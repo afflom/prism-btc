@@ -1,6 +1,6 @@
 //! prism-btc — the prism implementor for Bitcoin proof-of-work.
 //!
-//! Real-time structural inference, expressed as a foundation 0.3.3
+//! Real-time structural inference, expressed as a foundation 0.3.4
 //! `PrismModel<H, B, A>`: the input shape is the 80-byte canonical
 //! Bitcoin block header ([`MiningInput`]); the output shape is
 //! foundation's `ConstrainedTypeInput`; the route is `hash(input)`,
@@ -12,21 +12,19 @@
 //! admitting fiber point ([`mine`], [`mine_parallel`]). On admission,
 //! the 80-byte header is wrapped in [`MiningInput`] and fed through
 //! `BitcoinMiningModel::forward`, which delegates to foundation's
-//! `pipeline::run_route`. Foundation 0.3.3's catamorphism evaluator
-//! (ADR-029) runs the term tree against the input and attaches the
-//! evaluated digest as the `Grounded`'s `output_bytes` (ADR-028); the
-//! `Grounded`'s `content_fingerprint` and `unit_address` continue to
-//! identify the typed-iso path under
-//! `(DefaultHostTypes, PrismBtcBounds, Sha256dHasher)`.
+//! `pipeline::run_route`. Foundation 0.3.4's catamorphism evaluator
+//! (ADR-029) carries the full 80-byte input through the per-value
+//! buffer (`TERM_VALUE_MAX_BYTES = 4096`) and folds it through
+//! `Sha256dHasher`; the resulting 32-byte digest is attached to the
+//! `Grounded` as `output_bytes` (ADR-028). The `Grounded`'s
+//! `content_fingerprint` and `unit_address` identify the typed-iso
+//! path under `(DefaultHostTypes, PrismBtcBounds, Sha256dHasher)`.
 //!
-//! Foundation 0.3.3 caps `pipeline::TermValue` at 32 bytes, so the
-//! evaluator's `output_bytes` is `Sha256dHasher` over the 32-byte
-//! input prefix. The full block hash (over all 80 header bytes, in
-//! display order) is carried on [`MiningOutcome::digest`], computed by
-//! prism-btc's runtime ([`crate::ops::sha256::sha256d_display`]) using
-//! the same `Sha256dHasher` algorithm body the foundation evaluator
-//! invokes — so when foundation lifts the per-value ceiling, the
-//! typed-iso surface will carry the full block hash automatically.
+//! **The Grounded's `output_bytes` IS the Bitcoin block hash** in the
+//! Hasher's internal byte order; reversed, it is the canonical block
+//! hash in display order. [`MiningOutcome::digest`] carries the same
+//! digest in display order as a convenience for callers consuming the
+//! protocol-level hash; both come from the same `Sha256dHasher` body.
 //!
 //! See [`ARCHITECTURE.md`](https://github.com/afflom/prism-btc/blob/main/ARCHITECTURE.md)
 //! for the normative specification.

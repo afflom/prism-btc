@@ -27,21 +27,20 @@ use crate::shapes::hasher::Sha256dHasher;
 ///
 /// 1. `Sha256dHasher` folds the 80 input bytes to derive the
 ///    input-binding's `content_address` (ADR-023).
-/// 2. Foundation 0.3.3's catamorphism evaluator runs the route's term
-///    tree (`hash(input)`, lowered to `Term::HasherProjection`) and
-///    attaches the result as the Grounded's `output_bytes` (ADR-028,
+/// 2. Foundation 0.3.4's catamorphism evaluator carries all 80 bytes
+///    through `Term::Variable {0}` and folds them through
+///    `Sha256dHasher` via `Term::HasherProjection`, attaching the
+///    32-byte digest as the Grounded's `output_bytes` (ADR-028,
 ///    ADR-029).
 /// 3. `pipeline::run` folds the canonical CompileUnit metadata through
 ///    `Sha256dHasher` to compute `ContentFingerprint` and
 ///    `unit_address`.
 ///
-/// The 32-byte Bitcoin block hash in display order is on
-/// [`MiningOutcome::digest`], computed by prism-btc's runtime
-/// (`sha256d_display`) using the same `Sha256dHasher` algorithm body
-/// the foundation evaluator invokes inside `HasherProjection`. The
-/// evaluator's `output_bytes` carries `Sha256dHasher` of the input
-/// prefix that fits in foundation's `TERM_VALUE_MAX_BYTES = 32`
-/// per-value ceiling.
+/// The 32 bytes of `MiningWitness::output_bytes()` ARE the Bitcoin
+/// block hash in the Hasher's internal byte order; reversed, they are
+/// the canonical block hash in display order.
+/// [`MiningOutcome::digest`] carries the same digest in display order
+/// as a callable convenience.
 fn mint_witness(header_bytes: [u8; 80]) -> MiningWitness {
     let grounded = <BitcoinMiningModel as PrismModel<
         DefaultHostTypes,

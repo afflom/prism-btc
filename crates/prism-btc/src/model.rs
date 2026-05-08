@@ -1,10 +1,13 @@
 //! `BitcoinMiningModel` — prism-btc's `PrismModel<H, B, A>` declaration.
 //!
-//! Foundation 0.3.3 ships the `PrismModel<H, B, A>` typed-iso surface
-//! (wiki ADR-019/020/022/023) **and the catamorphism evaluator
-//! [`pipeline::evaluate_term_tree`] (ADR-029) plus
-//! [`Grounded::output_bytes`] (ADR-028)**. prism-btc, as the prism
-//! implementor for the Bitcoin use case, declares its model with:
+//! Foundation 0.3.4 ships the `PrismModel<H, B, A>` typed-iso surface
+//! (wiki ADR-019/020/022/023), the catamorphism evaluator
+//! [`pipeline::evaluate_term_tree`] (ADR-029), and
+//! [`Grounded::output_bytes`] (ADR-028) with `TERM_VALUE_MAX_BYTES =
+//! 4096` — wide enough to carry the 80-byte canonical Bitcoin block
+//! header through `Term::Variable {0}` and feed it whole into
+//! `Term::HasherProjection`. prism-btc, as the prism implementor for
+//! the Bitcoin use case, declares its model with:
 //!
 //! - `Input  = MiningInput`            — the 80-byte canonical wire-format header
 //! - `Output = ConstrainedTypeInput`   — foundation's identity output shape
@@ -20,42 +23,34 @@
 //! 1. Folds the 80 input bytes through `Sha256dHasher` to derive the
 //!    binding's `content_address` (8 high-order bytes of SHA-256d).
 //! 2. Validates the `CompileUnit` against `PrismBtcBounds`.
-//! 3. **Evaluates the route's term tree via `evaluate_term_tree`**: the
-//!    `Term::HasherProjection { input_index: 0 }` rule folds the
-//!    expression at `input_index` (here `Term::Variable {0}`) through
-//!    `Sha256dHasher` and emits the digest (ADR-029).
+//! 3. **Evaluates the route's term tree via `evaluate_term_tree`**:
+//!    `Term::Variable {0}` carries the full 80 input bytes through the
+//!    `TermValue` per-value buffer; `Term::HasherProjection {0}` folds
+//!    those 80 bytes through `Sha256dHasher` and emits the 32-byte
+//!    digest (ADR-029).
 //! 4. Folds the canonical `CompileUnit` byte layout through the same
 //!    Hasher to compute `ContentFingerprint` and `unit_address`.
 //! 5. Mints `Grounded<ConstrainedTypeInput>` and attaches the evaluated
 //!    digest as `output_bytes` (ADR-028).
 //!
-//! ## Foundation 0.3.3 evaluator ceiling
+//! ## The Grounded's `output_bytes` IS the Bitcoin block hash
 //!
-//! The catamorphism evaluator carries each per-variant value as a
-//! [`pipeline::TermValue`] of capacity `TERM_VALUE_MAX_BYTES = 32`
-//! bytes (foundation 0.3.3's per-value architectural ceiling — sized
-//! to hold a 32-byte hasher digest plus arithmetic operands). When
-//! `Term::Variable {0}` evaluates against the 80-byte mining input, the
-//! result is `TermValue::from_slice(input_bytes)` which truncates to
-//! the first 32 bytes. The downstream `HasherProjection` therefore
-//! computes `Sha256dHasher` over the leading 32 header bytes
-//! (`version || prev_hash`), not all 80. The Grounded's `output_bytes`
-//! is exactly that 32-byte digest.
+//! The 32 bytes that come out of `MiningWitness::output_bytes()` are
+//! `Sha256dHasher::finalize` applied to all 80 header bytes — i.e.
+//! SHA-256d of the canonical wire-format header in the Hasher's
+//! internal byte order. Reversed, those 32 bytes are the canonical
+//! Bitcoin block hash in display order. The block-hash bytes the
+//! Bitcoin protocol consumes and the typed-iso evaluator's certificate
+//! are now bit-identical: produced by one and the same `Sha256dHasher`
+//! substitution-axis selection, inside one and the same
+//! `pipeline::run_route` invocation.
 //!
-//! The full Bitcoin block hash — `Sha256dHasher` over all 80 header
-//! bytes, then byte-reversed to display order — is carried on
-//! [`crate::pipeline::MiningOutcome::digest`], computed by prism-btc's
-//! runtime ([`crate::ops::sha256::sha256d_display`]) using the **same
-//! algorithm body** that the foundation evaluator invokes inside
-//! `HasherProjection`. The block-hash bytes the protocol consumes and
-//! the typed-iso evaluator's certificate are produced by one and the
-//! same `Sha256dHasher` substitution-axis selection.
-//!
-//! When foundation lifts `TERM_VALUE_MAX_BYTES` (or introduces a
-//! variable-input projection that bypasses the per-value buffer), this
-//! model's `output_bytes` will carry the full block hash without any
-//! changes here — the route declaration `hash(input)` is independent
-//! of the buffer ceiling.
+//! [`crate::pipeline::MiningOutcome::digest`] continues to carry the
+//! same digest in display order as a convenience for callers that
+//! consume the protocol-level hash without reaching through the
+//! Grounded; both come from the same `Sha256dHasher` algorithm body
+//! ([`crate::ops::sha256::sha256d_display`] is the Hasher's body
+//! followed by byte reversal).
 
 use uor_foundation::enforcement::ShapeViolation;
 use uor_foundation::pipeline::{ConstrainedTypeShape, ConstraintRef, IntoBindingValue};
@@ -226,19 +221,19 @@ mod tests {
     }
 
     #[test]
-    fn forward_output_bytes_is_sha256d_of_input_prefix() {
-        // Foundation 0.3.3 catamorphism: `hash(input)` lowers to
+    fn forward_output_bytes_is_the_bitcoin_block_hash() {
+        // Foundation 0.3.4 catamorphism: `hash(input)` lowers to
         // `Term::HasherProjection`, and `evaluate_term_tree` (ADR-029)
         // folds the input expression's bytes through `Sha256dHasher` and
         // emits the digest as the Grounded's `output_bytes` (ADR-028).
         //
-        // The per-value ceiling `TERM_VALUE_MAX_BYTES = 32` truncates
-        // `Term::Variable {0}`'s evaluation against the 80-byte input to
-        // its first 32 bytes (`version || prev_hash[..28]`). The
-        // `HasherProjection` then computes `Sha256dHasher` over those 32
-        // bytes — not all 80. This test pins the actual evaluator output
-        // against an independent computation of `sha256d_internal` over
-        // the same 32-byte prefix.
+        // 0.3.4 lifts `TERM_VALUE_MAX_BYTES` to 4096, so `Term::Variable {0}`
+        // carries the entire 80-byte mining input through the per-value
+        // buffer and `HasherProjection` computes `Sha256dHasher` over all
+        // 80 bytes — not a prefix. The Grounded's `output_bytes` IS the
+        // Bitcoin block hash in the Hasher's internal byte order; reversed,
+        // it is the canonical genesis block hash in display order:
+        //   000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f
         let header = genesis_header_bytes();
         let grounded = <BitcoinMiningModel as PrismModel<
             DefaultHostTypes,
@@ -249,7 +244,19 @@ mod tests {
         let output = grounded.output_bytes();
         assert_eq!(output.len(), 32);
 
-        let expected = crate::ops::sha256::sha256d_internal(&header[..32]);
-        assert_eq!(output, &expected[..]);
+        // Internal byte order: SHA-256d over all 80 header bytes.
+        let expected_internal = crate::ops::sha256::sha256d_internal(&header);
+        assert_eq!(output, &expected_internal[..]);
+
+        // Display order (reversed): the canonical Bitcoin genesis hash.
+        let mut display = [0u8; 32];
+        display.copy_from_slice(output);
+        display.reverse();
+        let genesis_hash: [u8; 32] = [
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x19, 0xd6, 0x68, 0x9c, 0x08, 0x5a, 0xe1, 0x65, 0x83,
+            0x1e, 0x93, 0x4f, 0xf7, 0x63, 0xae, 0x46, 0xa2, 0xa6, 0xc1, 0x72, 0xb3, 0xf1, 0xb6,
+            0x0a, 0x8c, 0xe2, 0x6f,
+        ];
+        assert_eq!(display, genesis_hash);
     }
 }

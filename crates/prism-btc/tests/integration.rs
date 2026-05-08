@@ -114,27 +114,26 @@ fn forward_grounded_path_identity_is_input_invariant() {
 }
 
 #[test]
-fn forward_grounded_output_bytes_is_input_derived() {
-    // Foundation 0.3.3 attaches the catamorphism evaluator's result to
-    // the Grounded as `output_bytes`. With the route `hash(input)`,
-    // distinct inputs that share their first 32 bytes produce identical
-    // output_bytes; distinct inputs whose first 32 bytes differ produce
-    // distinct output_bytes. Pin the input-derivation by varying a byte
-    // inside the 32-byte prefix (the version field).
-    let mut header_a = easy_header();
-    let mut header_b = easy_header();
-    header_a.version = Version(1);
-    header_b.version = Version(2); // first 4 bytes differ; rest identical
-
+fn forward_grounded_output_bytes_is_the_block_hash() {
+    // Foundation 0.3.4 attaches the catamorphism evaluator's result to
+    // the Grounded as `output_bytes` (ADR-028, ADR-029). With the route
+    // `hash(input)` and the per-value buffer raised to 4096 bytes, the
+    // evaluator computes `Sha256dHasher` over all 80 header bytes — the
+    // Bitcoin block hash in the Hasher's internal byte order. Reversed,
+    // it equals `MiningOutcome::digest` (display order). This pins the
+    // load-bearing claim that the Grounded literally carries the block
+    // hash through the typed-iso surface.
+    let header = easy_header();
     let target = Target::new(0x207fffff);
-    let oa = mine(&header_a, target, &NeverCancel).expect("a admits");
-    let ob = mine(&header_b, target, &NeverCancel).expect("b admits");
+    let outcome = mine(&header, target, &NeverCancel).expect("admits");
 
-    let out_a = oa.witness.output_bytes();
-    let out_b = ob.witness.output_bytes();
-    assert_eq!(out_a.len(), 32);
-    assert_eq!(out_b.len(), 32);
-    assert_ne!(out_a, out_b);
+    let output = outcome.witness.output_bytes();
+    assert_eq!(output.len(), 32);
+
+    let mut display = [0u8; 32];
+    display.copy_from_slice(output);
+    display.reverse();
+    assert_eq!(display, outcome.digest);
 }
 
 #[test]
