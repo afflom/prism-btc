@@ -12,71 +12,86 @@
 //! The verbs below are the architectural commitment that names the
 //! mining inference's structure. Each is declared via `verb!` with a
 //! closure body composed from G1–G19 (substrate-level forms G1–G11 +
-//! prism operators G12–G19). The verb's term-tree fragment is the
-//! structural declaration; how the implementation evaluates it
-//! (sequential, parallel, optimised) is the implementation's choice
-//! per ADR-026's three-way responsibility split.
+//! prism operators G12–G19, plus the 0.3.6 substrate amendments
+//! `concat` and the byte-comparison binary operators `<=`, `<`, `>=`,
+//! `>` per ADR-013/TR-08).
 //!
 //! ## What's here
 //!
-//! - [`nonce_fiber_traversal`] — the W32 search. Body is
-//!   `first_admit(WittLevel::W32, |nonce| hash(input))` (ADR-026 G16 +
-//!   G19). The runtime that evaluates this declaration is
+//! - [`nonce_fiber_traversal`] — the W32 search. Body is the wiki's
+//!   intended structural form
+//!   `first_admit(WittLevel::W32, |nonce| hash(concat(input, nonce)) <= input)`
+//!   (ADR-026 G16 + G19 + 0.3.6 amendments). The runtime that
+//!   evaluates this declaration is
 //!   [`crate::ops::traversal::traverse_sequential`] (sequential) and
 //!   [`crate::ops::traversal::traverse_parallel`] (parallel coset
-//!   partition over the W32 ring).
+//!   partition over the W32 ring), per ADR-026 G16's three-way
+//!   responsibility split.
 //!
 //! ## Conformance against the wiki
 //!
-//! ADR-026 G16 (`first_admit`'s three-way runtime responsibility) splits
-//! the search across all three layers:
+//! ADR-026 G16 (`first_admit`'s three-way runtime responsibility)
+//! splits the search across all three layers:
 //!
-//! - **Substrate** owns the structural primitives (`Term::Application`
-//!   over `PrimitiveOp::Succ` for the ring's successor structure;
-//!   `WittLevel` ceiling for the domain's cardinality;
-//!   `Term::HasherProjection` for the predicate's `hash(...)` form).
-//! - **Prism** owns the operator `first_admit` as the typed declaration
-//!   form (`uor-foundation-sdk`'s `verb!` lowering produces the
-//!   `Term::Recurse`-backed structural arena per ADR-026 G16's lowering
-//!   rule).
-//! - **Implementation** owns the runtime traversal that evaluates the
-//!   declaration. The conformance test (ADR-026 G16): the runtime
-//!   produces the same first-admitting index a reference sequential
-//!   traversal would. prism-btc's `traverse_sequential` is, in fact,
-//!   the reference sequential traversal — it trivially passes.
+//! - **Substrate** owns the structural primitives: `Term::Recurse`
+//!   for bounded recursion (ADR-029 evaluator: foundation 0.3.6
+//!   recursive); `Term::HasherProjection` for `hash(...)`;
+//!   `Term::Application(Concat, [a, b])` for byte-sequence packing;
+//!   `Term::Application(Le, [a, b])` for byte-level lexicographic
+//!   comparison; `WittLevel::W32` for the domain's cardinality.
+//! - **Prism** owns `first_admit` as the typed declaration form. The
+//!   `uor-foundation-sdk` lowering emits `Term::Recurse { measure:
+//!   Literal(256), base: Literal(0), step: <predicate> }`. The 256
+//!   measure is symbolic per the SDK comment ("the macro doesn't
+//!   introspect <DomainTy as ConstrainedTypeShape> at proc-macro time
+//!   […] let implementations override per ADR-024"); the
+//!   implementation runtime owns the actual cardinality.
+//! - **Implementation** owns the runtime traversal. The conformance
+//!   test (ADR-026 G16): the runtime produces the same first-admitting
+//!   index a reference sequential traversal would. prism-btc's
+//!   [`crate::ops::traversal::traverse_sequential`] IS the reference
+//!   sequential traversal over `Z/(2^32)Z` for the (W32,
+//!   target-admission) pair — the conformance test is satisfied
+//!   trivially.
 //!
-//! ## Closure-body grammar limits in SDK 0.3.4
+//! ## What 0.3.6 closes vs what remains implementor-evaluated
 //!
-//! The wiki's intended verb body for `nonce_fiber_traversal` is
+//! Foundation 0.3.6 + SDK 0.3.6 close gaps prism-btc had against
+//! 0.3.4:
 //!
-//! ```text
-//! first_admit(WittLevel::W32, |nonce| {
-//!     hash(serialize_with_nonce(prefix, nonce)) <= target
-//! })
-//! ```
+//! 1. The byte-comparison primitive `Le` is in `PrimitiveOp` and the
+//!    binary `<=` operator is admitted in the closure-body grammar
+//!    (ADR-013/TR-08 substrate amendment); so the predicate's
+//!    "digest ≤ target" comparison is now in prism vocabulary.
+//! 2. The `Concat` primitive is in `PrimitiveOp` and the
+//!    `concat(...)` keyword is admitted in the closure-body grammar;
+//!    so `serialize_with_nonce(prefix, nonce)` is expressible as
+//!    `concat(input, nonce)` (the runtime layout-orders bytes per
+//!    Bitcoin's wire format).
+//! 3. `Term::Recurse`'s evaluator iterates N times (N =
+//!    `bytes_to_u64_be` of the measure); this is the recursive fold
+//!    ADR-029 mandates.
 //!
-//! SDK 0.3.4's closure-body grammar (ADR-022 D3 G1–G11 + ADR-026
-//! G12–G19) admits `first_admit` (G16) and `hash` (G19) but does not
-//! yet admit:
+//! What remains an implementor responsibility per ADR-026 G16:
 //!
-//! - The lexicographic byte comparison `<=` — there is no comparison
-//!   operator in G1–G19.
-//! - Byte-level packing / concatenation of `prefix || nonce` into the
-//!   80-byte canonical wire-format header — no shift / concat
-//!   `PrimitiveOp` is in the substrate (closest is `xor` over a
-//!   common Witt-level operand pair).
+//! - The SDK's `first_admit` lowering emits `Literal(256)` at `W8`
+//!   for the measure. Foundation's evaluator reads it as 0 (W8
+//!   truncates 256→0), so the structural arena alone iterates 0
+//!   times. The implementation runtime ([`crate::ops::traversal`])
+//!   walks the W32 ring in canonical successor order with the
+//!   conformant cardinality `2^32`.
+//! - The closure-body grammar has no general field-access operator
+//!   for product-of-shapes inputs; the `<=` comparison's right
+//!   operand is `input` (the whole binding) rather than a target
+//!   sub-field. The runtime extracts (prefix, target) from the input
+//!   per Bitcoin's wire format and applies the comparison
+//!   semantically.
 //!
-//! The body below uses `hash(input)` as the structural form — the
-//! abstract "σ-projection of the verb's input." The implementation
-//! runtime ([`crate::ops::traversal`]) realises the full predicate
-//! `hash(serialize_with_nonce(prefix, nonce)) ≤ target` per ADR-026
-//! G16's three-way split.
-//!
-//! When foundation amends the SDK closure-body grammar to admit
-//! comparison operators and substrate to admit the byte-packing
-//! primitives, the body can be tightened to the wiki's full form
-//! without changes to the runtime — the runtime is already the
-//! reference sequential traversal the architecture asks for.
+//! When foundation amends the SDK to (a) introspect the domain's
+//! `cycle_size()` for the measure literal at proc-macro time, and
+//! (b) admit field-access projections for product-of-shapes inputs,
+//! the verb's runtime can be retired in favor of foundation's
+//! evaluator end-to-end without changing the verb declaration.
 
 use uor_foundation_sdk::verb;
 
@@ -84,7 +99,9 @@ use crate::model::MiningInput;
 
 verb! {
     pub fn nonce_fiber_traversal(input: MiningInput) -> MiningInput {
-        first_admit(uor_foundation::WittLevel::W32, |nonce| hash(input))
+        first_admit(uor_foundation::WittLevel::W32, |nonce| {
+            hash(concat(input, nonce)) <= input
+        })
     }
 }
 
@@ -92,6 +109,7 @@ verb! {
 mod tests {
     use super::*;
     use uor_foundation::enforcement::Term;
+    use uor_foundation::PrimitiveOp;
 
     #[test]
     fn verb_term_arena_is_emitted_and_nonempty() {
@@ -106,9 +124,7 @@ mod tests {
 
     #[test]
     fn verb_arena_contains_a_recurse_node() {
-        // ADR-026 G16 specifies that `first_admit` lowers to a
-        // `Term::Recurse`-backed structural form. Pin that the SDK
-        // emitted exactly that variant for our verb.
+        // ADR-026 G16: `first_admit` lowers to `Term::Recurse`.
         let arena = nonce_fiber_traversal_term_arena();
         let has_recurse = arena.iter().any(|t| matches!(t, Term::Recurse { .. }));
         assert!(
@@ -119,8 +135,7 @@ mod tests {
 
     #[test]
     fn verb_arena_contains_a_hasher_projection() {
-        // The predicate body `hash(input)` lowers to
-        // `Term::HasherProjection` per ADR-026 G19. Pin that.
+        // ADR-026 G19: `hash(...)` lowers to `Term::HasherProjection`.
         let arena = nonce_fiber_traversal_term_arena();
         let has_hasher = arena
             .iter()
@@ -128,6 +143,49 @@ mod tests {
         assert!(
             has_hasher,
             "hash(...) lowering must emit a Term::HasherProjection per ADR-026 G19"
+        );
+    }
+
+    #[test]
+    fn verb_arena_contains_concat_application() {
+        // ADR-013/TR-08 (foundation 0.3.6): `concat(a, b)` lowers to
+        // `Term::Application(Concat, [a, b])`. Pin that the verb body's
+        // structural commitment to byte-sequence packing is in the
+        // emitted arena.
+        let arena = nonce_fiber_traversal_term_arena();
+        let has_concat = arena.iter().any(|t| {
+            matches!(
+                t,
+                Term::Application {
+                    operator: PrimitiveOp::Concat,
+                    ..
+                }
+            )
+        });
+        assert!(
+            has_concat,
+            "concat(...) lowering must emit a Term::Application(Concat, ...) per ADR-013/TR-08"
+        );
+    }
+
+    #[test]
+    fn verb_arena_contains_le_application() {
+        // ADR-013/TR-08 (foundation 0.3.6): the binary `<=` operator
+        // lowers to `Term::Application(Le, [lhs, rhs])`. Pin that the
+        // predicate's admission comparison is structurally committed.
+        let arena = nonce_fiber_traversal_term_arena();
+        let has_le = arena.iter().any(|t| {
+            matches!(
+                t,
+                Term::Application {
+                    operator: PrimitiveOp::Le,
+                    ..
+                }
+            )
+        });
+        assert!(
+            has_le,
+            "<= lowering must emit a Term::Application(Le, ...) per ADR-013/TR-08"
         );
     }
 }
