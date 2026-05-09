@@ -1,11 +1,20 @@
-//! prism-mine — drive prism-btc's σ-convergence loop against a real bitcoind.
+//! prism-mine — drive `prism_btc::mine` against a real bitcoind.
 //!
-//! Two modes:
-//! - **single-shot** (default): one template, 2^32 nonce serial scan, submit once.
-//!   Good for regtest where every header at trivial difficulty satisfies.
-//! - **session** (`--session`): long-running loop with extranonce rolling, tip
-//!   staleness detection, parallel σ-convergence, and periodic hash-rate reporting.
-//!   This is the real-network mode.
+//! Each invocation evaluates the `nonce_fiber_traversal` verb (wiki
+//! ADR-024) over a (template prefix, target) pair via the implementation
+//! runtime per ADR-026 G16, then mints the foundation-sealed
+//! `Grounded<ConstrainedTypeInput, MiningTag>` and submits the wire-format
+//! block. Two modes:
+//!
+//! - **single-shot** (default): one template, one verb evaluation, one
+//!   submit. Useful when the output-shape constraint complexity is low
+//!   enough that the first canonical-order fiber visit admits (regtest,
+//!   testnet4 under the min-difficulty rule).
+//! - **session** (`--session`): long-running, with extranonce rolling,
+//!   tip-staleness watcher, and a parallel coset-partition runtime per
+//!   ADR-026 G16. The catamorphism evaluation cost is parametric in
+//!   the chosen `Hasher` impl + the runtime's parallelism; this mode
+//!   expresses both as user-tunable parameters.
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;

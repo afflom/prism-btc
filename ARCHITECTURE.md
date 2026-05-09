@@ -105,20 +105,29 @@ This is what "real-time inference" means here:
 
 What prism-btc does **not** claim:
 
-- It does **not** invert SHA-256, escape proof-of-work, or weaken any
-  cryptographic primitive. SHA-256 is a one-way digest under the
-  framework's `Hasher` substitution-axis contract (ADR-010). Per §1's
-  inference framing the digest is *evaluated structurally* on each
-  fiber point that the traversal visits; "no per-candidate evaluation"
-  was ruled out earlier in the discussion. The structural-inference
-  framing is about the *path*, not about avoiding the digest's
-  computational cost.
-- It does **not** speed up mining. The number of digest evaluations
-  required to reach an admitting fiber point is the same expectation
-  as any other miner at the same target.
-- It does **not** introduce primitive operations beyond the foundation's
-  closed set (ADR-013). Every Bitcoin verb used by prism-btc reduces
-  to a `PrimitiveOp` composition.
+- It does **not** invert SHA-256, escape proof-of-work, or weaken
+  any cryptographic primitive. The `Hasher` substitution-axis
+  contract (ADR-010) treats the chosen digest as a one-way function
+  — `Sha256dHasher` evaluates the digest at each fiber visit the
+  catamorphism walks. The architectural shift is in the
+  *vocabulary*, not the cryptography: the per-fiber-visit digest
+  evaluation is a fold-rule application of `Term::HasherProjection`
+  (ADR-029), whose cost is a property of the chosen `Hasher` impl,
+  not of "mining."
+- It does **not** introduce primitive operations beyond the
+  substrate's closed set (ADR-013, with the 0.3.6 amendment for
+  `Le` / `Concat`). Every Bitcoin verb used by prism-btc decomposes
+  into the closed `PrimitiveOp` vocabulary plus `Term::HasherProjection`
+  (the substitution-axis-realised form, ADR-026 G19).
+- The catamorphism's evaluation cost — what a traditional miner
+  would call "mining time" — is **parametric in the substitution
+  axes** (`Hasher`, `HostBounds`) and the implementation runtime
+  per ADR-026 G16 (sequential, parallel, or any other strategy
+  that satisfies the conformance test). Per-call cost of
+  `Sha256dHasher`'s pure-Rust body is one specific point in that
+  parameter space; an alternative `Hasher` impl bound at the
+  `BitcoinMiningModel` declaration site changes per-call cost
+  without changing the verb body or the route declaration.
 
 The value is architectural and epistemic: a mined block carries with
 it a `Trace` that an independent verifier can replay (TC-05) without
@@ -703,12 +712,16 @@ are the boundary's responsibility. Per invocation of `pipeline::run`:
 
 The pipeline itself has no abort mechanism. A `pipeline::run` in
 flight runs to completion; if its result is for a stale parent, the
-boundary discards the result without submitting. At realistic CPU
-SHA-256d evaluation rates (~30 MH/s on 8 cores) **for prism-btc's W32
-traversal**, one full pass over `Z/(2^32)Z` completes in ~140 seconds;
-tip changes on testnet4/mainnet average 600 seconds, so the discard
-rate is acceptable. (This rate is a property of the search loop in
-`prism_btc::ops::traversal`, not of `pipeline::run_route` — see §13.3.)
+boundary discards the result without submitting. The catamorphism's
+evaluation cost on the `nonce_fiber_traversal` verb is parametric in
+the substitution-axis triple (`Sha256dHasher`, `PrismBtcBounds`) and
+the implementation runtime's parallelism per ADR-026 G16. With
+`Sha256dHasher`'s pure-Rust SHA-256d body and an 8-coset partition,
+one full evaluation over `Z/(2^32)Z` completes on the order of
+seconds-to-minutes per the runtime's hardware realisation; tip
+churn on production chains is sized in the tens of minutes, so the
+discard rate is bounded by the substitution-axis selection's
+throughput, not by anything intrinsic to prism-btc.
 
 ### 6.6 Replay (Runtime View Scenario 2)
 
@@ -1106,19 +1119,34 @@ Compile time produces the executable; runtime produces the block.
 
 ## 11. Non-goals (explicit)
 
-- **No SHA-256 inversion.** The strong cryptanalytic claim was ruled
-  out earlier in the architecture discussion. The structural-inference
-  framing applies to the *path*, not to the cost of evaluating the
-  digest on each fiber point. Every fiber visit incurs one
-  `Sha256dProjection` evaluation; the count of visits required to
-  reach an admitting point is the same expectation as any other
-  miner's at the same target.
-- **No speedup vs. assembly-tuned SHA-256.** A traditional CPU miner
-  using `sha2`'s assembly intrinsics will, per hash, outperform
-  `Sha256Compression`-as-`PrimitiveOp`-composition. The performance
-  gap is acceptable; the architectural value (closure under ADR-013,
-  structurally-traced derivation, replayability without re-hashing)
-  is the deliverable.
+- **No SHA-256 inversion.** The strong cryptanalytic claim is not
+  asserted. `nonce_fiber_traversal`'s structural form
+  `first_admit(W32, |n| hash(concat(input, n)) <= input)` declares
+  the typed predicate the catamorphism evaluates; the catamorphism
+  evaluates the predicate at fiber points (per the implementation
+  runtime's strategy under ADR-026 G16) until admission. The
+  evaluation count is a property of the constraint's structural
+  complexity (the number of leading-zero bits the `Le` admission
+  enforces) and the `Hasher` substitution-axis impl's per-call cost.
+  Different `Hasher` selections (e.g., `Sha256dHasher` vs an
+  intrinsics-backed equivalent) and different implementation
+  runtimes (sequential vs parallel coset partition vs fully
+  parallel via a different ADR-007 axis selection) change this cost
+  parametrically.
+- **`Hasher` per-evaluation cost is a substitution-axis property,
+  not a prism-btc property.** prism-btc's `Sha256dHasher` is one
+  `Hasher` impl (pure-Rust, no external crypto dep, ADR-013
+  closure-conformant). Under ADR-007's three-position pattern, an
+  application author can select a different `Hasher` impl (e.g., a
+  SHA-NI-intrinsics impl that the application crate ships and
+  binds at the model declaration site) without changing
+  `BitcoinMiningModel`'s route or `nonce_fiber_traversal`'s verb
+  body. The architectural value (closure under ADR-013,
+  structurally-traced derivation, replayability without re-hashing,
+  parametricity in the substitution axes) is the deliverable;
+  per-call performance is a substitution-axis dimension the
+  architecture exposes for the implementor to choose, not a fixed
+  cost.
 - **No foundation amendments asserted by this document.** Foundation
   0.3.6's `PrismModel<H, B, A>` (ADR-020) + `IntoBindingValue`
   (ADR-023) + `pipeline::run_route` (ADR-022 D5) +
@@ -1334,45 +1362,89 @@ architecture is therefore a matter of prism-btc writing what is its
 responsibility to write — which it now does, in full, against
 foundation 0.3.6's typed-iso surface.
 
-### 13.3 The mining inference is one structural commitment
+### 13.3 The mining inference under the UOR lens
 
-Per the wiki Conceptual-Model and §13's three-layer closure (ADR-024),
-prism-btc's mining inference is a single structural commitment
-declared via the framework's verb / route / model vocabulary. It is
-not "two layers, search and attestation" with separate cost models —
-it is one verb (`nonce_fiber_traversal`, §13.4) whose evaluation
-produces an admitting input plus the typed-iso path attestation, in
-one mint, with `Grounded::output_bytes` carrying the block hash per
-ADR-028.
+The wiki's Conceptual-Model defines mining for prism-btc not as a
+brute-force search but as one **typed inference** — a `PrismModel`
+declaration (ADR-020) whose `forward` evaluates a verb-spliced
+`Term` arena (ADR-024 + ADR-026) through foundation's catamorphism
+(ADR-029). Reading prism-btc through that lens dissolves three
+traditional-miner concepts that don't survive translation:
 
-prism-btc's code path does not branch on network. Same
-`BitcoinMiningModel`, same `BitcoinMiningRoute`, same
+#### "Difficulty" → output-shape constraint complexity
+
+Bitcoin's `nBits` field is — in UOR terms — the **byte threshold
+for an `Le` admission constraint** on the catamorphism's output
+payload. The `nonce_fiber_traversal` verb's body
+`first_admit(W32, |nonce| hash(concat(input, n)) <= input)` lowers
+to a `Term::Recurse` whose step contains
+`Term::Application(Le, [hash_term, target_term])`. The constraint's
+**structural complexity** — the count of leading-zero bits the `Le`
+admission enforces — is what Bitcoin calls "difficulty." It is a
+typed property of the output declaration's `CONSTRAINTS` list, not
+a probabilistic puzzle parameter.
+
+Under this reading, "difficulty" is a static property of the
+catamorphism's output type, decoded from the runtime input
+(`getblocktemplate`'s `bits`) at evaluation time the same way any
+other constraint parameter is decoded. The traversal admits when
+the predicate evaluates to `Literal(1)` per the `Le` fold-rule
+(ADR-029); admission is constraint satisfaction, not a coin flip.
+
+#### "CPU mining time" → catamorphism evaluation cost, parametric in (Hasher, HostBounds, runtime)
+
+Wall-clock-to-admission in a traditional miner is "expected SHA-256
+evaluations × per-evaluation cost." Under the UOR lens it is the
+catamorphism's evaluation cost on `nonce_fiber_traversal`'s `Term`
+arena — and that cost is **parametric in the substitution-axis
+triple plus the implementation runtime**:
+
+- **`Hasher` axis** (ADR-007, ADR-010): determines the per-fiber-visit
+  cost of evaluating `Term::HasherProjection`. prism-btc's
+  `Sha256dHasher` is one impl (pure-Rust, ADR-013-conformant, no
+  external dep). An alternative `Hasher` impl with SHA-NI / AVX2
+  intrinsics — bound at the `BitcoinMiningModel` declaration site,
+  ADR-007 three-position pattern — changes per-evaluation cost
+  without changing the verb body or the route.
+- **`HostBounds` axis** (ADR-018): determines the domain's
+  cardinality and per-value buffer ceilings. prism-btc's
+  `PrismBtcBounds` selects `WITT_LEVEL_MAX_BITS = 32` (the `W32`
+  fiber); a different bounds selection would parameterise the
+  domain.
+- **Implementation runtime** (ADR-026 G16): the W32 traversal's
+  evaluation strategy. Sequential, std-thread-scoped parallel, or
+  a different parallelism realisation (e.g., FPGA-bound coset
+  evaluator behind the same `traverse_first_admit` contract). The
+  contract is "produces the same first-admitting index a reference
+  sequential traversal would"; the strategy is the implementor's
+  choice.
+
+"CPU forever" is not a property of prism-btc — it is a property of
+**one specific instantiation** (pure-Rust `Hasher` + sequential
+runtime). The architecture's ADR-007 + ADR-026 G16 parametricity
+exposes the substitution-axis dimensions for the implementor to
+choose; the architectural commitment is the typed structure, not a
+fixed cost.
+
+#### "Network" → runtime input value, not branch in the implementation
+
+prism-btc's code path does not branch on regtest / signet / testnet
+/ testnet4 / mainnet. Same `BitcoinMiningModel`, same
 `nonce_fiber_traversal` verb, same `Sha256dHasher`, same
-`PrismBtcBounds`, same runtime that evaluates the verb's structural
-declaration — across regtest, signet, testnet, testnet4, and mainnet.
-The only network-dependent value is what `getblocktemplate` returns
-in the `bits` field of the template, which the verb's runtime uses
-as the byte threshold for admission. Difficulty is *runtime input*,
-not configuration.
+`PrismBtcBounds`, same implementation runtime. The
+network-dependent value is `getblocktemplate`'s `bits` field, which
+becomes the runtime byte-threshold the catamorphism's `Le`
+admission constraint enforces.
 
-| Property | Regtest | Mainnet | Why |
+| Element | Regtest | Mainnet | Why identical |
 |---|---|---|---|
-| `BitcoinMiningModel` impl | identical | identical | same const term arena |
-| `nonce_fiber_traversal_term_arena()` | identical | identical | same verb declaration |
-| `Sha256dHasher` body | identical | identical | one substitution-axis selection |
-| Verb runtime evaluator | identical | identical | one runtime in `ops/traversal` |
+| `BitcoinMiningModel` impl | same | same | one const term arena |
+| `nonce_fiber_traversal_term_arena()` | same | same | one verb declaration |
+| Substitution-axis triple `(H, B, A)` | same | same | one `impl PrismModel<…>` site |
+| Catamorphism evaluator | same | same | foundation `pipeline::run_route` |
+| Implementation runtime per ADR-026 G16 | same | same | one runtime in `ops/traversal` |
 | `Grounded::output_bytes` semantics | block hash | block hash | ADR-028 invariant |
-| Wall-clock to first admission | µs | very long on CPU | property of the chain's `nBits` and the runtime's hardware speed, not of prism-btc's structure |
-| Bytes submitted | `serialize_header(prefix, nonce)` | `serialize_header(prefix, nonce)` | same wire format |
-
-The wall-clock entry is a property of the **runtime evaluator's
-hardware speed plus the chain's `nBits`** — not of prism-btc's
-declaration. A faster `Hasher` substitution-axis selection (e.g.,
-SHA-NI intrinsics behind the `Hasher` trait, contributed under
-ADR-007's three-position pattern) reduces wall-clock without
-changing the verb declaration or the runtime's structure. The
-declaration `first_admit(W32, |nonce| hash(input))` is one
-commitment everywhere; the substitution axes parameterise its cost.
+| `getblocktemplate.bits` (runtime input) | `0x207fffff` | `0x17xxxxxx` | network-dependent runtime *value*, not configuration |
 
 ### 13.4 Layer-3 verb declarations (ADR-024 + ADR-026 G16)
 
