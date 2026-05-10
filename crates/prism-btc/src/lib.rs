@@ -1,18 +1,20 @@
 //! prism-btc — the prism implementor for Bitcoin proof-of-work.
 //!
-//! Real-time structural inference, expressed as a foundation 0.3.4
+//! Real-time structural inference, expressed as a foundation 0.4.0
 //! `PrismModel<H, B, A>`: the input shape is the 80-byte canonical
 //! Bitcoin block header ([`MiningInput`]); the output shape is
 //! foundation's `ConstrainedTypeInput`; the route is `hash(input)`,
-//! lowered by `prism_model!` to a `Term::HasherProjection` over the
-//! input variable; the application `Hasher` is [`Sha256dHasher`]
-//! (pure-Rust SHA-256d).
+//! lowered by `prism_model!` to a `Term::AxisInvocation` against the
+//! canonical hash axis (`axis_index: 0, kernel_id: 0` per ADR-030) over
+//! the input variable; the application `Hasher` is [`Sha256dHasher`]
+//! (pure-Rust SHA-256d), promoted to a 1-tuple `AxisTuple` via
+//! foundation's blanket `impl<H: Hasher> AxisTuple for H`.
 //!
 //! prism-btc owns the W32 nonce-fiber traversal that finds the
 //! admitting fiber point ([`mine`], [`mine_parallel`]). On admission,
 //! the 80-byte header is wrapped in [`MiningInput`] and fed through
 //! `BitcoinMiningModel::forward`, which delegates to foundation's
-//! `pipeline::run_route`. Foundation 0.3.4's catamorphism evaluator
+//! `pipeline::run_route`. Foundation 0.4.0's catamorphism evaluator
 //! (ADR-029) carries the full 80-byte input through the per-value
 //! buffer (`TERM_VALUE_MAX_BYTES = 4096`) and folds it through
 //! `Sha256dHasher`; the resulting 32-byte digest is attached to the

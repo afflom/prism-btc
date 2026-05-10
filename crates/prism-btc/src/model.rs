@@ -1,19 +1,22 @@
 //! `BitcoinMiningModel` — prism-btc's `PrismModel<H, B, A>` declaration.
 //!
-//! Foundation 0.3.4 ships the `PrismModel<H, B, A>` typed-iso surface
-//! (wiki ADR-019/020/022/023), the catamorphism evaluator
-//! [`pipeline::evaluate_term_tree`] (ADR-029), and
+//! Foundation 0.4.0 ships the full typed-iso surface this model uses:
+//! `PrismModel<H, B, A>` (ADR-019/020/022/023), the catamorphism
+//! evaluator [`pipeline::evaluate_term_tree`] (ADR-029), the
+//! `AxisExtension` / `AxisTuple` axis system with the canonical hash
+//! axis at `(axis_index: 0, kernel_id: 0)` (ADR-030), and
 //! [`Grounded::output_bytes`] (ADR-028) with `TERM_VALUE_MAX_BYTES =
 //! 4096` — wide enough to carry the 80-byte canonical Bitcoin block
 //! header through `Term::Variable {0}` and feed it whole into
-//! `Term::HasherProjection`. prism-btc, as the prism implementor for
-//! the Bitcoin use case, declares its model with:
+//! `Term::AxisInvocation` (the canonical hash axis). prism-btc, as
+//! the prism implementor for the Bitcoin use case, declares its model
+//! with:
 //!
 //! - `Input  = MiningInput`            — the 80-byte canonical wire-format header
 //! - `Output = ConstrainedTypeInput`   — foundation's identity output shape
 //! - `Route  = BitcoinMiningRoute`     — the σ-projection term tree:
 //!   `hash(input)` (ADR-026 G19), which `prism_model!` lowers to
-//!   `[Term::Variable {name_index: 0}, Term::HasherProjection {input_index: 0}]`
+//!   `[Term::Variable {name_index: 0}, Term::AxisInvocation {axis_index: 0, kernel_id: 0, input_index: 0}]`
 //!
 //! ## What `BitcoinMiningModel::forward` produces
 //!
@@ -25,7 +28,7 @@
 //! 2. Validates the `CompileUnit` against `PrismBtcBounds`.
 //! 3. **Evaluates the route's term tree via `evaluate_term_tree`**:
 //!    `Term::Variable {0}` carries the full 80 input bytes through the
-//!    `TermValue` per-value buffer; `Term::HasherProjection {0}` folds
+//!    `TermValue` per-value buffer; `Term::AxisInvocation {0, 0, 0}` folds
 //!    those 80 bytes through `Sha256dHasher` and emits the 32-byte
 //!    digest (ADR-029).
 //! 4. Folds the canonical `CompileUnit` byte layout through the same
@@ -89,6 +92,14 @@ impl ConstrainedTypeShape for MiningInput {
     const IRI: &'static str = "https://prism.btc/shape/MiningInput";
     const SITE_COUNT: usize = 80;
     const CONSTRAINTS: &'static [ConstraintRef] = &[];
+    // ADR-032: 80 bytes = 640 bits → 2^640 distinct values, which
+    // exceeds u64::MAX. Per the ADR's saturating-semantics rule, the
+    // declared cardinality saturates at u64::MAX. The model's input is
+    // not a `first_admit` domain (the search runs over `WittLevel::W32`
+    // for the nonce field, declared in the verb body); this constant
+    // is the foundation-required `ConstrainedTypeShape` member, not a
+    // load-bearing value for the mining traversal.
+    const CYCLE_SIZE: u64 = u64::MAX;
 }
 
 // `IntoBindingValue` (and `PrismModel`, `FoundationClosed`) require
@@ -123,17 +134,20 @@ impl IntoBindingValue for MiningInput {
 //   `BitcoinMiningModel`, whose `forward` body is
 //   `pipeline::run_route::<DefaultHostTypes, PrismBtcBounds, Sha256dHasher, Self>(input)`
 //
-// The route body `hash(input)` is the σ-projection in foundation 0.3.3's
-// closure-body grammar (ADR-026 G19). The macro lowers it to a 2-node
-// term arena:
+// The route body `hash(input)` is the σ-projection (ADR-026 G19). The
+// macro lowers it under foundation 0.4.0 to a 2-node term arena:
 //     [ Term::Variable { name_index: 0 },
-//       Term::HasherProjection { input_index: 0 } ]
-// `pipeline::run_route` (foundation 0.3.3) calls
-// `pipeline::evaluate_term_tree` with this arena and the 80 input bytes;
-// the `HasherProjection` fold rule (ADR-029) runs the input bytes through
-// the application Hasher (`Sha256dHasher`) and emits the 32-byte digest
-// — the SHA-256d of the canonical wire-format header. That digest is
-// the Bitcoin block hash in the Hasher's internal byte order.
+//       Term::AxisInvocation { axis_index: 0, kernel_id: 0,
+//                              input_index: 0 } ]
+// where `(axis_index: 0, kernel_id: 0)` is the canonical hash axis
+// (`HashAxis::KERNEL_HASH`) of the application's `AxisTuple` (ADR-030).
+// `pipeline::run_route` calls `pipeline::evaluate_term_tree` with this
+// arena and the 80 input bytes; the `AxisInvocation` fold-rule (ADR-029)
+// dispatches to the application's `AxisTuple` — which the blanket
+// `impl<H: Hasher> AxisTuple for H` routes through `Sha256dHasher` —
+// and emits the 32-byte SHA-256d of the canonical wire-format header.
+// That digest is the Bitcoin block hash in the Hasher's internal byte
+// order.
 prism_model! {
     pub struct BitcoinMiningModel;
     pub struct BitcoinMiningRoute;
@@ -222,17 +236,21 @@ mod tests {
 
     #[test]
     fn forward_output_bytes_is_the_bitcoin_block_hash() {
-        // Foundation 0.3.4 catamorphism: `hash(input)` lowers to
-        // `Term::HasherProjection`, and `evaluate_term_tree` (ADR-029)
-        // folds the input expression's bytes through `Sha256dHasher` and
-        // emits the digest as the Grounded's `output_bytes` (ADR-028).
+        // Foundation 0.4.0 catamorphism: `hash(input)` lowers to
+        // `Term::AxisInvocation { axis_index: 0, kernel_id: 0, ..}` (the
+        // canonical hash axis per ADR-030), and `evaluate_term_tree`
+        // (ADR-029) dispatches the (0, 0) invocation through the
+        // application's `AxisTuple` — `Sha256dHasher` via the blanket
+        // `impl<H: Hasher> AxisTuple for H`. The result is the SHA-256d
+        // of the input bytes, attached to the Grounded as `output_bytes`
+        // (ADR-028).
         //
-        // 0.3.4 lifts `TERM_VALUE_MAX_BYTES` to 4096, so `Term::Variable {0}`
-        // carries the entire 80-byte mining input through the per-value
-        // buffer and `HasherProjection` computes `Sha256dHasher` over all
-        // 80 bytes — not a prefix. The Grounded's `output_bytes` IS the
-        // Bitcoin block hash in the Hasher's internal byte order; reversed,
-        // it is the canonical genesis block hash in display order:
+        // `TERM_VALUE_MAX_BYTES = 4096` is wide enough for the 80-byte
+        // input to flow through `Term::Variable {0}` whole, so the
+        // resulting digest is over all 80 bytes. The Grounded's
+        // `output_bytes` IS the Bitcoin block hash in the Hasher's
+        // internal byte order; reversed, it is the canonical genesis
+        // block hash in display order:
         //   000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f
         let header = genesis_header_bytes();
         let grounded = <BitcoinMiningModel as PrismModel<
