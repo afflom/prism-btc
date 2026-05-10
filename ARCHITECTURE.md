@@ -1458,33 +1458,36 @@ traditional-miner concepts that don't survive translation:
 #### "Difficulty" → output-shape constraint complexity
 
 Bitcoin's `nBits` field is — in UOR terms — the **byte threshold
-for an `Le` admission constraint** on the catamorphism's output
-payload. The `nonce_fiber_traversal` verb's body
-`first_admit(W32, |nonce| hash(concat(input, n)) <= input)` lowers
-to a `Term::Recurse` whose step contains
+for an `Le` admission constraint** evaluated by the catamorphism per
+fiber visit. The `nonce_fiber_traversal` verb's body
+`first_admit(W32, |nonce| hash(concat(input.prefix, nonce)) <= input.target)`
+lowers to a `Term::FirstAdmit` whose predicate sub-tree contains
 `Term::Application(Le, [hash_term, target_term])`. The constraint's
 **structural complexity** — the count of leading-zero bits the `Le`
 admission enforces — is what Bitcoin calls "difficulty." It is a
-typed property of the output declaration's `CONSTRAINTS` list, not
-a probabilistic puzzle parameter.
+typed property of the predicate's runtime byte-threshold (the
+`input.target` factor of the partition_product), not a probabilistic
+puzzle parameter.
 
-Under this reading, "difficulty" is a static property of the
-catamorphism's output type, decoded from the runtime input
-(`getblocktemplate`'s `bits`) at evaluation time the same way any
-other constraint parameter is decoded. The traversal admits when
-the predicate evaluates to `Literal(1)` per the `Le` fold-rule
-(ADR-029); admission is constraint satisfaction, not a coin flip.
+Under this reading, "difficulty" is the byte-threshold value carried
+by the `MiningTask`'s target factor, decoded from
+`getblocktemplate.bits` at the application boundary. The
+`Term::FirstAdmit` evaluator (ADR-034 M2) admits when the predicate
+returns `Literal(1)` per the `Le` fold-rule (ADR-029) and
+short-circuits — admission is structural constraint satisfaction,
+not a coin flip.
 
-#### "CPU mining time" → catamorphism evaluation cost, parametric in (Hasher, HostBounds, runtime)
+#### "Mining time" → catamorphism evaluation cost, parametric in (Hasher, HostBounds)
 
 Wall-clock-to-admission in a traditional miner is "expected SHA-256
 evaluations × per-evaluation cost." Under the UOR lens it is the
 catamorphism's evaluation cost on `nonce_fiber_traversal`'s `Term`
 arena — and that cost is **parametric in the substitution-axis
-triple plus the implementation runtime**:
+triple**, not in any implementor-side runtime strategy:
 
-- **`Hasher` axis** (ADR-007, ADR-010): determines the per-fiber-visit
-  cost of evaluating `Term::AxisInvocation` (canonical hash axis). prism-btc's
+- **`Hasher` axis** (ADR-007, ADR-010, ADR-030): determines the
+  per-fiber-visit cost of evaluating
+  `Term::AxisInvocation { axis: 0, kernel: 0, .. }`. prism-btc's
   `Sha256dHasher` is one impl (pure-Rust, ADR-013-conformant, no
   external dep). An alternative `Hasher` impl with SHA-NI / AVX2
   intrinsics — bound at the `BitcoinMiningModel` declaration site,
@@ -1495,20 +1498,19 @@ triple plus the implementation runtime**:
   `PrismBtcBounds` selects `WITT_LEVEL_MAX_BITS = 32` (the `W32`
   fiber); a different bounds selection would parameterise the
   domain.
-- **Implementation runtime** (ADR-026 G16): the W32 traversal's
-  evaluation strategy. Sequential, std-thread-scoped parallel, or
-  a different parallelism realisation (e.g., FPGA-bound coset
-  evaluator behind the same `traverse_first_admit` contract). The
-  contract is "produces the same first-admitting index a reference
-  sequential traversal would"; the strategy is the implementor's
-  choice.
+- **Search runtime**: foundation 0.4.1's `Term::FirstAdmit`
+  evaluator (ADR-034 M2). The substrate iterates `idx` ascending
+  through the domain and short-circuits on the first non-zero
+  predicate result. There is no implementor-side strategy
+  parameter; under ADR-026 G16's three-way split, the W32 search
+  runtime now lives entirely in foundation.
 
-"CPU forever" is not a property of prism-btc — it is a property of
-**one specific instantiation** (pure-Rust `Hasher` + sequential
-runtime). The architecture's ADR-007 + ADR-026 G16 parametricity
-exposes the substitution-axis dimensions for the implementor to
-choose; the architectural commitment is the typed structure, not a
-fixed cost.
+The fold-call count to admission is therefore a property of the
+constraint's structural complexity (the byte threshold encoded in
+the `input.target` factor) and the `Hasher` axis's per-call cost.
+Same `BitcoinMiningModel`, same verb arena, same
+`Term::FirstAdmit` evaluator — across regtest, signet, testnet,
+testnet4, and mainnet.
 
 #### "Network" → runtime input value, not branch in the implementation
 
@@ -1569,7 +1571,7 @@ structural form end-to-end against ADR-026 G16's specification:
 | `first_admit` measure was placeholder `Literal(256, W8)` (=0) | SDK reads `<DomainTy as ConstrainedTypeShape>::CYCLE_SIZE` per ADR-032 (foundation 0.4.0); for `witt_domain::W32`, measure = 2^32 |
 | No byte-comparison / byte-packing `PrimitiveOp` | `Le`, `Lt`, `Ge`, `Gt`, `Concat` added per ADR-013/TR-08 (foundation 0.3.6); binary `<=`, `<`, `>=`, `>` and `concat(...)` admitted in closure-body grammar |
 | `Term::HasherProjection` was a single-axis special case | Replaced by `Term::AxisInvocation { axis_index, kernel_id, input_index }` per ADR-030 (foundation 0.4.0); `hash(input)` lowers to the canonical hash axis `(0, 0)`; `Sha256dHasher` participates via the blanket `impl<H: Hasher> AxisTuple for H` |
-| No field-access projection for product-of-shapes inputs | `PartitionProductFields` + `Term::ProjectField` admit `input.<field>` in closure bodies per ADR-033 G20 (foundation 0.4.0). prism-btc's `MiningInput` is a single 80-byte shape, so no field access is required. |
+| No field-access projection for product-of-shapes inputs | `PartitionProductFields` + `Term::ProjectField` admit `input.<field>` in closure bodies per ADR-033 G20 (foundation 0.4.0). prism-btc's `MiningTask` is a 108-byte `partition_product` of `TemplatePrefixShape` (76 bytes) and `TargetShape` (32 bytes); the verb body resolves `input.prefix` / `input.target` to `Term::ProjectField` accessors at proc-macro time. |
 | SDK bound `idx_ident` to the measure root (constant), not the iteration counter; `Term::Recurse` had no admission short-circuit | `first_admit` lowers to `Term::FirstAdmit { domain_size_index, predicate_index }` per ADR-034 Mechanism 2 (foundation 0.4.1). The catamorphism iterates `idx` ascending from 0 to `CYCLE_SIZE`, threads the candidate `idx` through the predicate via `FIRST_ADMIT_IDX_NAME_INDEX`, and short-circuits on the first non-zero predicate result. |
 
 #### Foundation drives the search end-to-end

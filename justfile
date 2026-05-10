@@ -123,23 +123,25 @@ testnet4-up:
 testnet4-status:
     bitcoin-cli -datadir="${PRISM_TESTNET4_DATA:-$HOME/testnet4-data}" getblockchaininfo
 
-# Run a prism-mine session against testnet4. Will print MH/s; finding a block
-# with CPU-only is unrealistic at testnet4 difficulty — this proves the
-# public-network plumbing (template fetch, parallel σ-convergence, tip-watch).
-testnet4-mine THREADS="0" DURATION_SEC="300":
+# Run prism-mine against testnet4. The mining inference is identical
+# across regtest / signet / testnet / testnet4 / mainnet: same
+# `BitcoinMiningModel`, same `nonce_fiber_traversal` verb, same
+# `Sha256dHasher`. The network-dependent value is the runtime byte
+# threshold the catamorphism's `Le` admission encodes (decoded from
+# `getblocktemplate.bits`). Each invocation drives one
+# `Term::FirstAdmit` ascending pass through W32; on exhaustion the
+# bitcoind boundary rolls the extranonce and re-invokes.
+testnet4-mine BLOCKS="1" DURATION_SEC="300":
     #!/usr/bin/env bash
     set -euo pipefail
     DATADIR="${PRISM_TESTNET4_DATA:-$HOME/testnet4-data}"
     bitcoin-cli -datadir="$DATADIR" -rpcwait createwallet "prism" 2>/dev/null || true
     ADDR=$(bitcoin-cli -datadir="$DATADIR" getnewaddress "" "bech32")
-    echo "Payout: $ADDR (threads={{THREADS}}, duration {{DURATION_SEC}}s)"
+    echo "Payout: $ADDR (blocks={{BLOCKS}}, duration cap {{DURATION_SEC}}s)"
     cargo build --release -p prism-btc-node
-    THREADS_ARG=""
-    [ "{{THREADS}}" != "0" ] && THREADS_ARG="--threads {{THREADS}}"
     timeout {{DURATION_SEC}} ./target/release/prism-mine \
       --rpc-url http://127.0.0.1:48332 \
       --rpc-user prism --rpc-pass demo \
       --network testnet4 \
       --payout "$ADDR" \
-      --session $THREADS_ARG \
-      --blocks 1 || echo "duration limit reached or interrupt"
+      --blocks {{BLOCKS}} || echo "duration limit reached or interrupt"
