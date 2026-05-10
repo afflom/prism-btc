@@ -33,8 +33,9 @@
 //! ADR-026 G16 (`first_admit`'s three-way runtime responsibility)
 //! splits the search across all three layers:
 //!
-//! - **Substrate** owns the structural primitives: `Term::Recurse`
-//!   for bounded recursion (ADR-029 recursive evaluator);
+//! - **Substrate** owns the structural primitives:
+//!   `Term::FirstAdmit` for bounded ascending search with
+//!   admission short-circuit (ADR-034 Mechanism 2);
 //!   `Term::AxisInvocation` against the canonical hash axis for
 //!   `hash(...)` (ADR-030); `Term::Application(Concat, [a, b])` for
 //!   byte-sequence packing; `Term::Application(Le, [a, b])` for
@@ -44,42 +45,42 @@
 //!   `uor-foundation-sdk` lowering reads
 //!   `<witt_domain::W32 as ConstrainedTypeShape>::CYCLE_SIZE` at the
 //!   consumer's compile time (ADR-032) and emits
-//!   `Term::Recurse { measure: Literal(2^32 @ W64),
-//!                    base:    Literal(0),
-//!                    step:    <predicate term tree> }`.
+//!   `Term::FirstAdmit { domain_size_index, predicate_index }` with
+//!   `idx_ident` bound to the foundation-fixed
+//!   `FIRST_ADMIT_IDX_NAME_INDEX` placeholder, which the catamorphism
+//!   threads to the candidate iteration index per ADR-034 Mechanism 2.
 //! - **Implementation** owns the runtime traversal. The conformance
 //!   test (ADR-026 G16): the runtime produces the same first-admitting
 //!   index a reference sequential traversal would. prism-btc's
 //!   [`crate::ops::traversal::traverse_sequential`] IS the reference
-//!   sequential traversal over `Z/(2^32)Z` for the (W32,
-//!   target-admission) pair — the conformance test is satisfied
+//!   sequential traversal — the conformance test is satisfied
 //!   trivially.
 //!
-//! ## Why the implementation runtime is still needed
+//! ## Foundation 0.4.1 closes the architectural gap (ADR-034)
 //!
-//! Foundation 0.4.0 closed two SDK proc-macro-time gaps from 0.3.6:
-//! `CYCLE_SIZE` introspection (ADR-032) makes the descent measure
-//! load-bearing at proc-macro time, and `PartitionProductFields`
-//! (ADR-033) admits field-access projections. With these, foundation
-//! drives the recursion 2^32 times per the recursive `Term::Recurse`
-//! fold-rule (ADR-029).
+//! Foundation 0.4.1 ships ADR-034's two mechanisms — both closing the
+//! prior delegations to the implementation runtime:
 //!
-//! What foundation 0.4.0 does NOT yet do:
+//! - **Mechanism 1**: `recurse(measure, base, |self, idx| step)`
+//!   admits a 2-parameter step closure where the second parameter is
+//!   the iteration counter (bound via `RECURSE_IDX_NAME_INDEX`).
+//! - **Mechanism 2**: `first_admit(<domain>, |idx| pred)` lowers to
+//!   `Term::FirstAdmit { domain_size_index, predicate_index }`. The
+//!   evaluator iterates `idx` ascending from 0 to N (read from the
+//!   domain's `CYCLE_SIZE`), evaluates the predicate per fiber visit
+//!   with the candidate `idx` threaded via
+//!   `FIRST_ADMIT_IDX_NAME_INDEX`, and **short-circuits on the first
+//!   non-zero predicate result**. The result is a coproduct value:
+//!   `(disc=0x01, idx_bytes)` on admission, `(disc=0x00, padding)` on
+//!   exhaustion.
 //!
-//! - Bind `idx_ident` (the `nonce` closure parameter in the predicate
-//!   body) to the iteration counter. The SDK source comment is explicit:
-//!   *"Foundation binds idx_ident to the measure root for now; the
-//!   structural declaration is what matters per ADR-024."* The predicate
-//!   therefore evaluates to a constant per iteration; the iteration
-//!   index never enters the predicate's term tree.
-//! - Short-circuit on admission. `Term::Recurse` always iterates the
-//!   full `CYCLE_SIZE` and returns the final accumulator; there is no
-//!   fold-rule that says "stop when the step's value indicates admit."
-//!
-//! Per ADR-026 G16's three-way split, both gaps fall to the
-//! implementation runtime: the runtime threads the actual nonce
-//! through the σ-projection per fiber visit, tests admission, and
-//! halts at the first admitting nonce.
+//! With ADR-034 Mechanism 2, foundation's catamorphism evaluates the
+//! W32 search end-to-end through the verb's term arena. The
+//! implementation runtime ([`crate::ops::traversal`]) is no longer
+//! load-bearing for structural correctness; it remains as an
+//! **optional ADR-026 G16 override** for parallel coset-partition
+//! traversal and external cancellation hooks (the substrate-side
+//! `Term::FirstAdmit` evaluator does not yet expose either).
 
 use uor_foundation_sdk::verb;
 
@@ -111,13 +112,21 @@ mod tests {
     }
 
     #[test]
-    fn verb_arena_contains_a_recurse_node() {
-        // ADR-026 G16: `first_admit` lowers to `Term::Recurse`.
+    fn verb_arena_contains_a_first_admit_node() {
+        // ADR-026 G16 + ADR-034 Mechanism 2 (foundation 0.4.1):
+        // `first_admit` lowers to `Term::FirstAdmit`, a dedicated
+        // bounded-search variant whose evaluator iterates `idx`
+        // ascending from 0 to N (= domain's CYCLE_SIZE) and
+        // short-circuits on the first non-zero predicate result.
+        // Earlier substrates (0.3.x – 0.4.0) lowered to `Term::Recurse`
+        // and required the implementation runtime to drive the search;
+        // 0.4.1 closes that delegation by making the search a
+        // first-class catamorphism fold-rule.
         let arena = nonce_fiber_traversal_term_arena();
-        let has_recurse = arena.iter().any(|t| matches!(t, Term::Recurse { .. }));
+        let has_first_admit = arena.iter().any(|t| matches!(t, Term::FirstAdmit { .. }));
         assert!(
-            has_recurse,
-            "first_admit lowering must emit a Term::Recurse per ADR-026 G16"
+            has_first_admit,
+            "first_admit lowering must emit a Term::FirstAdmit per ADR-034 Mechanism 2"
         );
     }
 

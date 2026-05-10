@@ -8,7 +8,7 @@
 > **Frame of reference:** the [UOR-Framework wiki](https://github.com/UOR-Foundation/UOR-Framework/wiki),
 > which is itself the normative specification of Prism — the boundary
 > properties TC-01..TC-06 and the architectural commitments
-> ADR-001..ADR-029. **As of foundation `0.4.0`, the typed-iso
+> ADR-001..ADR-034. **As of foundation `0.4.1`, the typed-iso
 > contract `PrismModel<H, B, A>` (ADR-020), the `IntoBindingValue`
 > input adapter (ADR-023), the catamorphism evaluator
 > `pipeline::evaluate_term_tree` (ADR-029), the
@@ -31,7 +31,7 @@ which produces blocks accepted byte-for-byte by Bitcoin Core.
 
 The load-bearing distinction between prism-btc and a traditional miner is
 that the σ-projection is not invoked through an opaque external crate —
-it is invoked through foundation 0.4.0's typed-iso surface
+it is invoked through foundation 0.4.1's typed-iso surface
 (`PrismModel<H, B, A>`, ADR-020) and the catamorphism evaluator
 (ADR-029). prism-btc declares a `BitcoinMiningModel` whose `Input` is
 the 80-byte canonical wire-format header (`MiningInput`), whose
@@ -70,7 +70,7 @@ consuming the protocol-level hash without reaching through the
 Grounded.
 
 The W32 nonce fiber traversal — finding the input value to feed
-`forward()` — is prism-btc's runtime (foundation 0.4.0's pipeline does
+`forward()` — is prism-btc's runtime (foundation 0.4.1's pipeline does
 not drive search; the catamorphism is structural per ADR-019). The
 mining "inference" is therefore a structural commitment: the type-level
 contract is a `PrismModel`, and the runtime that walks the W32 ring to
@@ -115,7 +115,7 @@ What prism-btc does **not** claim:
   (ADR-029), whose cost is a property of the chosen `Hasher` impl,
   not of "mining."
 - It does **not** introduce primitive operations beyond the
-  substrate's closed set (ADR-013, with the 0.3.6 amendment (now in foundation 0.4.0) for
+  substrate's closed set (ADR-013, with the 0.3.6 amendment (now in foundation 0.4.1) for
   `Le` / `Concat`). Every Bitcoin verb used by prism-btc decomposes
   into the closed `PrimitiveOp` vocabulary plus `Term::AxisInvocation` (canonical hash axis)
   (the substitution-axis-realised form, ADR-026 G19).
@@ -530,7 +530,7 @@ decoded from compact nBits" — is the halt predicate of
 [`crate::ops::traversal::traverse_sequential`]. The 4-byte compact
 nBits is decoded by [`crate::domain::Target::to_bytes`]; the
 comparison is byte-wise lexicographic. There is no separate
-`ConstrainedTypeShape` for the admission rule because foundation 0.4.0
+`ConstrainedTypeShape` for the admission rule because foundation 0.4.1
 seals `GroundedShape` to `ConstrainedTypeInput`: any output bundle the
 prism implementor declares can carry an IRI and constraints but cannot
 appear as the `T` parameter of `Grounded<T>`. The architecture pins the
@@ -560,7 +560,7 @@ W32 fiber traversal (prism-btc runtime, §4.6):
       if digest ≤ target_bytes: halt with (nonce, digest)
   outcome: FiberOutcome::Admitted | FiberOutcome::Exhausted
 
-PrismModel forward call (foundation 0.4.0 typed-iso surface):
+PrismModel forward call (foundation 0.4.1 typed-iso surface):
   input  = MiningInput(serialize_header(prefix, winning_nonce))  [80 bytes]
   route  = [Term::Variable {0}, Term::AxisInvocation {0,0,0}]      // hash(input)
   output = BitcoinMiningModel::forward(input)
@@ -897,7 +897,7 @@ impl uor_foundation::pipeline::IntoBindingValue for MiningInput {
 
 The 76-byte prefix / 4-byte nonce decomposition is preserved at the
 byte-layout level inside the 80-byte payload (positions [0..76) are the
-template prefix, [76..80) are the nonce). Foundation 0.4.0 seals
+template prefix, [76..80) are the nonce). Foundation 0.4.1 seals
 `GroundedShape` to `ConstrainedTypeInput`, so the architecture's
 conceptual `TemplatePrefixShape`/`TargetSubBundle` distinction does not
 appear as separate `ConstrainedTypeShape` types in code; the rule it
@@ -1005,8 +1005,8 @@ crates.
 
 | Crate | Source | Role |
 |---|---|---|
-| `uor-foundation` | crates.io (`UOR-Foundation/UOR-Framework`, 0.4.0) | Substrate. Sealed types, `PrimitiveOp` discriminants, the closed primitive operation set, the substitution-axis trait surface, `mint_*` primitives, and the typed-iso surface (`PrismModel`, `FoundationClosed`, `IntoBindingValue`, `pipeline::run_route`). |
-| `uor-foundation-sdk` | crates.io (`UOR-Foundation/UOR-Framework`, 0.4.0) | The `prism_model!` proc-macro that emits the seal + `FoundationClosed` + `PrismModel` impls from a closure-bodied route declaration (ADR-022). |
+| `uor-foundation` | crates.io (`UOR-Foundation/UOR-Framework`, 0.4.1) | Substrate. Sealed types, `PrimitiveOp` discriminants, the closed primitive operation set, the substitution-axis trait surface, `mint_*` primitives, and the typed-iso surface (`PrismModel`, `FoundationClosed`, `IntoBindingValue`, `pipeline::run_route`). |
+| `uor-foundation-sdk` | crates.io (`UOR-Foundation/UOR-Framework`, 0.4.1) | The `prism_model!` proc-macro that emits the seal + `FoundationClosed` + `PrismModel` impls from a closure-bodied route declaration (ADR-022). |
 | `prism` | crates.io (`UOR-Foundation/Prism`) | Runtime. Three Prism-mechanism sealed types, `pipeline::run`, the seal regime. |
 | `prism-verify` | crates.io (`UOR-Foundation/Prism`) | Replay façade. `certify_from_trace`. |
 | `prism-btc` | this repo, `crates/prism-btc/` | The application's pure domain layer. Declares all `ConstrainedTypeShape` impls (§4.7, §4.8), all `PrimitiveOp` compositions (§4.1–§4.6), the `HostBounds` selection (§3.2), the `Hasher` selection (§3.3), and the public entry point `mine` that constructs a CompileUnit and invokes `pipeline::run` once per (template, extranonce). No `sha2` dep, no `rayon` dep, no opaque crypto. |
@@ -1211,7 +1211,7 @@ set, not a sequence of phases:
    `ConstrainedTypeShape` impl: 80 W8 sites, the canonical wire-format
    header. The conceptual `TemplatePrefixShape` (76 sites) and
    `TargetSubBundle` (32 sites) of an earlier draft are conceptual
-   only — foundation 0.4.0 seals `GroundedShape` to
+   only — foundation 0.4.1 seals `GroundedShape` to
    `ConstrainedTypeInput`, so they cannot appear as `Grounded<T>`
    parameters. Their semantics are carried inside `MiningInput`'s
    76/4-byte payload split and `NonceFiberTraversal`'s halt predicate.
@@ -1257,11 +1257,11 @@ non-conforming. There is no partial conformance.
 ## 13. Responsibility split: foundation substrate vs prism implementor
 
 The wiki distinguishes two roles, and prism-btc occupies the second.
-Foundation 0.4.0 closes the substrate-vs-implementor gap with the
+Foundation 0.4.1 closes the substrate-vs-implementor gap with the
 typed-iso surface plus the catamorphism evaluator
 (ADR-019/020/022/023/026/028/029):
 
-- **`uor-foundation` (0.4.0) is the substrate.** It provides:
+- **`uor-foundation` (0.4.1) is the substrate.** It provides:
   sealed types (`Datum`, `Triad`, `Derivation`, `FreeRank`,
   `Validated`, `Grounded`, `Certified`); the closed `PrimitiveOp`
   vocabulary (15 generators — the original 10 dihedral generators
@@ -1281,7 +1281,7 @@ typed-iso surface plus the catamorphism evaluator
   both shipped in 0.3.6), `Grounded::output_bytes` (ADR-028), and
   the `TermValue` per-value carrier with `TERM_VALUE_MAX_BYTES =
   4096` capacity.
-- **`uor-foundation-sdk` (0.4.0)** ships the `prism_model!` and
+- **`uor-foundation-sdk` (0.4.1)** ships the `prism_model!` and
   `verb!` proc-macros that emit the seal impls + `FoundationClosed`
   impl + `PrismModel` impl from closure-bodied declarations (ADR-022
   D3 grammar G1–G11 plus ADR-026 G13–G19 for `parallel`, `fold_n`,
@@ -1303,7 +1303,7 @@ typed-iso surface plus the catamorphism evaluator
   catamorphism (ADR-019); prism-btc drives the search.
 
 The architecture above (§§1–11) is therefore a specification of
-prism-btc's runtime, expressed in foundation 0.4.0 vocabulary, not a
+prism-btc's runtime, expressed in foundation 0.4.1 vocabulary, not a
 list of demands on foundation. Foundation does not need to be amended
 for prism-btc to reach the defined state; prism-btc just needs to be
 written.
@@ -1323,11 +1323,14 @@ written.
 | ADR-023 (`IntoBindingValue` + buffer ceiling) | `MiningInput` impls `IntoBindingValue` with `MAX_BYTES = 80`; well under `ROUTE_INPUT_BUFFER_BYTES = 4096`. |
 | ADR-026 G19 + ADR-030 (`hash(input)` → `Term::AxisInvocation`) | `prism_model!` lowers `hash(input)` to `Term::AxisInvocation { axis_index: 0, kernel_id: 0, input_index: 0 }` (the canonical hash axis) over `Term::Variable {0}`. |
 | ADR-028 (`Grounded::output_bytes` carrier) | `MiningWitness::output_bytes()` exposes the catamorphism evaluator's TermValue payload. |
-| ADR-029 (catamorphism evaluator) | `pipeline::run_route` calls `pipeline::evaluate_term_tree`; the `AxisInvocation` fold rule dispatches the (axis 0, kernel 0) invocation through the `Sha256dHasher` substitution-axis impl (the blanket `impl<H: Hasher> AxisTuple for H`). `TERM_VALUE_MAX_BYTES = 4096` carries the full 80-byte input through `Term::Variable {0}`; `output_bytes` is `Sha256dHasher` over all 80 header bytes — the Bitcoin block hash in internal byte order. Foundation 0.4.0 also implements the recursive `Term::Recurse` and Kleene-fixpoint `Term::Unfold` rules per ADR-029. |
+| ADR-029 (catamorphism evaluator) | `pipeline::run_route` calls `pipeline::evaluate_term_tree`. The `AxisInvocation` fold rule dispatches `(axis 0, kernel 0)` through `Sha256dHasher` via the blanket `AxisTuple` impl. `Term::Recurse` iterates N times (recursive fold-rule), `Term::Unfold` iterates to a Kleene fixpoint, `Term::FirstAdmit` iterates ascending and short-circuits — all per ADR-029's per-variant fold rules. |
 | ADR-030 (`AxisExtension` + `AxisTuple`) | `Sha256dHasher` is automatically a 1-tuple `AxisTuple` via the blanket `impl<H: Hasher> AxisTuple for H`; `(axis_index: 0, kernel_id: 0)` dispatches to `Hasher::initial().fold_bytes(input).finalize()`. |
-| ADR-032 (`CYCLE_SIZE` on `ConstrainedTypeShape`) | `MiningInput` declares `CYCLE_SIZE = u64::MAX` (saturating; 80 bytes ≫ 2^64). The `nonce_fiber_traversal` verb names `witt_domain::W32` whose `CYCLE_SIZE = 2^32` becomes the `first_admit` descent measure. |
+| ADR-032 (`CYCLE_SIZE` on `ConstrainedTypeShape`) | `MiningInput` declares `CYCLE_SIZE = u64::MAX` (saturating; 80 bytes ≫ 2^64). The `nonce_fiber_traversal` verb names `witt_domain::W32` whose `CYCLE_SIZE = 2^32` becomes the search domain. |
+| ADR-033 (`PartitionProductFields` + `Term::ProjectField`) | `MiningInput` is a single 80-byte shape (not a partition product); the closure-body grammar's field-access form is admitted by 0.4.0 but not consumed by this implementation. |
+| ADR-034 Mechanism 1 (`recurse(measure, base, \|self, idx\| step)`) | Not consumed by `nonce_fiber_traversal` (uses `first_admit` instead); admitted by 0.4.1's SDK if a future verb needs index-aware tail recursion. |
+| ADR-034 Mechanism 2 (`Term::FirstAdmit`) | `nonce_fiber_traversal`'s `first_admit(witt_domain::W32, …)` lowers to `Term::FirstAdmit { domain_size_index, predicate_index }` (foundation 0.4.1 SDK). The catamorphism iterates `idx` ascending from 0 to 2^32, threads the candidate `idx` through the predicate via `FIRST_ADMIT_IDX_NAME_INDEX`, and short-circuits on the first non-zero predicate result — the wiki's intended search semantics, end-to-end through the catamorphism. |
 
-### 13.1 What foundation 0.4.0 supplies, used as-is
+### 13.1 What foundation 0.4.1 supplies, used as-is
 
 | Surface | Foundation path | prism-btc usage |
 |---|---|---|
@@ -1360,9 +1363,9 @@ written.
 | `PrismBtcBounds` | `prism_btc::shapes::bounds::PrismBtcBounds` | Foundation `HostBounds` selection. ADR-018 capacity constants. |
 | `MiningInput` | `prism_btc::model::MiningInput` | `ConstrainedTypeShape` (80 W8 sites) + hand-rolled `IntoBindingValue` (MAX_BYTES = 80). The 80-byte canonical wire-format Bitcoin block header. |
 | `BitcoinMiningModel` + `BitcoinMiningRoute` | `prism_btc::model::*` | `PrismModel<DefaultHostTypes, PrismBtcBounds, Sha256dHasher>` declared via `prism_model!`. Route body `hash(input)` (ADR-026 G19) lowers to `[Term::Variable {0}, Term::AxisInvocation {0,0,0}]`. |
-| (`TemplatePrefixShape`, `TargetSubBundle`) | _conceptual only_ | The architecture's input/output sub-bundle distinction is carried inside `MiningInput`'s 76/4 byte split and `NonceFiberTraversal`'s halt predicate. Foundation 0.4.0 seals `GroundedShape` to `ConstrainedTypeInput`, so these conceptual shapes do not appear as separate `ConstrainedTypeShape` types in code. |
+| (`TemplatePrefixShape`, `TargetSubBundle`) | _conceptual only_ | The architecture's input/output sub-bundle distinction is carried inside `MiningInput`'s 76/4 byte split and `NonceFiberTraversal`'s halt predicate. Foundation 0.4.1 seals `GroundedShape` to `ConstrainedTypeInput`, so these conceptual shapes do not appear as separate `ConstrainedTypeShape` types in code. |
 | `Sha256Compression`, `Sha256dProjection`, `HeaderSerialization`, `MerkleRootDerivation`, `CoinbaseConstruction` | `prism_btc::ops::*` | Pure-Rust runtime evaluators; no `sha2` dependency. The σ-projection runtime is identical to what `Sha256dHasher` does inside `pipeline::run_route`. |
-| `NonceFiberTraversal` | `prism_btc::ops::traversal` | The implementation runtime that evaluates the [`crate::verbs::nonce_fiber_traversal`] verb's `first_admit(W32, predicate)` declaration per ADR-026 G16's three-way responsibility split. Foundation 0.4.0 implements ADR-029's recursive `Term::Recurse` evaluator, but the SDK's `first_admit` lowering emits a placeholder `Literal(256)` measure (W8-truncated to 0); the implementation runtime supplies the conformant W32 cardinality (2^32). Sequential + std-thread-scoped parallel coset partition. |
+| `NonceFiberTraversal` | `prism_btc::ops::traversal` | An optional ADR-026 G16 implementation-runtime override. Foundation 0.4.1 evaluates the [`crate::verbs::nonce_fiber_traversal`] verb's `Term::FirstAdmit` end-to-end per ADR-034 Mechanism 2 (no implementation-side delegation needed for structural correctness). prism-btc's runtime adds two practical capabilities the foundation evaluator doesn't yet expose: parallel coset-partition traversal (`traverse_parallel`, ADR-026 G16 sanctions parallel overrides) and external cancellation (the bitcoind boundary's tip-watcher signals via the [`Cancel`] trait through every fiber visit). |
 | `mine()` | `prism_btc::pipeline::mine` | The public entry point. Walks the W32 fiber to find an admitting nonce, constructs `MiningInput` from the 80-byte serialized header, calls `BitcoinMiningModel::forward(input)` to mint the foundation-sealed `Grounded<ConstrainedTypeInput>`, tags it with `MiningTag`, returns `MiningOutcome`. |
 
 The substrate-vs-implementor split above is the architecture's
@@ -1371,7 +1374,7 @@ a SHA-256 implementation, or a fold-with-halt primitive because those
 belong to the prism implementor. Reconciling prism-btc to the
 architecture is therefore a matter of prism-btc writing what is its
 responsibility to write — which it now does, in full, against
-foundation 0.4.0's typed-iso surface.
+foundation 0.4.1's typed-iso surface.
 
 ### 13.3 The mining inference under the UOR lens
 
@@ -1485,47 +1488,53 @@ Pinned by [`crate::verbs::tests`](crates/prism-btc/src/verbs.rs):
 - `verb_arena_contains_concat_application` (ADR-013/TR-08 byte-packing)
 - `verb_arena_contains_le_application` (ADR-013/TR-08 byte-comparison)
 
-#### What foundation 0.4.0 closes
+#### Substrate amendments closing the wiki's intended semantics
 
-Foundation 0.4.0's evaluator + SDK proc-macro now realise the verb's
-structural form against the wiki's intended semantics:
+Foundation 0.4.1's evaluator + SDK proc-macro realise the verb's
+structural form end-to-end against ADR-026 G16's specification:
 
-| Earlier gap | 0.4.0 resolution |
+| Earlier gap | Resolution |
 |---|---|
-| `Term::Recurse` walked one step (0.3.x) | Recursive fold-rule (ADR-029): iterates N times where N = `bytes_to_u64_be(measure)` |
-| `first_admit` measure was placeholder `Literal(256, W8)` (=0) | SDK reads `<DomainTy as ConstrainedTypeShape>::CYCLE_SIZE` (ADR-032) and emits `LiteralExpr` at `W64`; for `witt_domain::W32`, measure = 2^32 |
-| No byte-comparison `PrimitiveOp` | `Le`, `Lt`, `Ge`, `Gt` (ADR-013/TR-08); binary `<=`, `<`, `>=`, `>` admitted in closure-body grammar |
-| No byte-packing `PrimitiveOp` | `Concat` (ADR-013/TR-08); `concat(...)` admitted in closure-body grammar |
-| `Term::HasherProjection` was a single-axis special case | Replaced by `Term::AxisInvocation { axis_index, kernel_id, input_index }` (ADR-030); `hash(input)` lowers to the canonical hash axis `(0, 0)`; `Sha256dHasher` participates via the blanket `impl<H: Hasher> AxisTuple for H` |
-| No field-access projection for product-of-shapes inputs | `PartitionProductFields` + `Term::ProjectField` admit `input.<field>` in closure bodies (ADR-033 G20). prism-btc's `MiningInput` is a single 80-byte shape, so no field access is required for this verb. |
+| `Term::Recurse` walked one step (0.3.x) | Recursive fold-rule per ADR-029 (foundation 0.3.6): iterates N times where N = `bytes_to_u64_be(measure)` |
+| `first_admit` measure was placeholder `Literal(256, W8)` (=0) | SDK reads `<DomainTy as ConstrainedTypeShape>::CYCLE_SIZE` per ADR-032 (foundation 0.4.0); for `witt_domain::W32`, measure = 2^32 |
+| No byte-comparison / byte-packing `PrimitiveOp` | `Le`, `Lt`, `Ge`, `Gt`, `Concat` added per ADR-013/TR-08 (foundation 0.3.6); binary `<=`, `<`, `>=`, `>` and `concat(...)` admitted in closure-body grammar |
+| `Term::HasherProjection` was a single-axis special case | Replaced by `Term::AxisInvocation { axis_index, kernel_id, input_index }` per ADR-030 (foundation 0.4.0); `hash(input)` lowers to the canonical hash axis `(0, 0)`; `Sha256dHasher` participates via the blanket `impl<H: Hasher> AxisTuple for H` |
+| No field-access projection for product-of-shapes inputs | `PartitionProductFields` + `Term::ProjectField` admit `input.<field>` in closure bodies per ADR-033 G20 (foundation 0.4.0). prism-btc's `MiningInput` is a single 80-byte shape, so no field access is required. |
+| SDK bound `idx_ident` to the measure root (constant), not the iteration counter; `Term::Recurse` had no admission short-circuit | `first_admit` lowers to `Term::FirstAdmit { domain_size_index, predicate_index }` per ADR-034 Mechanism 2 (foundation 0.4.1). The catamorphism iterates `idx` ascending from 0 to `CYCLE_SIZE`, threads the candidate `idx` through the predicate via `FIRST_ADMIT_IDX_NAME_INDEX`, and short-circuits on the first non-zero predicate result. |
 
-#### What remains implementor-evaluated per ADR-026 G16
+#### `ops/traversal.rs` is now an optional ADR-026 G16 override
 
-One SDK semantic stays implementor-defined in 0.4.0:
+With ADR-034 Mechanism 2 in place, foundation's catamorphism evaluates
+the W32 search end-to-end through the verb's term arena:
 
-- **The `idx_ident` (the `nonce` closure parameter) binding.** The SDK
-  source comment is explicit: *"Foundation binds idx_ident to the
-  measure root for now; the structural declaration is what matters
-  per ADR-024."* The predicate body's `nonce` therefore resolves to
-  the (constant) measure value rather than the iteration counter.
-  Foundation's evaluator iterates 2^32 times, but the predicate's
-  bytes don't vary across iterations and `Term::Recurse` doesn't
-  short-circuit on admission. Per ADR-026 G16's three-way split, the
-  implementation runtime drives the actual fiber-visit index
-  threading and admission halt; prism-btc's
-  [`crate::ops::traversal::traverse_sequential`] is that runtime.
+- The predicate body `hash(concat(input.prefix, nonce)) <= input.target`
+  lowers to a Term subtree (`AxisInvocation`, `Concat`, `Le`,
+  `FirstAdmitIdxPlaceholder`) with the candidate `nonce` threaded per
+  iteration.
+- `Term::FirstAdmit` walks the W32 ring, evaluates the predicate per
+  fiber visit, and returns `(0x01, idx_bytes)` on admission or
+  `(0x00, padding)` on exhaustion.
 
-ADR-026 G16's three-way responsibility split sanctions exactly this:
-substrate provides primitives; prism provides the operator
-declaration; the implementation provides the runtime that respects
-the declaration. The verb body is the wiki's intended structural
-form; the runtime is the conformant evaluator the architecture
-asks for.
+The implementation runtime in [`crate::ops::traversal`] is no longer
+load-bearing for structural correctness. It remains as an **optional
+override per ADR-026 G16** for two practical capabilities the
+substrate-side `Term::FirstAdmit` evaluator doesn't yet expose:
 
-When foundation extends the SDK to bind `idx_ident` to the iteration
-counter and add a short-circuit fold-rule for `first_admit`-shaped
-`Term::Recurse`, prism-btc's runtime can be retired without changes
-to the verb declaration.
+1. **Parallel coset-partition traversal**. ADR-026 G16 explicitly
+   permits implementations to "replace the default with their own
+   runtime" for parallel traversal across coset partitions of the
+   ring. prism-btc's [`crate::ops::traversal::traverse_parallel`]
+   provides std-thread-scoped parallelism.
+2. **External cancellation**. The bitcoind boundary's tip-watcher
+   needs to abort an in-flight traversal on chain advance. Foundation's
+   evaluator has no cancellation hook; prism-btc's runtime threads a
+   [`crate::ops::traversal::Cancel`] trait object through every fiber
+   visit.
+
+The verb declaration is bit-identical regardless of which runtime
+evaluates it. `BitcoinMiningModel::forward` going through foundation's
+evaluator and prism-btc's `mine()` going through `traverse_sequential`
+produce the same admitting nonce per the ADR-026 G16 conformance test.
 
 ---
 
@@ -1549,7 +1558,7 @@ Source: [02 Architecture Constraints](https://github.com/UOR-Foundation/UOR-Fram
 | TC-05 replayability without deciders or hashing | `prism-verify::certify_from_trace` walks 5 events; no Hasher invocation; no decider invocation. | §6.6, §9 |
 | TC-06 no author infrastructure | `prism-mine` runs entirely on user hardware. | §9 |
 
-### 14.2 Architecture decisions (ADR-001..ADR-029)
+### 14.2 Architecture decisions (ADR-001..ADR-034)
 
 Source: [09 Architecture Decisions](https://github.com/UOR-Foundation/UOR-Framework/wiki/09-Architecture-Decisions).
 
@@ -1580,7 +1589,7 @@ Source: [09 Architecture Decisions](https://github.com/UOR-Foundation/UOR-Framew
 | ADR-023 IntoBindingValue + ROUTE_INPUT_BUFFER_BYTES | `MiningInput` impls `IntoBindingValue` with `MAX_BYTES = 80`; well under the foundation ceiling of 4096. | §13.0, §13.2 |
 | ADR-026 G19 `hash(input)` lowers to `Term::AxisInvocation` (canonical hash axis) | The closure body `hash(input)` in `BitcoinMiningModel`'s route is lowered by `prism_model!` to `[Term::Variable {0}, Term::AxisInvocation {0,0,0}]`; the catamorphism evaluator runs the application Hasher over `Term::Variable {0}`'s evaluated bytes. | §1, §13.0 |
 | ADR-028 `Grounded::output_bytes` carrier | The Grounded mints with the catamorphism's evaluated `TermValue` attached as `output_bytes`. | §1, §5, §13.0, §13.1 |
-| ADR-029 catamorphism evaluator + per-value capacity | `pipeline::evaluate_term_tree` runs the term tree over the input bytes; per-value carrier is `TermValue` with `TERM_VALUE_MAX_BYTES = 4096` (foundation 0.4.0), wide enough to carry the 80-byte mining input through `Variable → HasherProjection` whole. | §1, §5, §13.0, §13.1 |
+| ADR-029 catamorphism evaluator + per-value capacity | `pipeline::evaluate_term_tree` runs the term tree over the input bytes; per-value carrier is `TermValue` with `TERM_VALUE_MAX_BYTES = 4096` (foundation 0.4.1), wide enough to carry the 80-byte mining input through `Variable → HasherProjection` whole. | §1, §5, §13.0, §13.1 |
 
 ### 14.3 Building Block View
 
@@ -1622,12 +1631,12 @@ Source: [08 Concepts](https://github.com/UOR-Foundation/UOR-Framework/wiki/08-Co
 | Wiki term | prism-btc usage | §-refs |
 |---|---|---|
 | Datum | the 80-byte `MiningInput` byte sequence the W32 fiber admitted; folded by `pipeline::run_route` into the binding's `content_address`. | §5 |
-| Triad (foundation `Triad<T>`) | accessible from `MiningWitness::triad()` (foundation 0.4.0). Coordinates: `(stratum, spectrum, address)` derived from the `Grounded`'s `unit_address`. The digest-domain projection over the block-hash bytes is the prism-btc-supplied [`crate::domain::TriadicCoords`] on `MiningOutcome::coords`. | §7.7, §7.8 |
+| Triad (foundation `Triad<T>`) | accessible from `MiningWitness::triad()` (foundation 0.4.1). Coordinates: `(stratum, spectrum, address)` derived from the `Grounded`'s `unit_address`. The digest-domain projection over the block-hash bytes is the prism-btc-supplied [`crate::domain::TriadicCoords`] on `MiningOutcome::coords`. | §7.7, §7.8 |
 | Derivation | the foundation `Derivation` (`MiningWitness::derivation()`) recording the typed-iso path the W32 admission traversed; replayable to re-derive the certificate. | §5 |
 | FreeRank | the W32 fiber's free coordinate; collapses on admission (the runtime selects the unique winning nonce). | §5 |
 | Validated, Grounded, Certified | `Validated<CompileUnit, FinalPhase>`, `Grounded<ConstrainedTypeInput, MiningTag>`, `Certified<GroundingCertificate>`. | §5, §6.6, §7.1 |
-| ConstrainedTypeShape | `MiningInput` (the literal PrismModel input). The architecture's `TemplatePrefixShape`/`TargetSubBundle` are conceptual; foundation 0.4.0 seals `GroundedShape` to `ConstrainedTypeInput`. | §4.7, §4.8 |
-| Grounding | Foundation 0.4.0's `pipeline::run_route` admits `MiningInput` directly via `IntoBindingValue`; no separate `Grounding` impl is required at the prism implementor level. | §7.4 |
+| ConstrainedTypeShape | `MiningInput` (the literal PrismModel input). The architecture's `TemplatePrefixShape`/`TargetSubBundle` are conceptual; foundation 0.4.1 seals `GroundedShape` to `ConstrainedTypeInput`. | §4.7, §4.8 |
+| Grounding | Foundation 0.4.1's `pipeline::run_route` admits `MiningInput` directly via `IntoBindingValue`; no separate `Grounding` impl is required at the prism implementor level. | §7.4 |
 | Hasher | `Sha256dHasher`. | §3.3, §7.2 |
 | HostTypes, HostBounds | `DefaultHostTypes`, `PrismBtcBounds`. | §3.1, §3.2 |
 | Trace | five-event sequence per `pipeline::run`. | §6.4 |

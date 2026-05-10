@@ -7,8 +7,8 @@ members = [
 ]
 
 [workspace.dependencies]
-uor-foundation     = { version = "0.4.0" }
-uor-foundation-sdk = { version = "0.4.0" }
+uor-foundation     = { version = "0.4.1" }
+uor-foundation-sdk = { version = "0.4.1" }
 wasm-bindgen       = { version = "0.2" }
 js-sys             = { version = "0.3" }
 
