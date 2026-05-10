@@ -10,7 +10,7 @@
 //! declaration:
 //! `first_admit(witt_domain::W32, |nonce| hash(concat(input, nonce)) <= input)`.
 //! The SDK emits its term-tree fragment as a `&'static [Term]` slice;
-//! foundation 0.4.0's `evaluate_term_tree` walks it via the recursive
+//! foundation 0.4.1's `evaluate_term_tree` walks it via the recursive
 //! `Term::Recurse` fold-rule (ADR-029) for `CYCLE_SIZE = 2^32`
 //! iterations (ADR-032). Per ADR-026 G16, the implementation runtime
 //! provides the actual fiber-visit semantics that the SDK's symbolic
@@ -28,7 +28,7 @@
 //! ## Typed-iso attestation
 //!
 //! Once the runtime admits, the 80-byte canonical wire-format header
-//! flows through `BitcoinMiningModel::forward` (foundation 0.4.0
+//! flows through `BitcoinMiningModel::forward` (foundation 0.4.1
 //! `pipeline::run_route` + `evaluate_term_tree` per ADR-029) for the
 //! typed-iso shape attestation. The Grounded that comes back carries
 //! `output_bytes` ≡ `Sha256dHasher` over the 80 bytes — the Bitcoin
@@ -54,7 +54,7 @@ use crate::shapes::hasher::Sha256dHasher;
 ///
 /// 1. `Sha256dHasher` folds the 80 input bytes to derive the
 ///    input-binding's `content_address` (ADR-023).
-/// 2. Foundation 0.4.0's catamorphism evaluator carries all 80 bytes
+/// 2. Foundation 0.4.1's catamorphism evaluator carries all 80 bytes
 ///    through `Term::Variable {0}` and folds them through
 ///    `Sha256dHasher` via `Term::AxisInvocation { axis_index: 0,
 ///    kernel_id: 0, .. }` (the canonical hash axis per ADR-030),

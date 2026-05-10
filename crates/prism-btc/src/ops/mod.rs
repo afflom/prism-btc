@@ -4,7 +4,7 @@
 //! The σ-projection's evaluator (pure-Rust SHA-256d), the canonical
 //! 80-byte header layout, the merkle-root reduction, and the W32 nonce
 //! fiber traversal are the prism implementor's responsibility per
-//! architecture §13. Foundation 0.3.2 supplies the typed-iso surface
+//! architecture §13. Foundation 0.4.1 supplies the typed-iso surface
 //! (`PrismModel<H, B, A>`, ADR-020) and the runtime catamorphism
 //! (`pipeline::run_route`, ADR-022); this module is the runtime that
 //! finds the admitting fiber point so that surface has an input to mint

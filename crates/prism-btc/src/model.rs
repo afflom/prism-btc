@@ -1,6 +1,6 @@
 //! `BitcoinMiningModel` — prism-btc's `PrismModel<H, B, A>` declaration.
 //!
-//! Foundation 0.4.0 ships the full typed-iso surface this model uses:
+//! Foundation 0.4.1 ships the full typed-iso surface this model uses:
 //! `PrismModel<H, B, A>` (ADR-019/020/022/023), the catamorphism
 //! evaluator [`pipeline::evaluate_term_tree`] (ADR-029), the
 //! `AxisExtension` / `AxisTuple` axis system with the canonical hash
@@ -135,7 +135,7 @@ impl IntoBindingValue for MiningInput {
 //   `pipeline::run_route::<DefaultHostTypes, PrismBtcBounds, Sha256dHasher, Self>(input)`
 //
 // The route body `hash(input)` is the σ-projection (ADR-026 G19). The
-// macro lowers it under foundation 0.4.0 to a 2-node term arena:
+// macro lowers it under foundation 0.4.1 to a 2-node term arena:
 //     [ Term::Variable { name_index: 0 },
 //       Term::AxisInvocation { axis_index: 0, kernel_id: 0,
 //                              input_index: 0 } ]
@@ -236,7 +236,7 @@ mod tests {
 
     #[test]
     fn forward_output_bytes_is_the_bitcoin_block_hash() {
-        // Foundation 0.4.0 catamorphism: `hash(input)` lowers to
+        // Foundation 0.4.1 catamorphism: `hash(input)` lowers to
         // `Term::AxisInvocation { axis_index: 0, kernel_id: 0, ..}` (the
         // canonical hash axis per ADR-030), and `evaluate_term_tree`
         // (ADR-029) dispatches the (0, 0) invocation through the

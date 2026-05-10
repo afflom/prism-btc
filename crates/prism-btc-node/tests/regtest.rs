@@ -88,7 +88,7 @@ fn mines_a_block_and_advances_the_chain() {
         "W32 level must propagate from the const-validated CompileUnit"
     );
 
-    // Foundation 0.3.4 catamorphism (ADR-028, ADR-029): the Grounded's
+    // Foundation catamorphism (ADR-028, ADR-029): the Grounded's
     // output_bytes IS the block hash bitcoind accepted, in the Hasher's
     // internal byte order — bit-equal to BlockHash::to_byte_array().
     let from_witness = witness_block_hash_internal(&mined.witness);

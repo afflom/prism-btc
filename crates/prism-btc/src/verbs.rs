@@ -194,4 +194,44 @@ mod tests {
             "<= lowering must emit a Term::Application(Le, ...) per ADR-013/TR-08"
         );
     }
+
+    /// Foundation 0.4.1 evaluates `Term::FirstAdmit` end-to-end per
+    /// ADR-034 Mechanism 2: the catamorphism iterates `idx` ascending
+    /// through the domain, threads the candidate `idx` to the predicate
+    /// via `FIRST_ADMIT_IDX_NAME_INDEX`, and short-circuits on the first
+    /// non-zero predicate result. This test pins that the
+    /// `nonce_fiber_traversal` verb's term arena is foundation-evaluable
+    /// — i.e., that prism-btc's verb declaration is structurally
+    /// well-formed against the foundation evaluator's per-variant
+    /// fold-rules. The implementation runtime in `ops::traversal` is
+    /// thus an *optional* ADR-026 G16 override, not a load-bearing
+    /// substitute for foundation's evaluator.
+    #[test]
+    fn verb_arena_evaluates_through_foundation_catamorphism() {
+        use crate::shapes::hasher::Sha256dHasher;
+        use uor_foundation::pipeline::evaluate_term_tree;
+
+        let arena = nonce_fiber_traversal_term_arena();
+        // Use a small input so the evaluator runs in test budget. The
+        // verb body's predicate is `hash(concat(input, nonce)) <= input`
+        // — the comparison treats both sides as u64-truncated big-endian
+        // values. For an all-0xff input, the right-hand side is u64::MAX,
+        // so any digest lhs satisfies the Le admission, and FirstAdmit
+        // returns at idx=0. The output is the coproduct
+        // `(disc=0x01, idx_bytes=[0,0,0,0])` per the ADR-034 Mechanism 2
+        // fold-rule's admission encoding.
+        let input = [0xffu8; 80];
+        let result = evaluate_term_tree::<Sha256dHasher>(arena, &input)
+            .expect("verb arena must be foundation-evaluable per ADR-029 + ADR-034 M2");
+
+        let bytes = result.bytes();
+        assert!(
+            !bytes.is_empty(),
+            "FirstAdmit's evaluator must emit a coproduct (disc, idx_bytes) value"
+        );
+        assert_eq!(
+            bytes[0], 0x01,
+            "predicate `hash(...) <= 0xff..ff` admits at idx=0; FirstAdmit returns disc=0x01"
+        );
+    }
 }

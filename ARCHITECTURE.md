@@ -1589,7 +1589,7 @@ Source: [09 Architecture Decisions](https://github.com/UOR-Foundation/UOR-Framew
 | ADR-023 IntoBindingValue + ROUTE_INPUT_BUFFER_BYTES | `MiningInput` impls `IntoBindingValue` with `MAX_BYTES = 80`; well under the foundation ceiling of 4096. | §13.0, §13.2 |
 | ADR-026 G19 `hash(input)` lowers to `Term::AxisInvocation` (canonical hash axis) | The closure body `hash(input)` in `BitcoinMiningModel`'s route is lowered by `prism_model!` to `[Term::Variable {0}, Term::AxisInvocation {0,0,0}]`; the catamorphism evaluator runs the application Hasher over `Term::Variable {0}`'s evaluated bytes. | §1, §13.0 |
 | ADR-028 `Grounded::output_bytes` carrier | The Grounded mints with the catamorphism's evaluated `TermValue` attached as `output_bytes`. | §1, §5, §13.0, §13.1 |
-| ADR-029 catamorphism evaluator + per-value capacity | `pipeline::evaluate_term_tree` runs the term tree over the input bytes; per-value carrier is `TermValue` with `TERM_VALUE_MAX_BYTES = 4096` (foundation 0.4.1), wide enough to carry the 80-byte mining input through `Variable → HasherProjection` whole. | §1, §5, §13.0, §13.1 |
+| ADR-029 catamorphism evaluator + per-value capacity | `pipeline::evaluate_term_tree` runs the term tree over the input bytes; per-value carrier is `TermValue` with `TERM_VALUE_MAX_BYTES = 4096` (foundation 0.4.1), wide enough to carry the 80-byte mining input through `Variable → AxisInvocation` whole. | §1, §5, §13.0, §13.1 |
 
 ### 14.3 Building Block View
 

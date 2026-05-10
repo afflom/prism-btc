@@ -1,6 +1,6 @@
 //! prism-btc — the prism implementor for Bitcoin proof-of-work.
 //!
-//! Real-time structural inference, expressed as a foundation 0.4.0
+//! Real-time structural inference, expressed as a foundation 0.4.1
 //! `PrismModel<H, B, A>`: the input shape is the 80-byte canonical
 //! Bitcoin block header ([`MiningInput`]); the output shape is
 //! foundation's `ConstrainedTypeInput`; the route is `hash(input)`,
@@ -14,7 +14,7 @@
 //! admitting fiber point ([`mine`], [`mine_parallel`]). On admission,
 //! the 80-byte header is wrapped in [`MiningInput`] and fed through
 //! `BitcoinMiningModel::forward`, which delegates to foundation's
-//! `pipeline::run_route`. Foundation 0.4.0's catamorphism evaluator
+//! `pipeline::run_route`. Foundation 0.4.1's catamorphism evaluator
 //! (ADR-029) carries the full 80-byte input through the per-value
 //! buffer (`TERM_VALUE_MAX_BYTES = 4096`) and folds it through
 //! `Sha256dHasher`; the resulting 32-byte digest is attached to the

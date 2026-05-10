@@ -128,7 +128,7 @@ pub type MiningWitness = uor_foundation::enforcement::Grounded<
 
 /// PRISM triadic coordinates of a 32-byte block-hash digest.
 ///
-/// Foundation 0.3.2 ships its own `Triad<L>` surface accessible via
+/// Foundation ships its own `Triad<L>` surface accessible via
 /// [`MiningWitness::triad`], whose coordinates are projected from the
 /// `Grounded`'s `unit_address` (the metadata-domain identity). The
 /// `TriadicCoords` here is the **digest-domain** projection — `(stratum,

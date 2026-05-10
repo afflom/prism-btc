@@ -88,7 +88,8 @@ fn mine_outcome_digest_matches_sha256d_hasher_body() {
 #[test]
 fn forward_grounded_path_identity_is_input_invariant() {
     // The Grounded's content_fingerprint and unit_address come from
-    // CompileUnit metadata, not input bytes (foundation 0.3.3
+    // CompileUnit metadata, not input bytes (foundation
+    //
     // `fold_unit_digest`). Two distinct admitted inputs therefore
     // agree on those substrate bits — they identify the typed-iso
     // **path**, not bytewise input identity.
@@ -115,7 +116,7 @@ fn forward_grounded_path_identity_is_input_invariant() {
 
 #[test]
 fn forward_grounded_output_bytes_is_the_block_hash() {
-    // Foundation 0.3.4 attaches the catamorphism evaluator's result to
+    // Foundation attaches the catamorphism evaluator's result to
     // the Grounded as `output_bytes` (ADR-028, ADR-029). With the route
     // `hash(input)` and the per-value buffer raised to 4096 bytes, the
     // evaluator computes `Sha256dHasher` over all 80 header bytes — the
