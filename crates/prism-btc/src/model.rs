@@ -1,162 +1,242 @@
 //! `BitcoinMiningModel` — prism-btc's `PrismModel<H, B, A>` declaration.
 //!
-//! Foundation 0.4.1 ships the full typed-iso surface this model uses:
-//! `PrismModel<H, B, A>` (ADR-019/020/022/023), the catamorphism
-//! evaluator [`pipeline::evaluate_term_tree`] (ADR-029), the
-//! `AxisExtension` / `AxisTuple` axis system with the canonical hash
-//! axis at `(axis_index: 0, kernel_id: 0)` (ADR-030), and
-//! [`Grounded::output_bytes`] (ADR-028) with `TERM_VALUE_MAX_BYTES =
-//! 4096` — wide enough to carry the 80-byte canonical Bitcoin block
-//! header through `Term::Variable {0}` and feed it whole into
-//! `Term::AxisInvocation` (the canonical hash axis). prism-btc, as
-//! the prism implementor for the Bitcoin use case, declares its model
-//! with:
+//! The mining inference is end-to-end prism: foundation 0.4.1's
+//! catamorphism evaluates the `nonce_fiber_traversal` verb's term
+//! arena, drives the W32 fiber search via `Term::FirstAdmit`
+//! (ADR-034 Mechanism 2), and emits the admitting nonce. There is no
+//! implementor-side search loop.
 //!
-//! - `Input  = MiningInput`            — the 80-byte canonical wire-format header
-//! - `Output = ConstrainedTypeInput`   — foundation's identity output shape
-//! - `Route  = BitcoinMiningRoute`     — the σ-projection term tree:
-//!   `hash(input)` (ADR-026 G19), which `prism_model!` lowers to
-//!   `[Term::Variable {name_index: 0}, Term::AxisInvocation {axis_index: 0, kernel_id: 0, input_index: 0}]`
+//! ## Shape topology
 //!
-//! ## What `BitcoinMiningModel::forward` produces
+//! - [`TemplatePrefixShape`] — 76 W8 sites, the canonical 76-byte
+//!   template prefix `version‖prev_hash‖merkle_root‖timestamp‖bits`.
+//! - [`TargetShape`] — 32 W8 sites, the lexicographic target threshold
+//!   (decoded from the template's compact `nBits` field via
+//!   [`crate::domain::Target::to_bytes`]).
+//! - [`MiningTask`] — the partition_product of the two factors per
+//!   ADR-026 G17. 108 W8 sites laid out as `prefix(76) ‖ target(32)`.
+//!   Implements [`uor_foundation::pipeline::PartitionProductFields`]
+//!   so the closure-body grammar's field-access form (ADR-033 G20)
+//!   resolves `input.prefix` and `input.target` at proc-macro time.
+//! - [`MiningResult`] — 5 W8 sites, the FirstAdmit coproduct return
+//!   value: byte 0 is the discriminant (`0x01` admitted, `0x00`
+//!   exhausted), bytes 1..5 are the admitting nonce in big-endian.
 //!
-//! Calling `forward(MiningInput(header_bytes))` invokes
-//! `pipeline::run_route`, which:
+//! ## Route
 //!
-//! 1. Folds the 80 input bytes through `Sha256dHasher` to derive the
-//!    binding's `content_address` (8 high-order bytes of SHA-256d).
-//! 2. Validates the `CompileUnit` against `PrismBtcBounds`.
-//! 3. **Evaluates the route's term tree via `evaluate_term_tree`**:
-//!    `Term::Variable {0}` carries the full 80 input bytes through the
-//!    `TermValue` per-value buffer; `Term::AxisInvocation {0, 0, 0}` folds
-//!    those 80 bytes through `Sha256dHasher` and emits the 32-byte
-//!    digest (ADR-029).
-//! 4. Folds the canonical `CompileUnit` byte layout through the same
-//!    Hasher to compute `ContentFingerprint` and `unit_address`.
-//! 5. Mints `Grounded<ConstrainedTypeInput>` and attaches the evaluated
-//!    digest as `output_bytes` (ADR-028).
-//!
-//! ## The Grounded's `output_bytes` IS the Bitcoin block hash
-//!
-//! The 32 bytes that come out of `MiningWitness::output_bytes()` are
-//! `Sha256dHasher::finalize` applied to all 80 header bytes — i.e.
-//! SHA-256d of the canonical wire-format header in the Hasher's
-//! internal byte order. Reversed, those 32 bytes are the canonical
-//! Bitcoin block hash in display order. The block-hash bytes the
-//! Bitcoin protocol consumes and the typed-iso evaluator's certificate
-//! are now bit-identical: produced by one and the same `Sha256dHasher`
-//! substitution-axis selection, inside one and the same
-//! `pipeline::run_route` invocation.
-//!
-//! [`crate::pipeline::MiningOutcome::digest`] continues to carry the
-//! same digest in display order as a convenience for callers that
-//! consume the protocol-level hash without reaching through the
-//! Grounded; both come from the same `Sha256dHasher` algorithm body
-//! ([`crate::ops::sha256::sha256d_display`] is the Hasher's body
-//! followed by byte reversal).
+//! `BitcoinMiningModel`'s route invokes the
+//! [`crate::verbs::nonce_fiber_traversal`] verb, whose body is the
+//! wiki's intended structural form
+//! `first_admit(witt_domain::W32, |nonce| hash(concat(input.prefix, nonce)) <= input.target)`.
+//! Foundation 0.4.1's catamorphism evaluates this end-to-end.
 
 use uor_foundation::enforcement::ShapeViolation;
-use uor_foundation::pipeline::{ConstrainedTypeShape, ConstraintRef, IntoBindingValue};
+use uor_foundation::pipeline::{
+    ConstrainedTypeShape, ConstraintRef, IntoBindingValue, PartitionProductFields,
+};
 use uor_foundation::{DefaultHostTypes, ViolationKind};
-use uor_foundation_sdk::prism_model;
+use uor_foundation_sdk::{output_shape, prism_model};
 
 use crate::shapes::bounds::PrismBtcBounds;
 use crate::shapes::hasher::Sha256dHasher;
 
-/// 80-byte canonical wire-format Bitcoin block header.
+// Bring the verb's term-arena const into scope so `prism_model!`'s
+// closure-body grammar can splice the verb fragment at compile time
+// per ADR-024 verb-call form. The macro emits a const reference to
+// `VERB_TERMS_NONCE_FIBER_TRAVERSAL` and to the marker fn
+// `nonce_fiber_traversal`; both are emitted by the `verb!` macro in
+// [`crate::verbs`] and need to be in scope.
+#[allow(unused_imports)]
+// referenced by `prism_model!`'s closure-body grammar at expansion time.
+use crate::verbs::{nonce_fiber_traversal, VERB_TERMS_NONCE_FIBER_TRAVERSAL};
+
+// ----- Factor shapes -----
+
+/// 76-byte canonical template prefix:
+/// `version‖prev_hash‖merkle_root‖timestamp‖bits`.
 ///
-/// Carries the bytes the W32 fiber admitted: the 76-byte template
-/// prefix (extranonce-fixed merkle root) + the winning 4-byte nonce.
-/// Implements [`IntoBindingValue`] so foundation's `pipeline::run_route`
-/// can fold it through the application `Hasher` at certificate emission
-/// time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MiningInput(pub [u8; 80]);
+/// Type-level marker. Runtime data flows through [`MiningTask`]'s
+/// 108-byte payload at offset 0.
+pub struct TemplatePrefixShape;
 
-impl MiningInput {
-    /// IRI of the constraint that fails when foundation hands us a
-    /// too-small output buffer (which it shouldn't, by run_route's
-    /// invariant: the buffer is sized to MAX_BYTES exactly).
-    const BUFFER_VIOLATION: ShapeViolation = ShapeViolation {
-        shape_iri: "https://prism.btc/shape/MiningInput",
-        constraint_iri: "https://prism.btc/shape/MiningInput/maxBytes",
-        property_iri: "https://prism.btc/shape/MiningInput/byteCount",
-        expected_range: "http://www.w3.org/2001/XMLSchema#nonNegativeInteger",
-        min_count: 80,
-        max_count: 80,
-        kind: ViolationKind::ValueCheck,
-    };
-}
-
-impl ConstrainedTypeShape for MiningInput {
-    const IRI: &'static str = "https://prism.btc/shape/MiningInput";
-    const SITE_COUNT: usize = 80;
+impl ConstrainedTypeShape for TemplatePrefixShape {
+    const IRI: &'static str = "https://prism.btc/shape/TemplatePrefix";
+    const SITE_COUNT: usize = 76;
     const CONSTRAINTS: &'static [ConstraintRef] = &[];
-    // ADR-032: 80 bytes = 640 bits → 2^640 distinct values, which
-    // exceeds u64::MAX. Per the ADR's saturating-semantics rule, the
-    // declared cardinality saturates at u64::MAX. The model's input is
-    // not a `first_admit` domain (the search runs over `WittLevel::W32`
-    // for the nonce field, declared in the verb body); this constant
-    // is the foundation-required `ConstrainedTypeShape` member, not a
-    // load-bearing value for the mining traversal.
+    /// 76 bytes = 608 bits ≫ 64 — saturates per ADR-032.
     const CYCLE_SIZE: u64 = u64::MAX;
 }
 
-// `IntoBindingValue` (and `PrismModel`, `FoundationClosed`) require
-// `__sdk_seal::Sealed`. The wiki sanctions hand-rolled IntoBindingValue
-// impls for application authors carrying runtime input data (per the
-// `product_shape!` macro doc: "applications that need to carry runtime
-// input data declare a custom ConstrainedTypeShape and write a bespoke
-// IntoBindingValue impl"). prism-btc, as the prism implementor, exercises
-// that lane.
-impl uor_foundation::pipeline::__sdk_seal::Sealed for MiningInput {}
+impl uor_foundation::pipeline::__sdk_seal::Sealed for TemplatePrefixShape {}
 
-impl IntoBindingValue for MiningInput {
-    const MAX_BYTES: usize = 80;
-
-    fn into_binding_bytes(&self, out: &mut [u8]) -> Result<usize, ShapeViolation> {
-        if out.len() < 80 {
-            return Err(Self::BUFFER_VIOLATION);
-        }
-        out[..80].copy_from_slice(&self.0);
-        Ok(80)
+impl IntoBindingValue for TemplatePrefixShape {
+    const MAX_BYTES: usize = 76;
+    fn into_binding_bytes(&self, _out: &mut [u8]) -> Result<usize, ShapeViolation> {
+        // Type-level marker only; data is carried by `MiningTask`.
+        Ok(0)
     }
 }
 
-// ----- The PrismModel declaration -----
+/// 32-byte lexicographic mining target.
+///
+/// Type-level marker. Runtime data flows through [`MiningTask`]'s
+/// 108-byte payload at offset 76.
+pub struct TargetShape;
+
+impl ConstrainedTypeShape for TargetShape {
+    const IRI: &'static str = "https://prism.btc/shape/Target";
+    const SITE_COUNT: usize = 32;
+    const CONSTRAINTS: &'static [ConstraintRef] = &[];
+    /// 32 bytes = 256 bits ≫ 64 — saturates per ADR-032.
+    const CYCLE_SIZE: u64 = u64::MAX;
+}
+
+impl uor_foundation::pipeline::__sdk_seal::Sealed for TargetShape {}
+
+impl IntoBindingValue for TargetShape {
+    const MAX_BYTES: usize = 32;
+    fn into_binding_bytes(&self, _out: &mut [u8]) -> Result<usize, ShapeViolation> {
+        Ok(0)
+    }
+}
+
+// ----- The model's input: a partition_product carrying both factors -----
+
+/// The mining inference's input: a 108-byte payload carrying the
+/// 76-byte template prefix concatenated with the 32-byte lexicographic
+/// target.
+///
+/// Hand-rolled `ConstrainedTypeShape` + `IntoBindingValue` +
+/// `PartitionProductFields` impls (rather than via `partition_product!`)
+/// because the SDK macro emits a unit struct without a runtime data
+/// carrier; this struct holds the actual byte payload that
+/// [`uor_foundation::pipeline::run_route`] folds through `Sha256dHasher`
+/// at evaluation time.
+///
+/// `PartitionProductFields` declares the per-factor offset/length
+/// table the closure-body grammar's field-access form (ADR-033 G20)
+/// indexes into: `prefix` resolves to bytes `[0..76)`, `target` to
+/// `[76..108)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MiningTask(pub [u8; 108]);
+
+impl MiningTask {
+    /// Buffer-violation IRI emitted when foundation's pipeline hands
+    /// `into_binding_bytes` a too-small buffer (which it shouldn't, by
+    /// `run_route`'s invariant).
+    const BUFFER_VIOLATION: ShapeViolation = ShapeViolation {
+        shape_iri: "https://prism.btc/shape/MiningTask",
+        constraint_iri: "https://prism.btc/shape/MiningTask/maxBytes",
+        property_iri: "https://prism.btc/shape/MiningTask/byteCount",
+        expected_range: "http://www.w3.org/2001/XMLSchema#nonNegativeInteger",
+        min_count: 108,
+        max_count: 108,
+        kind: ViolationKind::ValueCheck,
+    };
+
+    /// Construct a mining task from a 76-byte template prefix and a
+    /// 32-byte target threshold.
+    pub fn new(prefix: [u8; 76], target: [u8; 32]) -> Self {
+        let mut bytes = [0u8; 108];
+        bytes[..76].copy_from_slice(&prefix);
+        bytes[76..].copy_from_slice(&target);
+        Self(bytes)
+    }
+
+    /// Borrow the 76-byte template-prefix portion.
+    #[inline]
+    pub fn prefix(&self) -> &[u8; 76] {
+        // SAFETY: layout is fixed; first 76 bytes are the prefix.
+        unsafe { &*(self.0[..76].as_ptr() as *const [u8; 76]) }
+    }
+
+    /// Borrow the 32-byte target portion.
+    #[inline]
+    pub fn target_bytes(&self) -> &[u8; 32] {
+        unsafe { &*(self.0[76..].as_ptr() as *const [u8; 32]) }
+    }
+}
+
+impl ConstrainedTypeShape for MiningTask {
+    const IRI: &'static str = "https://prism.btc/shape/MiningTask";
+    const SITE_COUNT: usize = 108;
+    const CONSTRAINTS: &'static [ConstraintRef] = &[];
+    /// 108 bytes = 864 bits ≫ 64 — saturates per ADR-032.
+    const CYCLE_SIZE: u64 = u64::MAX;
+}
+
+impl uor_foundation::pipeline::__sdk_seal::Sealed for MiningTask {}
+
+impl IntoBindingValue for MiningTask {
+    const MAX_BYTES: usize = 108;
+
+    fn into_binding_bytes(&self, out: &mut [u8]) -> Result<usize, ShapeViolation> {
+        if out.len() < 108 {
+            return Err(Self::BUFFER_VIOLATION);
+        }
+        out[..108].copy_from_slice(&self.0);
+        Ok(108)
+    }
+}
+
+impl PartitionProductFields for MiningTask {
+    /// Per-factor `(byte_offset, byte_length)` pairs. ADR-033 G20's
+    /// field-access form indexes here.
+    const FIELDS: &'static [(u32, u32)] = &[(0, 76), (76, 32)];
+    /// Per-factor names matching the closure-body grammar's
+    /// `input.<name>` form.
+    const FIELD_NAMES: &'static [&'static str] = &["prefix", "target"];
+}
+
+// ----- The model's output: the FirstAdmit coproduct value -----
+
+// 6-byte coproduct returned by foundation's `Term::FirstAdmit`
+// fold-rule (ADR-034 Mechanism 2):
+//   - Byte 0:    discriminant. `0x01` ⇒ admitting nonce found;
+//                `0x00` ⇒ W32 exhausted without admission.
+//   - Bytes 1..6: the admitting nonce in big-endian, padded to 5 bytes
+//                 because `witt_domain::W32::CYCLE_SIZE = 2^32` needs
+//                 5 bytes to represent (foundation's FirstAdmit
+//                 evaluator picks `idx_byte_width` from the smallest
+//                 unsigned representation of N). The high byte
+//                 (`bytes[1]`) is always 0 for W32 nonces — actual
+//                 nonce bytes are in `bytes[2..6]`.
+output_shape! {
+    pub struct MiningResult;
+    impl ConstrainedTypeShape for MiningResult {
+        const IRI: &'static str = "https://prism.btc/shape/MiningResult";
+        const SITE_COUNT: usize = 6;
+        const CONSTRAINTS: &'static [ConstraintRef] = &[];
+    }
+}
+
+// ----- The PrismModel -----
 //
 // `prism_model!` emits:
 // - `pub struct BitcoinMiningModel;`
 // - `pub struct BitcoinMiningRoute;`
-// - `__sdk_seal::Sealed` impls for both
-// - `FoundationClosed for BitcoinMiningRoute` returning the term arena
-// - `PrismModel<DefaultHostTypes, PrismBtcBounds, Sha256dHasher>` for
-//   `BitcoinMiningModel`, whose `forward` body is
-//   `pipeline::run_route::<DefaultHostTypes, PrismBtcBounds, Sha256dHasher, Self>(input)`
+// - the seal + `FoundationClosed` + `PrismModel` impls
+// - `forward(input)` body = `pipeline::run_route::<H, B, A, Self>(input)`
 //
-// The route body `hash(input)` is the σ-projection (ADR-026 G19). The
-// macro lowers it under foundation 0.4.1 to a 2-node term arena:
-//     [ Term::Variable { name_index: 0 },
-//       Term::AxisInvocation { axis_index: 0, kernel_id: 0,
-//                              input_index: 0 } ]
-// where `(axis_index: 0, kernel_id: 0)` is the canonical hash axis
-// (`HashAxis::KERNEL_HASH`) of the application's `AxisTuple` (ADR-030).
-// `pipeline::run_route` calls `pipeline::evaluate_term_tree` with this
-// arena and the 80 input bytes; the `AxisInvocation` fold-rule (ADR-029)
-// dispatches to the application's `AxisTuple` — which the blanket
-// `impl<H: Hasher> AxisTuple for H` routes through `Sha256dHasher` —
-// and emits the 32-byte SHA-256d of the canonical wire-format header.
-// That digest is the Bitcoin block hash in the Hasher's internal byte
-// order.
+// The route body invokes the `nonce_fiber_traversal` verb. The verb's
+// term-tree fragment is spliced at compile time per ADR-024. Foundation
+// 0.4.1's catamorphism evaluates the spliced arena: `Term::FirstAdmit`
+// iterates `nonce` ascending from 0 to 2^32 (per the W32 domain's
+// `CYCLE_SIZE`), evaluates the predicate
+// `hash(concat(input.prefix, nonce)) <= input.target` per fiber visit,
+// and short-circuits on the first non-zero predicate result. The
+// catamorphism returns the 5-byte coproduct `(disc, nonce_bytes)`,
+// attached to the `Grounded<MiningResult>`'s `output_bytes` per
+// ADR-028.
 prism_model! {
     pub struct BitcoinMiningModel;
     pub struct BitcoinMiningRoute;
     impl PrismModel<DefaultHostTypes, PrismBtcBounds, Sha256dHasher> for BitcoinMiningModel {
-        type Input = MiningInput;
-        type Output = uor_foundation::enforcement::ConstrainedTypeInput;
+        type Input = MiningTask;
+        type Output = MiningResult;
         type Route = BitcoinMiningRoute;
         fn route(input: Self::Input) -> Self::Output {
-            hash(input)
+            nonce_fiber_traversal(input)
         }
     }
 }
@@ -166,115 +246,54 @@ mod tests {
     use super::*;
     use uor_foundation::pipeline::PrismModel;
 
-    fn genesis_header_bytes() -> [u8; 80] {
-        // The 80-byte genesis header in canonical wire-format.
-        let merkle: [u8; 32] = [
-            0x3b, 0xa3, 0xed, 0xfd, 0x7a, 0x7b, 0x12, 0xb2, 0x7a, 0xc7, 0x2c, 0x3e, 0x67, 0x76,
-            0x8f, 0x61, 0x7f, 0xc8, 0x1b, 0xc3, 0x88, 0x8a, 0x51, 0x32, 0x3a, 0x9f, 0xb8, 0xaa,
-            0x4b, 0x1e, 0x5e, 0x4a,
-        ];
-        let mut header = [0u8; 80];
-        header[0..4].copy_from_slice(&1u32.to_le_bytes());
-        // prev_hash = 0
-        header[36..68].copy_from_slice(&merkle);
-        header[68..72].copy_from_slice(&1231006505u32.to_le_bytes());
-        header[72..76].copy_from_slice(&0x1d00ffffu32.to_le_bytes());
-        header[76..80].copy_from_slice(&2083236893u32.to_le_bytes());
-        header
+    fn easy_task() -> MiningTask {
+        // Minimal valid prefix: version=1, rest zero.
+        let mut prefix = [0u8; 76];
+        prefix[0..4].copy_from_slice(&1u32.to_le_bytes());
+        // Easy target: all 0xff (any digest admits).
+        let target = [0xffu8; 32];
+        MiningTask::new(prefix, target)
     }
 
     #[test]
-    fn into_binding_bytes_writes_eighty() {
-        let bytes = [0xab; 80];
-        let input = MiningInput(bytes);
-        let mut out = [0u8; 80];
-        let written = input.into_binding_bytes(&mut out).expect("buffer fits");
-        assert_eq!(written, 80);
-        assert_eq!(out, bytes);
+    fn into_binding_bytes_writes_one_oh_eight() {
+        let task = easy_task();
+        let mut out = [0u8; 108];
+        let written = task.into_binding_bytes(&mut out).expect("buffer fits");
+        assert_eq!(written, 108);
     }
 
     #[test]
-    fn forward_mints_grounded_at_w32() {
-        let outcome = <BitcoinMiningModel as PrismModel<
-            DefaultHostTypes,
-            PrismBtcBounds,
-            Sha256dHasher,
-        >>::forward(MiningInput(genesis_header_bytes()))
-        .expect("forward must mint Grounded");
-        // Witt level comes from PrismBtcBounds::WITT_LEVEL_MAX_BITS = 32.
-        assert_eq!(outcome.witt_level_bits(), 32);
-        // The unit_address is non-zero (foundation derives it from
-        // the canonical CompileUnit byte layout fingerprint).
-        assert_ne!(outcome.unit_address().as_u128(), 0);
-    }
-
-    #[test]
-    fn forward_grounded_path_identity_is_input_invariant() {
-        // The Grounded's `content_fingerprint` and `unit_address` are
-        // derived from the CompileUnit metadata digest (ADR-029
-        // `fold_unit_digest`), not the input bytes. Two distinct admitted
-        // inputs therefore agree on those substrate bits — they attest the
-        // **typed-iso path**, not bytewise input identity.
-        let a = MiningInput([0x11u8; 80]);
-        let b = MiningInput([0xeeu8; 80]);
-        let ga = <BitcoinMiningModel as PrismModel<
-            DefaultHostTypes,
-            PrismBtcBounds,
-            Sha256dHasher,
-        >>::forward(a)
-        .expect("forward(a)");
-        let gb = <BitcoinMiningModel as PrismModel<
-            DefaultHostTypes,
-            PrismBtcBounds,
-            Sha256dHasher,
-        >>::forward(b)
-        .expect("forward(b)");
-        assert_eq!(ga.content_fingerprint(), gb.content_fingerprint());
-        assert_eq!(ga.unit_address(), gb.unit_address());
-        assert_eq!(ga.witt_level_bits(), gb.witt_level_bits());
-    }
-
-    #[test]
-    fn forward_output_bytes_is_the_bitcoin_block_hash() {
-        // Foundation 0.4.1 catamorphism: `hash(input)` lowers to
-        // `Term::AxisInvocation { axis_index: 0, kernel_id: 0, ..}` (the
-        // canonical hash axis per ADR-030), and `evaluate_term_tree`
-        // (ADR-029) dispatches the (0, 0) invocation through the
-        // application's `AxisTuple` — `Sha256dHasher` via the blanket
-        // `impl<H: Hasher> AxisTuple for H`. The result is the SHA-256d
-        // of the input bytes, attached to the Grounded as `output_bytes`
-        // (ADR-028).
-        //
-        // `TERM_VALUE_MAX_BYTES = 4096` is wide enough for the 80-byte
-        // input to flow through `Term::Variable {0}` whole, so the
-        // resulting digest is over all 80 bytes. The Grounded's
-        // `output_bytes` IS the Bitcoin block hash in the Hasher's
-        // internal byte order; reversed, it is the canonical genesis
-        // block hash in display order:
-        //   000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f
-        let header = genesis_header_bytes();
+    fn forward_returns_admitted_coproduct_for_easy_target() {
+        let task = easy_task();
         let grounded = <BitcoinMiningModel as PrismModel<
             DefaultHostTypes,
             PrismBtcBounds,
             Sha256dHasher,
-        >>::forward(MiningInput(header))
-        .expect("forward must mint Grounded");
-        let output = grounded.output_bytes();
-        assert_eq!(output.len(), 32);
+        >>::forward(task)
+        .expect("forward succeeds");
+        // Foundation 0.4.1's FirstAdmit returns a 6-byte coproduct
+        // for W32 (the cycle size 2^32 needs 5 bytes BE plus 1 disc):
+        //   byte 0:    disc = 0x01 (admitted) or 0x00 (exhausted)
+        //   bytes 1..6: admitting nonce padded to 5 bytes (high byte 0)
+        let bytes = grounded.output_bytes();
+        assert_eq!(bytes.len(), 6);
+        assert_eq!(
+            bytes[0], 0x01,
+            "predicate `hash(...) <= 0xff..ff` admits at idx=0"
+        );
+    }
 
-        // Internal byte order: SHA-256d over all 80 header bytes.
-        let expected_internal = crate::ops::sha256::sha256d_internal(&header);
-        assert_eq!(output, &expected_internal[..]);
-
-        // Display order (reversed): the canonical Bitcoin genesis hash.
-        let mut display = [0u8; 32];
-        display.copy_from_slice(output);
-        display.reverse();
-        let genesis_hash: [u8; 32] = [
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x19, 0xd6, 0x68, 0x9c, 0x08, 0x5a, 0xe1, 0x65, 0x83,
-            0x1e, 0x93, 0x4f, 0xf7, 0x63, 0xae, 0x46, 0xa2, 0xa6, 0xc1, 0x72, 0xb3, 0xf1, 0xb6,
-            0x0a, 0x8c, 0xe2, 0x6f,
-        ];
-        assert_eq!(display, genesis_hash);
+    #[test]
+    fn partition_product_fields_index_layout() {
+        // ADR-033 G20 indexes by FIELDS' (offset, length) pairs.
+        assert_eq!(
+            <MiningTask as PartitionProductFields>::FIELDS,
+            &[(0, 76), (76, 32)]
+        );
+        assert_eq!(
+            <MiningTask as PartitionProductFields>::FIELD_NAMES,
+            &["prefix", "target"]
+        );
     }
 }

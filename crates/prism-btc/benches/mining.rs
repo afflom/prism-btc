@@ -1,7 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
-use prism_btc::{
-    mine, Bits, BlockHeader, MerkleRoot, NeverCancel, Target, Timestamp, TriadicCoords, Version,
-};
+use prism_btc::{mine, Bits, BlockHeader, MerkleRoot, Target, Timestamp, TriadicCoords, Version};
 
 fn genesis_header() -> BlockHeader {
     let merkle_bytes: [u8; 32] = [
@@ -24,12 +22,8 @@ fn bench_mine_easy(c: &mut Criterion) {
     g.throughput(Throughput::Elements(1));
     g.bench_function("mine_easy_target", |b| {
         b.iter(|| {
-            mine(
-                black_box(&genesis_header()),
-                black_box(easy_target),
-                &NeverCancel,
-            )
-            .expect("easy target must admit")
+            mine(black_box(&genesis_header()), black_box(easy_target))
+                .expect("easy target must admit")
         })
     });
     g.finish();

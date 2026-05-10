@@ -1,21 +1,13 @@
 //! Bitcoin Core RPC integration for prism-btc.
 //!
-//! Two layers:
+//! [`PrismMiner::mine_one_block`] is the entry point: fetch a template
+//! via `getblocktemplate`, invoke [`prism_btc::mine`] (which drives the
+//! W32 search through foundation 0.4.1's catamorphism end-to-end),
+//! assemble the wire-format block, and submit via `submitblock`.
 //!
-//! - [`PrismMiner::mine_one_block`] — single-shot: fetch one template,
-//!   call [`prism_btc::mine`], submit the assembled block. Convenient
-//!   for regtest where the W32 fiber's first index admits trivially.
-//! - [`MiningSession::mine_until_block`] — long-running: extranonce
-//!   rolling + tip-staleness watcher + parallel `mine_parallel` per
-//!   (template, extranonce) pair.
-//!
-//! prism-btc owns the mining inference (σ-projection, W32 traversal,
-//! shape attestation); rust-bitcoin owns the transaction/script/block
-//! container; this crate is the wiring.
-
-pub mod session;
-
-pub use session::{MinedBlock as SessionMinedBlock, MiningSession, SessionConfig};
+//! prism-btc owns the mining inference (the typed-iso surface
+//! foundation evaluates); rust-bitcoin owns the transaction / script /
+//! block container; this crate is the wiring.
 
 use anyhow::{bail, Context, Result};
 use bitcoin::absolute::LockTime;
@@ -35,8 +27,7 @@ use bitcoincore_rpc::json::{
 use bitcoincore_rpc::{Auth, Client, RpcApi};
 
 use prism_btc::{
-    mine, Bits, BlockHeader, MerkleRoot, MiningFailure, MiningWitness, NeverCancel, Target,
-    Timestamp, Version,
+    mine, Bits, BlockHeader, MerkleRoot, MiningFailure, MiningWitness, Target, Timestamp, Version,
 };
 
 const COINBASE_WITNESS_RESERVED: [u8; 32] = [0u8; 32];
@@ -106,12 +97,15 @@ impl PrismMiner {
 
         // Delegate the mining inference to prism-btc — the prism
         // implementor for Bitcoin. The boundary's job is template
-        // construction and submission, not the mining algorithm.
-        let outcome = mine(&job.header, job.target, &NeverCancel).map_err(|e| match e {
+        // construction and submission; the mining algorithm runs
+        // through foundation's catamorphism.
+        let outcome = mine(&job.header, job.target).map_err(|e| match e {
             MiningFailure::NoMatch => {
                 anyhow::anyhow!("W32 fiber exhausted (2^32 candidates) without satisfying target")
             }
-            MiningFailure::Cancelled => anyhow::anyhow!("mine() cancelled"),
+            MiningFailure::PipelineFailure => {
+                anyhow::anyhow!("foundation pipeline rejected the input")
+            }
         })?;
 
         let block = job.assemble(outcome.nonce);

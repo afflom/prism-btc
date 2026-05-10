@@ -29,58 +29,75 @@ prism-btc is a **real-time inference engine for Bitcoin proof-of-work**,
 realised as a Prism application. The artifact is the binary `prism-mine`,
 which produces blocks accepted byte-for-byte by Bitcoin Core.
 
-The load-bearing distinction between prism-btc and a traditional miner is
-that the σ-projection is not invoked through an opaque external crate —
-it is invoked through foundation 0.4.1's typed-iso surface
-(`PrismModel<H, B, A>`, ADR-020) and the catamorphism evaluator
-(ADR-029). prism-btc declares a `BitcoinMiningModel` whose `Input` is
-the 80-byte canonical wire-format header (`MiningInput`), whose
-`Output` is foundation's `ConstrainedTypeInput`, whose application
-`Hasher` is `Sha256dHasher` (pure-Rust SHA-256d), and whose `Route` is
-declared in the closure-grammar form `hash(input)` — `prism_model!`
-(ADR-026 G19) lowers it to the term arena `[Term::Variable {0},
-Term::AxisInvocation {0,0,0}]`.
+The load-bearing distinction between prism-btc and a traditional miner
+is that the entire mining inference — the W32 fiber traversal, the
+σ-projection per fiber visit, the admission halt — is invoked through
+foundation 0.4.1's typed-iso surface (`PrismModel<H, B, A>`, ADR-020)
+and the catamorphism evaluator (ADR-029, ADR-034 Mechanism 2). There
+is no implementor-side search loop; foundation's
+`pipeline::run_route` drives the search end-to-end through prism
+vocabulary.
 
-`BitcoinMiningModel::forward` produces a `Grounded` whose three
-substrate carriers all run through `Sha256dHasher`:
+`BitcoinMiningModel`'s declaration:
 
-- The input-binding's `content_address` is the 8 high-order bytes of
-  `Sha256dHasher` over the 80-byte header (ADR-023 path).
-- The `content_fingerprint` and `unit_address` are derived from
-  `Sha256dHasher` over the canonical `CompileUnit` byte layout (the
-  **typed-iso path identity**).
-- The Grounded's `output_bytes` is the catamorphism evaluator's
-  result — `Term::Variable {0}` carries all 80 input bytes through
-  the `TermValue` per-value buffer (`TERM_VALUE_MAX_BYTES = 4096` in
-  0.3.4, comfortably above the 80 the header requires); `Term::AxisInvocation` (canonical hash axis)
-  then folds those 80 bytes through `Sha256dHasher` and emits the
-  32-byte digest, attached via `Grounded::with_output_bytes`
+- **`Input = MiningTask`** — the `partition_product` of
+  `TemplatePrefixShape` (76 bytes) and `TargetShape` (32 bytes) per
+  ADR-026 G17. The closure-body grammar's field-access form
+  (ADR-033 G20) resolves `input.prefix` and `input.target` at
+  proc-macro time via [`PartitionProductFields`].
+- **`Output = MiningResult`** — the 6-byte coproduct returned by
+  `Term::FirstAdmit` for a W32 domain: byte 0 is the discriminant
+  (`0x01` admitted, `0x00` exhausted), bytes 1..6 are the admitting
+  nonce padded to 5 BE bytes (the high byte is always 0 for W32).
+- **Application axis = `Sha256dHasher`** (pure-Rust SHA-256d),
+  promoted to a 1-tuple `AxisTuple` via foundation's blanket
+  `impl<H: Hasher> AxisTuple for H` (ADR-030).
+- **Route = `nonce_fiber_traversal(input)`** — a verb call (ADR-024)
+  whose body is the wiki's intended structural form
+  `first_admit(witt_domain::W32, |nonce| hash(concat(input.prefix, nonce)) <= input.target)`.
+  The verb's term-tree fragment is spliced into the route's arena at
+  compile time per ADR-024.
+
+Calling `BitcoinMiningModel::forward(MiningTask::new(prefix, target))`
+invokes `pipeline::run_route` → `pipeline::evaluate_term_tree`:
+
+- The catamorphism encounters `Term::FirstAdmit { domain_size_index,
+  predicate_index }`. Its fold-rule (ADR-034 Mechanism 2) reads the
+  domain size from `witt_domain::W32::CYCLE_SIZE = 2^32` (ADR-032)
+  and iterates `idx` ascending from 0 to 2^32.
+- For each `idx`, the catamorphism evaluates the predicate term tree
+  with the candidate threaded via `FIRST_ADMIT_IDX_NAME_INDEX`. The
+  predicate composes:
+  `concat(input.prefix, idx)` (ADR-013/TR-08 `Concat` PrimitiveOp)
+  → `hash(...)` (ADR-026 G19 → `Term::AxisInvocation { axis: 0,
+  kernel: 0 }` per ADR-030, dispatched through `Sha256dHasher`)
+  → `<= input.target` (ADR-013/TR-08 `Le` PrimitiveOp).
+- On the first non-zero predicate result, FirstAdmit short-circuits
+  and emits the coproduct `(0x01, idx_bytes)` as `Grounded::output_bytes`
   (ADR-028).
+- The `Grounded`'s `content_fingerprint` and `unit_address` carry the
+  typed-iso path identity (the unit metadata digest under
+  `Sha256dHasher`).
 
-**The 32 bytes of `MiningWitness::output_bytes()` ARE the Bitcoin
-block hash** in the Hasher's internal byte order. Reversed, they are
-the canonical block hash in display order — bit-identical, by
-construction, to what `submitblock` accepts. The σ-projection runs
-*inside* the foundation typed-iso pipeline, end-to-end. The same
-`Sha256dHasher` body is also the algorithm prism-btc's W32 traversal
-evaluates per fiber visit ([`crate::ops::sha256::sha256d_display`])
-to test admission against the target; `MiningOutcome::digest` carries
-the same digest in display order as a convenience for callers
-consuming the protocol-level hash without reaching through the
-Grounded.
+[`prism_btc::mine`] composes the host-side wrapper: build the
+`MiningTask`, call `forward`, parse the coproduct, reconstruct the
+admitted 80-byte header (`prefix‖nonce`), compute the block hash in
+display order via [`crate::ops::sha256::sha256d_display`] (the same
+`Sha256dHasher` algorithm body the catamorphism invoked inside
+`Term::AxisInvocation`), and return [`MiningOutcome`].
 
-The W32 nonce fiber traversal — finding the input value to feed
-`forward()` — is prism-btc's runtime (foundation 0.4.1's pipeline does
-not drive search; the catamorphism is structural per ADR-019). The
-mining "inference" is therefore a structural commitment: the type-level
-contract is a `PrismModel`, and the runtime that walks the W32 ring to
-the admitting fiber point is the prism implementor's job.
+**The mining is end-to-end prism.** The artifact `prism-mine`
+produces blocks accepted byte-for-byte by Bitcoin Core; the W32
+search runs through foundation's catamorphism, not through any
+Rust loop in this crate.
+
 - Determinism + finite domain (`|W32| = 2^32`) + unique-first-admission
   in the structural ordering of the W32 ring together mean: given the
   template prefix and the foundation `Hasher` substitution, the
   pipeline derives the same nonce on every invocation. There is no
-  randomness, no choice, no "search and check." The answer is uniquely
-  determined by the structure; the pipeline computes it.
+  randomness, no choice, no "search and check." The answer is
+  structurally entailed by `(MiningTask, BitcoinMiningModel,
+  Sha256dHasher)`; foundation's catamorphism computes it.
 
 This is what "real-time inference" means here:
 
@@ -99,9 +116,9 @@ This is what "real-time inference" means here:
   Core, satisfies the protocol's target. The block is accepted by
   `submitblock` exactly as any other miner's block would be. What
   differs is the path: every step of prism-btc's derivation is a
-  composition of foundation `PrimitiveOp` discriminants and a sealed
-  `pipeline::run` traversal — never an opaque crate import, never a
-  hand-rolled loop.
+  composition of foundation `PrimitiveOp` discriminants evaluated by
+  foundation 0.4.1's `pipeline::evaluate_term_tree` catamorphism —
+  never an opaque crate import, never a hand-rolled loop.
 
 What prism-btc does **not** claim:
 
@@ -168,8 +185,9 @@ exhibiting compile-time UORassembly enforcement (TC-04, ADR-006).
 `TraceEvent` values, a `ContentFingerprint`, a hasher identifier, and
 a format version (per Building Block View, bridge::trace::Trace).
 
-`Grounded<T>` is a sealed object. `pipeline::run` yields `Grounded<T>`
-and `Trace` simultaneously (Runtime View Scenario 1, step 8).
+`Grounded<T>` is a sealed object. `BitcoinMiningModel::forward`
+(delegating to foundation's `pipeline::run_route`) yields
+`Grounded<MiningResult>` (Runtime View Scenario 1).
 
 `Certified<GroundingCertificate>` is a sealed object.
 `certify_from_trace` yields `Certified<GroundingCertificate>` from a
@@ -203,19 +221,22 @@ yields a `Merkle root` from the `Coinbase transaction` txid and the
 yields a 76-byte `Template prefix` from `(version, prev_hash,
 merkle_root, timestamp, bits)`.
 
-`Nonce` is a free coordinate (W32 = `Z/(2^32)Z` value space).
-`NonceFiberTraversal` (§4.6) resolves `Nonce` by a deterministic W32
-traversal.
+`Nonce` is a free coordinate (W32 = `Z/(2^32)Z` value space). The
+`nonce_fiber_traversal` verb (§4.6) declares the resolution; foundation
+0.4.1's `Term::FirstAdmit` evaluator (ADR-034 Mechanism 2) iterates
+W32 ascending and short-circuits on the first admitting `Nonce`.
 
-`Block digest` is a derived object. `Sha256dProjection` (§4.2) yields
-a `Block digest` from a `Template prefix` and a `Nonce`.
+`Block digest` is a derived object. `Sha256dHasher` (§3.3) yields a
+`Block digest` from a `Template prefix` and a `Nonce` via the
+canonical hash axis (ADR-030).
 
 `Mining inference` is a process. `Mining inference` consists of
-`HeaderSerialization`, `Sha256dProjection`, and the lexicographic
-target-admission rule. `Mining inference` is realised by one
-`NonceFiberTraversal` (prism-btc's runtime) followed by one
-`BitcoinMiningModel::forward` invocation (foundation's
-`pipeline::run_route`) per (`Template prefix`, `Extranonce`) pair.
+`HeaderSerialization`, the `Sha256dHasher` axis dispatch, and the
+lexicographic target-admission rule (the verb's `Le` predicate).
+`Mining inference` is realised by one `BitcoinMiningModel::forward`
+invocation (foundation's `pipeline::run_route` →
+`pipeline::evaluate_term_tree`) per (`Template prefix`,
+`Extranonce`) pair.
 
 `Mining session` is a process. `Mining session` consists of: an
 outer loop over `Block template`s and `Extranonce`s; one or more
@@ -262,7 +283,7 @@ foundation `PrimitiveOp` composition (closed under ADR-013):
 | `HeaderSerialization` | (version, prev_hash, merkle_root, timestamp, bits, nonce) | 80-byte serialised header | §4.3 |
 | `CoinbaseConstruction` | (height, extranonce, payout_address, coinbase_value, witness_commitment) | `Coinbase transaction` | §4.4 |
 | `MerkleRootDerivation` | coinbase txid, other-tx txids | `Merkle root` | §4.5 |
-| `NonceFiberTraversal` | template prefix, target | (winning nonce, winning digest) ∨ no-match | §4.6 |
+| `nonce_fiber_traversal` (verb) | `MiningTask` (prefix ⊕ target) | `MiningResult` (FirstAdmit coproduct) | §4.6 |
 
 ### 2.5 Object-process relationships (OPL)
 
@@ -276,19 +297,16 @@ Mining session invokes CoinbaseConstruction.
 Mining session invokes MerkleRootDerivation.
 Mining session invokes HeaderSerialization.
 Mining session invokes submitblock.
-Mining inference is PipelineRun.
-Mining inference invokes Grounding.
-Mining inference invokes NonceFiberTraversal.
-NonceFiberTraversal invokes HeaderSerialization (per fiber visit).
-NonceFiberTraversal invokes Sha256dProjection (per fiber visit).
-NonceFiberTraversal yields (Nonce, Block digest) ∨ no-match.
-Sha256dProjection invokes Sha256Compression (twice).
-CertificateEmission invokes Hasher (= Sha256dHasher).
-CertificateEmission yields ContentFingerprint.
-PipelineRun yields Grounded<T> and Trace simultaneously.
+Mining inference is one BitcoinMiningModel::forward call.
+forward dispatches to pipeline::run_route → pipeline::evaluate_term_tree.
+evaluate_term_tree evaluates the nonce_fiber_traversal verb's term arena.
+Term::FirstAdmit drives the W32 search (ascending, short-circuit on admit).
+Per fiber visit, the predicate evaluates Concat → AxisInvocation(Sha256dHasher) → Le.
+forward yields Grounded<MiningResult, MiningTag> carrying the FirstAdmit coproduct.
+CertificateEmission invokes Hasher (= Sha256dHasher) once for ContentFingerprint.
+PipelineRun yields Grounded<MiningResult> and Trace simultaneously.
 TraceReplay yields Certified<GroundingCertificate> from Trace and hasher_instance.
-TraceReplay does not invoke Sha256dProjection.
-TraceReplay does not invoke NonceFiberTraversal.
+TraceReplay does not invoke the nonce_fiber_traversal arena.
 TraceReplay does not invoke Hasher.
 ```
 
@@ -319,16 +337,17 @@ constants (ADR-018: every capacity bound flows through `HostBounds`):
 |---|---|---|
 | `FINGERPRINT_MIN_BYTES` | `32` | matches SHA-256 output width; below this is insufficient for a 256-bit collision-resistant content fingerprint |
 | `FINGERPRINT_MAX_BYTES` | `32` | fixed: prism-btc declares one Hasher (§3.3) at exactly 32 bytes |
-| `TRACE_MAX_EVENTS` | `64` | bounds the per-`pipeline::run` trace at a small constant — the pipeline emits one event per stage transition (§6.4), not one per fiber visit. Headroom is for future stage subdivisions in the foundation. |
+| `TRACE_MAX_EVENTS` | `64` | bounds the per-`forward()` trace at a small constant — the pipeline emits one event per stage transition (§6.4), not one per fiber visit. Headroom is for future stage subdivisions in the foundation. |
 | `WITT_LEVEL_MAX_BITS` | `32` | the W32 nonce ring is the largest algebraic level the prism-btc principal data path computes against. |
 
 `TRACE_MAX_EVENTS = 64` is a binding architectural commitment. It
 forbids any implementation strategy that records every fiber visit.
-The traversal of 2^32 fiber points is a *single* `PipelineRunEvent`
-that carries (winning fiber index, count of fiber visits, terminal
-digest) as scalar fields — not a sequence of per-visit events.
-Replayability (TC-05) is preserved because the event's structural
-validation depends on the scalar fields, not on enumerating visits.
+The catamorphism's evaluation of `Term::FirstAdmit` over 2^32 fiber
+points is a *single* pipeline-run event that carries (winning fiber
+index, count of fiber visits, terminal digest) as scalar fields —
+not a sequence of per-visit events. Replayability (TC-05) is
+preserved because the event's structural validation depends on the
+scalar fields, not on enumerating visits.
 
 ### 3.3 `Hasher = prism_btc::Sha256dHasher`
 
@@ -344,21 +363,23 @@ composition (§4.1). Concrete properties (ADR-010):
 - Idempotent under truncation: trivially, since `OUTPUT_BYTES =
   FINGERPRINT_MAX_BYTES`.
 
-`Sha256dHasher` is bound to **two distinct foundation roles**, and the
-architecture treats them as separate concerns (resolving an earlier
-draft's conflation):
+Under ADR-030 (the `AxisExtension` / `AxisTuple` substitution-axis
+generalisation), `Sha256dHasher` plays a single role: it is the
+canonical hash axis (`axis_index = 0, kernel_id = 0`) bound at the
+`BitcoinMiningModel` declaration site via foundation's blanket
+`impl<H: Hasher> AxisTuple for H`. Foundation's catamorphism dispatches
+to it in two places:
 
-- **As the `Hasher` substitution axis**, invoked exactly once per
-  `pipeline::run` at certificate-emission time (Runtime View Scenario 1
-  step 9) to compute the `ContentFingerprint` over the CompileUnit's
-  canonical byte layout.
-- **As the σ-projection inside the pipeline's `PipelineRun` stage**,
-  invoked on each fiber point during the W32 traversal as part of
-  `Sha256dProjection` (§4.2).
+- **`Term::AxisInvocation { axis: 0, kernel: 0, .. }`** — the verb
+  body's `hash(concat(input.prefix, nonce))` lowering. The
+  `Term::FirstAdmit` evaluator invokes the axis on every fiber visit.
+- **CompileUnit fingerprinting** — `pipeline::run` folds the
+  CompileUnit's canonical byte layout through the hasher to derive
+  `ContentFingerprint` and `unit_address` once per `forward()` call.
 
-These are the same algorithm, two roles. The trace records the
-σ-projection invocations as part of the `PipelineRunEvent`; the Hasher
-is identified but not invoked at replay (TC-05).
+These are the same algorithm. The trace records the per-visit axis
+invocations as part of the pipeline-run event; the hasher is
+identified but not invoked at replay (TC-05).
 
 ---
 
@@ -450,101 +471,114 @@ Pairwise SHA-256d up the transaction tree. Declared as:
 
 Closure: `Sha256dProjection` (§4.2). No new primitives.
 
-### 4.6 `NonceFiberTraversal` (prism-btc runtime)
+### 4.6 `nonce_fiber_traversal` (verb declaration)
 
 The W32 nonce fiber traversal — the structural inference's
-load-bearing operation. **prism-btc is the prism implementor for the
-Bitcoin use case; the traversal is therefore prism-btc's runtime, not
-a foundation-supplied primitive.** Foundation provides the substrate
-(sealed types, `Hasher` and `HostBounds` traits, `Term` and
-`PrismitiveOp` vocabulary, mint primitives, trace structure); prism-btc
-provides the runtime that traverses the typed structure declared via
-that substrate.
+load-bearing operation. As of foundation 0.4.1 (`Term::FirstAdmit`,
+ADR-034 Mechanism 2), the W32 search is a **substrate-evaluated
+catamorphism step**, not an implementor-side runtime. prism-btc owns
+only the verb declaration; foundation owns the search runtime.
 
-Structural declaration (compile-time):
+Structural declaration (the verb body, in
+[`crates/prism-btc/src/verbs.rs`](crates/prism-btc/src/verbs.rs)):
 
-- **Index domain**: the W32 ring. Declared at the type level via
-  `WittLevel::W32` and the `Term::Application { operator: PrimitiveOp::Succ, .. }`
-  successor composition.
-- **Per-index map**: `Sha256dProjection ∘ HeaderSerialization`,
-  declared at the type level as a `Term::Application` chain over
-  prism-btc's chosen `PrimitiveOp` decomposition. The runtime that
-  evaluates the composition is `prism_btc::ops::sigma::sha256d`
-  (pure-Rust SHA-256d, no external crate).
-- **Halt predicate**: lexicographic byte comparison `digest ≤ target`
-  in display order — the Bitcoin protocol's target-satisfaction rule
-  (§4.8), evaluated at runtime by prism-btc's traversal as a
-  `PrimitiveOp::Sub`-driven byte comparison closed under ADR-013.
+```rust
+verb! {
+    pub fn nonce_fiber_traversal(input: MiningTask) -> MiningResult {
+        first_admit(uor_foundation::pipeline::witt_domain::W32, |nonce| {
+            hash(concat(input.prefix, nonce)) <= input.target
+        })
+    }
+}
+```
 
-Runtime evaluation (prism-btc's job):
+The `verb!` SDK macro lowers the closure body to a `&'static [Term]`
+arena (ADR-024 implementation closure):
 
-- The traversal visits W32 indices in canonical successor order
-  starting at 0. prism-btc's runtime walks the fiber, applying the
-  σ-projection at each point and testing admission. On first admit,
-  the traversal terminates and prism-btc invokes foundation's
-  `pipeline::run` (or `pipeline::run_const`) to mint a
-  `Grounded<ConstrainedTypeInput, MiningTag>` certifying the shape.
-- On exhaustion, prism-btc returns `MiningFailure::NoMatch`; the
-  bitcoind boundary (`prism-btc-node`) increments the extranonce and
-  re-invokes `prism_btc::mine` with a new `TemplatePrefixDatum`.
-- Determinism: same template + same extranonce + same `Sha256dHasher`
-  → same terminal index. No randomness.
+- **Index domain**: `witt_domain::W32` whose
+  `<W32 as ConstrainedTypeShape>::CYCLE_SIZE = 2^32` is read by the
+  SDK and embedded in `Term::FirstAdmit { domain_size_index, .. }`
+  (ADR-032).
+- **Predicate**: `Term::Application(Le, [Term::AxisInvocation{axis:0,
+  kernel:0, args}, Term::ProjectField(input, "target")])`, where
+  `args` is `Term::Application(Concat, [ProjectField(input, "prefix"),
+  Variable(FIRST_ADMIT_IDX_NAME_INDEX)])`. ADR-026 G19 (`hash` →
+  canonical hash axis), ADR-013/TR-08 (`Le` and `Concat` primitives),
+  ADR-033 G20 (`input.prefix` / `input.target` field access).
+- **Candidate threading**: `FIRST_ADMIT_IDX_NAME_INDEX` is the SDK
+  placeholder name foundation 0.4.1's `Term::FirstAdmit` evaluator
+  binds to the current `idx` per fiber visit.
 
-Parallelism: prism-btc's runtime MAY partition the W32 ring across
-threads (the natural coset partition over `Z/(2^32)Z`); first-finder
-wins. This is a runtime implementation detail and does not change
-the categorical structure.
+Runtime evaluation (foundation's job, ADR-034 Mechanism 2):
 
-**This is the operation that replaces the rayon for-loop currently
-in `prism-btc-reduction/src/parallel.rs`.** The replacement is not a
-foundation primitive — foundation never claimed to ship one — but a
-prism-btc runtime that respects the foundation-typed structural
-declaration (Term composition + ConstrainedTypeShape constraints).
-The categorical routing claim holds at the type level: the shapes
-and Term compositions declare the structure; the prism-btc runtime
-walks it.
+- `pipeline::evaluate_term_tree::<Sha256dHasher>(arena, &task)` is
+  invoked once per `BitcoinMiningModel::forward(task)` call.
+- Encountering `Term::FirstAdmit { domain_size_index, predicate_index }`,
+  the catamorphism iterates `idx` ascending from 0 to `CYCLE_SIZE - 1`,
+  evaluates the predicate sub-tree per visit (binding `idx` via
+  `FIRST_ADMIT_IDX_NAME_INDEX`), and short-circuits on the first
+  non-zero predicate result.
+- The catamorphism returns a 6-byte coproduct payload `(disc,
+  idx_bytes)` for W32 (`disc = 0x01` admitted / `0x00` exhausted; 5
+  big-endian bytes of `idx`, of which only the low 4 are non-zero).
+  This is the `MiningResult` shape (§4.7).
+- Determinism: same template + same `Sha256dHasher` → same admitted
+  `idx`. No implementor-side strategy, no randomness, no
+  parallelism — the wiki's intended ascending-with-short-circuit
+  semantics, end-to-end through the catamorphism.
 
-### 4.7 `MiningInput` (`ConstrainedTypeShape`)
+The legacy `prism_btc::ops::traversal` runtime — the rayon coset
+partition that closed the search-resolution gap before foundation
+shipped `Term::FirstAdmit` — has been retired. There is no
+implementor-side W32 loop, no `Cancel`/`NeverCancel` cancellation
+plumbing, no `mine_parallel` API. The verb declaration is the only
+thing prism-btc ships for the search; foundation evaluates it.
 
-The PrismModel's input shape: the 80-byte canonical wire-format Bitcoin
-block header (76-byte prefix + 4-byte nonce, the bytes the W32 fiber
-admitted).
-- `IRI`: `https://prism.btc/shape/MiningInput`
-- `SITE_COUNT`: 80
-- `CONSTRAINTS`: empty list. The 76 prefix bytes are upstream-validated
-  by `getblocktemplate` (ADR-004 — outside Prism's scope); the 4 nonce
-  bytes are the W32 fiber coordinate, structurally a free site until
-  the traversal admits.
+### 4.7 `MiningTask` (input shape) and `MiningResult` (output shape)
 
-`MiningInput` impls `IntoBindingValue` (`MAX_BYTES = 80`) so foundation's
-`pipeline::run_route` can fold its bytes through `Sha256dHasher` to
-derive the input-binding's `content_address`. The 76/4 split is a wire-
-layout convention preserved at the byte level inside the 80-byte payload
-(positions [0..76) are the template prefix, [76..80) are the nonce).
+The PrismModel's **input** is `MiningTask` — a 108-byte
+partition_product of `TemplatePrefixShape` (76 bytes) and
+`TargetShape` (32 bytes) per ADR-026 G17, with field access via
+ADR-033 G20:
+- `IRI`: `https://prism.btc/shape/MiningTask`
+- `SITE_COUNT`: 108
+- `PartitionProductFields::FIELDS`: `[(0, 76), (76, 32)]`
+- `PartitionProductFields::FIELD_NAMES`: `["prefix", "target"]`
+- `CYCLE_SIZE`: `u64::MAX` (saturating; 108 bytes ≫ 2^64)
 
-### 4.8 Target admission as `NonceFiberTraversal` halt predicate
+The PrismModel's **output** is `MiningResult` — the 6-byte coproduct
+foundation's `Term::FirstAdmit` evaluator returns for a W32 domain
+(ADR-034 Mechanism 2):
+- Byte 0: discriminant (`0x01` admitted, `0x00` exhausted).
+- Bytes 1..6: admitting nonce padded to 5 BE bytes (the high byte is
+  always 0 for W32; bytes 2..6 carry the canonical 4-byte u32 nonce).
+
+### 4.8 Target admission as `Term::FirstAdmit`'s admission rule
 
 The Bitcoin protocol's target-satisfaction rule — "the 32-byte digest
 in display order is lexicographically ≤ the 32-byte target value
-decoded from compact nBits" — is the halt predicate of
-[`crate::ops::traversal::traverse_sequential`]. The 4-byte compact
-nBits is decoded by [`crate::domain::Target::to_bytes`]; the
-comparison is byte-wise lexicographic. There is no separate
-`ConstrainedTypeShape` for the admission rule because foundation 0.4.1
-seals `GroundedShape` to `ConstrainedTypeInput`: any output bundle the
-prism implementor declares can carry an IRI and constraints but cannot
-appear as the `T` parameter of `Grounded<T>`. The architecture pins the
-admission rule in `NonceFiberTraversal`'s halt predicate (which is a
-`PrimitiveOp::Sub`-driven byte comparison closed under ADR-013); the
-runtime check is what enforces the Bitcoin protocol's target rule.
+decoded from compact nBits" — is encoded directly in the
+`nonce_fiber_traversal` verb's predicate body:
+
+```text
+hash(concat(input.prefix, nonce)) <= input.target
+```
+
+This lowers to `Term::Application(Le, [Term::AxisInvocation{0,0,_},
+Term::Variable{...}])` — a structural term tree foundation's
+catamorphism evaluates per fiber visit. `Term::FirstAdmit` short-
+circuits on the first non-zero predicate result (ADR-034 Mechanism 2),
+returning the admitting nonce. There is no implementor-side admission
+check; the Bitcoin protocol's target rule IS the verb's predicate
+body, and foundation evaluates it.
 
 ---
 
 ## 5. The mining inference task
 
-One mining inference is the composition of (a) one `NonceFiberTraversal`
-invocation by prism-btc's runtime and (b) one `BitcoinMiningModel::forward`
-invocation that delegates to foundation's `pipeline::run_route`. The
+One mining inference is one `BitcoinMiningModel::forward` call.
+Foundation 0.4.1's catamorphism evaluates the verb's term arena
+end-to-end through `Term::FirstAdmit` (ADR-034 Mechanism 2). The
 structural picture is:
 
 ```
@@ -554,28 +588,30 @@ Inputs (host-side):
   Target           ←  4-byte compact nBits, decoded to 32-byte target
   Extranonce       ←  u64, rolled by the bitcoind boundary (§6.5)
 
-W32 fiber traversal (prism-btc runtime, §4.6):
-  for nonce in 0..2^32:
-      digest = sha256d_display(serialize_header(prefix, nonce))
-      if digest ≤ target_bytes: halt with (nonce, digest)
-  outcome: FiberOutcome::Admitted | FiberOutcome::Exhausted
-
 PrismModel forward call (foundation 0.4.1 typed-iso surface):
-  input  = MiningInput(serialize_header(prefix, winning_nonce))  [80 bytes]
-  route  = [Term::Variable {0}, Term::AxisInvocation {0,0,0}]      // hash(input)
-  output = BitcoinMiningModel::forward(input)
-            └─ run_route folds 80 bytes through Sha256dHasher
+  task   = MiningTask::new(prefix, target_bytes)         [108 bytes]
+  route  = nonce_fiber_traversal(input)
+            └─ verb body lowers to:
+               first_admit(witt_domain::W32, |nonce|
+                   le(axis_invocation_canonical_hash(
+                       concat(project_field(input, "prefix"), nonce)),
+                      project_field(input, "target")))
+  output = BitcoinMiningModel::forward(task)
+            └─ run_route folds 108 bytes through Sha256dHasher
                (the binding's content_address, ADR-023)
             └─ evaluate_term_tree runs the route's term tree
-               (ADR-029): Variable {0} carries all 80 bytes through
-               TermValue (TERM_VALUE_MAX_BYTES = 4096); AxisInvocation
-               folds those 80 bytes through Sha256dHasher and emits the
-               32-byte digest as a TermValue
+               (ADR-029): Term::FirstAdmit (ADR-034 M2) iterates
+               nonce ascending from 0 to W32::CYCLE_SIZE = 2^32,
+               threads the candidate via FIRST_ADMIT_IDX_NAME_INDEX
+               through the predicate (concat → axis hash → Le
+               comparison), and short-circuits on the first non-zero
+               predicate result
             └─ run folds CompileUnit metadata through Sha256dHasher
                (the Grounded's content_fingerprint and unit_address)
-            └─ run_route attaches the evaluator's TermValue to
-               the Grounded as `output_bytes` (ADR-028)
-  result = Grounded<ConstrainedTypeInput, MiningTag>:
+            └─ run_route attaches the (disc, idx_bytes) coproduct
+               (6 bytes for W32) to the Grounded as `output_bytes`
+               (ADR-028)
+  result = Grounded<MiningResult, MiningTag>:
             content_fingerprint  = digest of CompileUnit metadata
                                    (witt level, output IRI, output
                                    site count, output constraints,
@@ -584,18 +620,18 @@ PrismModel forward call (foundation 0.4.1 typed-iso surface):
             triad                = stratum/spectrum/address of the
                                    unit_address (foundation Triad)
             witt_level_bits      = 32
-            output_bytes         = Sha256dHasher over all 80 header
-                                   bytes — the Bitcoin block hash in
-                                   internal byte order
+            output_bytes         = Term::FirstAdmit's 6-byte coproduct
+                                   payload (1-byte disc + 5 BE idx
+                                   bytes); the admitting u32 nonce is
+                                   bytes[2..6]
 
 prism-btc emits, via the public `mine()` entry point:
   MiningOutcome {
-    witness:  Grounded<ConstrainedTypeInput, MiningTag>,
-                              // witness.output_bytes() reversed is the
-                              //   block hash in display order
-    nonce:    u32,
-    digest:   [u8; 32],       // same SHA-256d in display order; a
-                              //   call-site convenience
+    witness:  Grounded<MiningResult, MiningTag>,
+                              // FirstAdmit coproduct on output_bytes()
+    nonce:    u32,            // u32::from_be_bytes(output_bytes[2..6])
+    digest:   [u8; 32],       // SHA-256d of (prefix || nonce_le) in
+                              //   display order; a call-site convenience
     coords:   TriadicCoords,  // (digest stratum, spectrum) — the
                               //   digest-domain projection
   }
@@ -626,11 +662,14 @@ are:
 3. Derive the merkle root via `MerkleRootDerivation` (§4.5).
 4. Form the 76-byte template prefix via `HeaderSerialization` (§4.3),
    nonce field zero-filled.
-5. Invoke `pipeline::run` once with that prefix and the current
-   extranonce.
+5. Invoke `prism_btc::mine(header, target)` once with that prefix and
+   the current extranonce. `mine` builds a `MiningTask` and calls
+   `BitcoinMiningModel::forward`; foundation's catamorphism evaluates
+   the verb's `Term::FirstAdmit` end-to-end (no implementor-side
+   parallelism, no cancellation surface).
 6. On success: assemble the wire-format block and submit via
    `submitblock`.
-7. On `PipelineFailure::NoMatch`: increment the extranonce and goto 2.
+7. On `MiningFailure::NoMatch`: increment the extranonce and goto 2.
 8. Between iterations: poll `getbestblockhash`; if the chain has
    advanced, abandon the current template and goto 1.
 
@@ -639,43 +678,54 @@ are:
 Per mining-inference task, the framework's Scenario 1 sequence applies,
 instantiated for prism-btc as:
 
-1. Application (boundary, `prism-btc-node`) has the 76-byte prefix bytes
-   and the 4-byte compact nBits target.
-2. Application calls `prism_btc::mine(header, target, cancel)`. prism-btc's
-   runtime walks the W32 fiber via `NonceFiberTraversal` (§4.6),
-   evaluating `sha256d_display(serialize_header(prefix, nonce))` per
-   visit and halting at the first nonce where the digest ≤ target.
-3. On admission, prism-btc serialises the full 80-byte header
-   (`serialize_header`) and wraps it in `MiningInput`.
-4. prism-btc invokes `BitcoinMiningModel::forward(MiningInput(...))`,
-   whose body (emitted by `prism_model!`) is exactly
-   `pipeline::run_route::<DefaultHostTypes, PrismBtcBounds, Sha256dHasher, Self>(input)`.
-5. `run_route` folds the 80 input bytes through `Sha256dHasher` to
-   derive the input-binding's `content_address` (8 high-order bytes of
-   SHA-256d of the header), assembles a `Validated<CompileUnit, FinalPhase>`
-   with `result_type = ConstrainedTypeInput`, `root_term = &[]`
-   (identity route), `witt_level_ceiling = W32` (from
-   `PrismBtcBounds::WITT_LEVEL_MAX_BITS`), and dispatches to `run`.
-6. `run` runs the reduction-stages preflights, then folds the canonical
-   CompileUnit byte layout through `Sha256dHasher` to compute
-   `ContentFingerprint` and `unit_address`. It mints
-   `Grounded<ConstrainedTypeInput>` carrying both.
-7. prism-btc tags the Grounded with `MiningTag` and packs it into
-   `MiningOutcome` together with the admitting nonce and the 32-byte
-   block-hash digest from §6.2 step 2.
+1. Application (boundary, `prism-btc-node`) has the 76-byte prefix
+   bytes and the 4-byte compact nBits target.
+2. Application calls `prism_btc::mine(header, target)`. `mine` decodes
+   the target to 32 bytes and builds the 108-byte
+   `MiningTask = MiningTask::new(prefix, target_bytes)` (ADR-026 G17
+   partition product of `TemplatePrefixShape` ⊕ `TargetShape`).
+3. `mine` invokes `BitcoinMiningModel::forward(task)`, whose body
+   (emitted by `prism_model!`) is exactly
+   `pipeline::run_route::<DefaultHostTypes, PrismBtcBounds, Sha256dHasher, Self>(task)`.
+4. `run_route` folds the 108 input bytes through `Sha256dHasher` to
+   derive the input-binding's `content_address`, assembles a
+   `Validated<CompileUnit, FinalPhase>` with
+   `result_type = MiningResult`, `root_term =
+   nonce_fiber_traversal_term_arena()` (the verb's term fragment),
+   `witt_level_ceiling = W32` (from
+   `PrismBtcBounds::WITT_LEVEL_MAX_BITS`), and dispatches to
+   `evaluate_term_tree`.
+5. `evaluate_term_tree` walks the verb arena. The
+   `Term::FirstAdmit { domain_size_index, predicate_index }` node
+   (ADR-034 Mechanism 2) iterates `idx` ascending from 0 to
+   `W32::CYCLE_SIZE - 1`, threads each candidate through the
+   predicate sub-tree via `FIRST_ADMIT_IDX_NAME_INDEX`, evaluates
+   `Le(AxisInvocation{0,0,Concat(prefix, idx)}, target)` per visit
+   via `Sha256dHasher`'s axis dispatch, and short-circuits on the
+   first non-zero result.
+6. `run` mints `Grounded<MiningResult>` whose `output_bytes` carry
+   the 6-byte `(disc, idx_bytes)` coproduct (ADR-028).
+7. `mine` parses the coproduct: byte 0 is the discriminant
+   (`0x01` admitted, `0x00` exhausted); bytes 2..6 reconstruct the
+   admitting `u32` nonce. It serialises the 80-byte header
+   (`prefix‖nonce_le`), computes the block-hash digest in display
+   order via `sha256d_display`, tags the Grounded with `MiningTag`,
+   and returns a `MiningOutcome`.
 8. Application (boundary) receives `MiningOutcome`; it assembles the
    wire-format Block and submits via `submitblock`.
 
 ### 6.3 Path singularity (TC-03)
 
-There is exactly one path to a `Grounded<ConstrainedTypeInput, MiningTag>`
-in prism-btc: through `BitcoinMiningModel::forward` (which delegates to
-`pipeline::run_route`). There is no alternative constructor; `Grounded`
-is sealed in foundation, and `MiningTag` is a phantom over it.
+There is exactly one path to a `Grounded<MiningResult, MiningTag>`
+in prism-btc: through `BitcoinMiningModel::forward` (which delegates
+to `pipeline::run_route`). There is no alternative constructor;
+`Grounded` is sealed in foundation, and `MiningTag` is a phantom
+over it.
 
 A mining session may invoke `mine()` multiple times (once per
-(template, extranonce) pair), but each invocation traverses the singular
-path. TC-03 prohibits second-pathways, not multiple traversals.
+(template, extranonce) pair), but each invocation traverses the
+singular path. TC-03 prohibits second-pathways, not multiple
+traversals.
 
 ### 6.4 Trace structure for one inference
 
@@ -698,66 +748,69 @@ not 2^32.
 ### 6.5 Extranonce rolling, tip changes, and TC-03
 
 Extranonce rolling and tip-change handling live in `prism-btc-node`
-(§6.1, the outer loop). They are **not** inside `pipeline::run`; they
-are the boundary's responsibility. Per invocation of `pipeline::run`:
+(§6.1, the outer loop). They are **not** inside the catamorphism;
+they are the boundary's responsibility. Per invocation of `mine`:
 
-- The (template, extranonce) pair is fully determined before the call.
-- The pipeline traverses W32 deterministically.
-- On admission (Grounded), the boundary submits.
-- On exhaustion (`PipelineFailure::NoMatch`), the boundary increments
-  extranonce and re-invokes `pipeline::run` with a new
-  `TemplatePrefixDatum` (re-derived merkle root).
-- On tip change between invocations, the boundary discards the in-flight
-  state and starts fresh from §6.1 step 1.
+- The (template, extranonce) pair is fully determined before the
+  call.
+- Foundation's `Term::FirstAdmit` evaluator iterates W32
+  deterministically, ascending from `idx = 0`.
+- On admission, `mine` returns `MiningOutcome` and the boundary
+  submits.
+- On exhaustion (`MiningFailure::NoMatch`), the boundary increments
+  extranonce, re-derives the merkle root and the 76-byte prefix, and
+  re-invokes `mine`.
+- On tip change between invocations, the boundary discards the
+  in-flight state and starts fresh from §6.1 step 1.
 
-The pipeline itself has no abort mechanism. A `pipeline::run` in
-flight runs to completion; if its result is for a stale parent, the
+The pipeline itself has no abort mechanism. A `forward()` in flight
+runs to completion; if its result is for a stale parent, the
 boundary discards the result without submitting. The catamorphism's
-evaluation cost on the `nonce_fiber_traversal` verb is parametric in
-the substitution-axis triple (`Sha256dHasher`, `PrismBtcBounds`) and
-the implementation runtime's parallelism per ADR-026 G16. With
-`Sha256dHasher`'s pure-Rust SHA-256d body and an 8-coset partition,
-one full evaluation over `Z/(2^32)Z` completes on the order of
-seconds-to-minutes per the runtime's hardware realisation; tip
-churn on production chains is sized in the tens of minutes, so the
-discard rate is bounded by the substitution-axis selection's
-throughput, not by anything intrinsic to prism-btc.
+evaluation cost on the `nonce_fiber_traversal` verb is parametric
+in the substitution-axis triple (`Sha256dHasher`, `PrismBtcBounds`).
+With `Sha256dHasher`'s pure-Rust SHA-256d body, one full ascending
+evaluation over `Z/(2^32)Z` is sequential — there is no
+implementor-side parallelism in the search runtime. Per-call
+performance is therefore a property of the foundation evaluator and
+the hasher impl bound at the model declaration site, not of
+prism-btc itself.
 
 ### 6.6 Replay (Runtime View Scenario 2)
 
 A user receives `(Trace, Sha256dHasher_identifier)` out-of-band. The
-user invokes `prism-verify::certify_from_trace(trace, hasher_instance)`.
+user invokes
+`uor_foundation::enforcement::replay::certify_from_trace(trace, hasher_instance)`.
 Per Scenario 2:
 
 1. The verifier decodes the trace bytes against
    `TRACE_REPLAY_FORMAT_VERSION`.
 2. Confirms `hasher_identifier` matches the supplied hasher's
    identifier.
-3. Walks the five `TraceEvent`s structurally, validating that each
+3. Walks the `TraceEvent` stream structurally, validating that each
    event's variant is well-typed against its successor (e.g., a
    `DatumAdmissionEvent` must be followed by a
    `CompileUnitConstructionEvent` carrying the same Datum address;
-   `PipelineRunEvent.derivation_root` must match the
+   the pipeline-run event's derivation root must match the
    `CompileUnitConstructionEvent.root_term`; etc.).
-4. Confirms the `PipelineRunEvent`'s scalar nonce matches the digest
-   that, under the trace's recorded structural relationships, the
-   admitting fiber point produced.
+4. Confirms the recorded admission record matches the digest that,
+   under the trace's recorded structural relationships, the admitting
+   fiber point produced.
 5. **Does not invoke any hasher's hashing method** (TC-05); the
    hasher is provided so its identity can be confirmed.
 6. **Does not invoke any decider written by prism-btc** (TC-05);
-   `Sha256dProjection`, `NonceFiberTraversal`, and the §4.8
-   target-admission rule are not run.
+   the `nonce_fiber_traversal` verb's term arena and the §4.8
+   target-admission rule are not re-evaluated.
 7. On success, mints `Certified<GroundingCertificate>`. On failure,
    emits a structured `ReplayError`.
 
 The `Certified` output is a *structural* attestation: the trace is
 internally consistent; its claimed nonce is a coherent record of a
-valid pipeline traversal. It is **not** a re-derivation of the digest
-or a re-check of the proof-of-work — that re-derivation is the
-domain of Bitcoin Core's own validator (which any node receiving the
-block performs independently). prism-btc's certification and
-Bitcoin's are two distinct claims; they happen to commit to the same
-nonce by construction.
+valid pipeline run. It is **not** a re-derivation of the digest or a
+re-check of the proof-of-work — that re-derivation is the domain of
+Bitcoin Core's own validator (which any node receiving the block
+performs independently). prism-btc's certification and Bitcoin's are
+two distinct claims; they happen to commit to the same nonce by
+construction.
 
 ---
 
@@ -772,38 +825,24 @@ and these signatures is non-conforming.
 ```rust
 // src/lib.rs
 
-/// The application-author entry point. Walks the W32 fiber to find
-/// an admitting nonce, constructs `MiningInput` from the resulting
-/// 80-byte serialised header, calls `BitcoinMiningModel::forward`,
-/// returns the witness + admitting (nonce, digest).
-pub fn mine(
-    header: &BlockHeader,
-    target: Target,
-    cancel: &dyn Cancel,
-) -> Result<MiningOutcome, MiningFailure>;
-
-/// Parallel variant: partitions the W32 ring across `threads` workers.
-#[cfg(feature = "std")]
-pub fn mine_parallel(
-    header: &BlockHeader,
-    target: Target,
-    threads: usize,
-    cancel: &(dyn Cancel + Sync),
-) -> Result<MiningOutcome, MiningFailure>;
+/// The application-author entry point. Builds a `MiningTask` from
+/// header + target, calls `BitcoinMiningModel::forward` (which drives
+/// the W32 search end-to-end through foundation 0.4.1's catamorphism
+/// per ADR-034 Mechanism 2), and reconstructs the admitted block hash
+/// host-side via `sha256d_display`.
+pub fn mine(header: &BlockHeader, target: Target) -> Result<MiningOutcome, MiningFailure>;
 
 /// The grounded mining witness + admitting fiber data.
 pub struct MiningOutcome {
-    pub witness: MiningWitness, // alias for Grounded<ConstrainedTypeInput, MiningTag>
+    pub witness: MiningWitness, // alias for Grounded<MiningResult, MiningTag>
     pub nonce:   u32,
     pub digest:  [u8; 32],
     pub coords:  TriadicCoords,
 }
 
 /// Type alias for the certificate prism-btc returns.
-pub type MiningWitness = uor_foundation::enforcement::Grounded<
-    uor_foundation::enforcement::ConstrainedTypeInput,
-    MiningTag,
->;
+pub type MiningWitness =
+    uor_foundation::enforcement::Grounded<MiningResult, MiningTag>;
 
 /// Phantom tag distinguishing prism-btc's Grounded from other domains.
 pub struct MiningTag;
@@ -812,21 +851,31 @@ pub struct MiningTag;
 pub enum MiningFailure {
     /// All 2^32 fiber points exhausted; no nonce admits this prefix.
     NoMatch,
-    /// The boundary cancelled the in-flight traversal.
-    Cancelled,
+    /// Foundation rejected the input (shape violation, etc.).
+    PipelineFailure,
 }
 
-// ----- Foundation typed-iso surface (ADR-020 / 022 / 023) -----
+// ----- Foundation typed-iso surface (ADR-020 / 022 / 023 / 030 / 032 / 033 / 034) -----
 
-/// 80-byte canonical wire-format Bitcoin block header.
-/// `ConstrainedTypeShape` (76+4 W8 sites) + hand-rolled
-/// `IntoBindingValue` (MAX_BYTES = 80).
-pub struct MiningInput(pub [u8; 80]);
+/// 76-byte template prefix factor.
+pub struct TemplatePrefixShape;
+
+/// 32-byte target factor.
+pub struct TargetShape;
+
+/// `partition_product` of `TemplatePrefixShape` × `TargetShape` (108 bytes).
+/// Hand-rolls `PartitionProductFields` (ADR-033 G20) so the closure-body
+/// grammar's `input.prefix` / `input.target` form resolves at proc-macro time.
+pub struct MiningTask(pub [u8; 108]);
+
+/// 6-byte coproduct emitted by foundation's `Term::FirstAdmit` for a W32
+/// domain: `(disc, idx_bytes_padded_to_5)`.
+pub struct MiningResult; // declared via output_shape! (ADR-027)
 
 /// `PrismModel<DefaultHostTypes, PrismBtcBounds, Sha256dHasher>` —
 /// declared via `uor_foundation_sdk::prism_model!` (ADR-022).
-/// `Input = MiningInput`, `Output = ConstrainedTypeInput`,
-/// `Route = BitcoinMiningRoute` (identity term).
+/// `Input = MiningTask`, `Output = MiningResult`, `Route = BitcoinMiningRoute`.
+/// Route body: `nonce_fiber_traversal(input)` (ADR-024 verb call).
 pub struct BitcoinMiningModel;
 
 /// Foundation-closed route witness emitted by `prism_model!`.
@@ -835,9 +884,13 @@ pub struct BitcoinMiningRoute;
 
 There is no `Boundary` trait. There is no `BoundaryDecodeError`. There
 is no `MorphismKind` re-export. There is no `BlockCertificate<Sigma>`.
-There is no `MiningRound`. The domain layer's public verbs are `mine`,
-`mine_parallel`, `block_hash_grounded`, plus the foundation-typed-iso
-surface (`MiningInput`, `BitcoinMiningModel`, `BitcoinMiningRoute`).
+There is no `MiningRound`. There is no `mine_parallel`, `Cancel`,
+`NeverCancel`, `FiberOutcome`, or `traverse_*` runtime — the W32
+search runs through foundation's catamorphism. The domain layer's
+public verbs are `mine`, `block_hash_grounded`, plus the
+foundation-typed-iso surface (`MiningTask`, `MiningResult`,
+`BitcoinMiningModel`, `BitcoinMiningRoute`,
+`TemplatePrefixShape`, `TargetShape`).
 
 ### 7.2 `prism_btc::Sha256dHasher` (foundation `Hasher` impl)
 
@@ -875,91 +928,100 @@ impl uor_foundation::HostBounds for PrismBtcBounds {
 }
 ```
 
-### 7.4 `MiningInput` (the model's input shape)
+### 7.4 `MiningTask` and `MiningResult` (the model's input/output shapes)
 
 ```rust
 // src/model.rs
 
-pub struct MiningInput(pub [u8; 80]);
+pub struct TemplatePrefixShape; // 76 W8 sites
+pub struct TargetShape;         // 32 W8 sites
 
-impl uor_foundation::pipeline::ConstrainedTypeShape for MiningInput {
-    const IRI:         &'static str = "https://prism.btc/shape/MiningInput";
-    const SITE_COUNT:  usize        = 80;
+pub struct MiningTask(pub [u8; 108]);  // partition_product(TemplatePrefixShape, TargetShape)
+
+impl uor_foundation::pipeline::ConstrainedTypeShape for MiningTask {
+    const IRI:         &'static str = "https://prism.btc/shape/MiningTask";
+    const SITE_COUNT:  usize        = 108;
     const CONSTRAINTS: &'static [uor_foundation::pipeline::ConstraintRef] = &[];
+    const CYCLE_SIZE:  u64          = u64::MAX; // saturating
 }
 
-impl uor_foundation::pipeline::IntoBindingValue for MiningInput {
-    const MAX_BYTES: usize = 80;
+impl uor_foundation::pipeline::PartitionProductFields for MiningTask {
+    const FIELDS:      &'static [(u32, u32)]      = &[(0, 76), (76, 32)];
+    const FIELD_NAMES: &'static [&'static str]    = &["prefix", "target"];
+}
+
+impl uor_foundation::pipeline::IntoBindingValue for MiningTask {
+    const MAX_BYTES: usize = 108;
     fn into_binding_bytes(&self, out: &mut [u8])
         -> Result<usize, uor_foundation::enforcement::ShapeViolation>;
 }
+
+// Output: 6-byte coproduct from foundation's Term::FirstAdmit (W32).
+output_shape! {
+    pub struct MiningResult;
+    impl ConstrainedTypeShape for MiningResult {
+        const IRI: &'static str = "https://prism.btc/shape/MiningResult";
+        const SITE_COUNT: usize = 6;
+        const CONSTRAINTS: &'static [ConstraintRef] = &[];
+    }
+}
 ```
 
-The 76-byte prefix / 4-byte nonce decomposition is preserved at the
-byte-layout level inside the 80-byte payload (positions [0..76) are the
-template prefix, [76..80) are the nonce). Foundation 0.4.1 seals
-`GroundedShape` to `ConstrainedTypeInput`, so the architecture's
-conceptual `TemplatePrefixShape`/`TargetSubBundle` distinction does not
-appear as separate `ConstrainedTypeShape` types in code; the rule it
-expresses (target admission as halt predicate) is carried by
-`NonceFiberTraversal` per §4.8.
+ADR-033 G20 admits `input.prefix` and `input.target` in the verb's
+closure body via `PartitionProductFields::FIELDS`/`FIELD_NAMES`. The
+6-byte `MiningResult` is foundation's coproduct return value: byte 0
+discriminant + 5 BE bytes for the W32 idx (the 5th byte slot is
+present because `2^32` requires 5 BE bytes; only bytes 2..6 carry
+non-zero nonce values).
 
-### 7.5 `prism_btc_node::Session`
+### 7.5 `prism_btc_node::PrismMiner` (the bitcoind boundary)
 
 ```rust
-// crates/prism-btc-node/src/session.rs
+// crates/prism-btc-node/src/lib.rs
 
-pub struct Session {
-    rpc_url:        String,
-    auth:           bitcoincore_rpc::Auth,
+pub struct PrismMiner {
+    client:         bitcoincore_rpc::Client,
     payout_address: bitcoin::Address,
     network:        bitcoin::Network,
-    cfg:            SessionConfig,
 }
 
-pub struct SessionConfig {
-    pub tip_poll:       Duration,    // poll bestblockhash every N
-    pub progress_every: Duration,    // emit a hash-rate report every N
-}
-
-impl Session {
-    pub fn new(
+impl PrismMiner {
+    pub fn connect(
         rpc_url:        &str,
         auth:           bitcoincore_rpc::Auth,
         payout_address: &str,
         network:        bitcoin::Network,
-        cfg:            SessionConfig,
-    ) -> Result<Self, SessionInitError>;
+    ) -> anyhow::Result<Self>;
 
-    /// The session's outer loop (§6.1). Runs until a block is mined
-    /// and `submitblock` returns success, or until `cancel` is set.
-    /// Internally calls `prism_btc::mine` once per (template, extranonce);
-    /// the mining algorithm is `pipeline::run`, not anything in this crate.
-    pub fn mine_until_block(
-        &self,
-        cancel: Arc<AtomicBool>,
-    ) -> Result<MinedBlockReceipt, SessionError>;
+    /// Fetch a block template via `getblocktemplate`, build the
+    /// coinbase + merkle root, call `prism_btc::mine` (which runs
+    /// the W32 search through foundation 0.4.1's catamorphism),
+    /// assemble the wire-format Block, submit via `submitblock`.
+    pub fn mine_one_block(&self) -> anyhow::Result<MinedBlock>;
 }
 
-pub struct MinedBlockReceipt {
-    pub hash:      bitcoin::BlockHash,
-    pub height:    u64,
-    pub witness:   prism_btc::MiningWitness, // §7.1
-    pub trace:     prism::Trace,             // §6.4
-    pub tx_count:  usize,
+pub struct MinedBlock {
+    pub hash:     bitcoin::BlockHash,
+    pub height:   u64,
+    pub nonce:    u32,
+    pub witness:  prism_btc::MiningWitness, // §7.1
+    pub tx_count: usize,
 }
 ```
 
+There is no `MiningSession` / `SessionConfig` / tip-watcher /
+parallel-orchestrator. Foundation's catamorphism drives the search;
+the boundary's responsibilities are template construction, block
+assembly, and submission.
+
 ### 7.6 `prism_btc_node::bin::prism_mine` (CLI)
 
-The CLI binary's surface is unchanged from the current state's
-intent: `--rpc-url`, `--rpc-user`, `--rpc-pass`, `--network`,
-`--payout`, `--blocks`, `--threads`, `--i-know-what-im-doing`. The
-`--session` flag becomes redundant (the session is the only mode
-under the reconciled architecture) and is removed. `--threads`
-becomes a hint to foundation's `NonceFiberTraversal` parallelism
-budget but is not load-bearing — the traversal is foundation-typed,
-not user-orchestrated.
+`--rpc-url`, `--rpc-user`, `--rpc-pass`, `--network`, `--payout`,
+`--blocks`, `--i-know-what-im-doing`. Each invocation calls
+`PrismMiner::mine_one_block` for `--blocks` iterations. There is no
+`--session`, `--threads`, or tip-watch flag — the search runs through
+the typed-iso surface; orchestration is whatever bitcoind reports for
+the current template.
 
 ### 7.7 `prism_btc_wasm::mine_block`
 
@@ -1100,18 +1162,24 @@ strict.
 
 - `prism-btc-node` calls `bitcoind::getblocktemplate` (the only
   cross-boundary call).
-- `prism-btc::mine` constructs the per-invocation CompileUnit
-  (template-dependent), validates it (which is mostly a no-op since
-  the structure is monomorphised; only template-specific sites need
-  runtime validation), invokes `pipeline::run`.
-- The pipeline executes `NonceFiberTraversal`'s deterministic
-  traversal of the W32 ring. The runtime work is the σ-projection
-  evaluation per fiber visit and the admission check per visit.
-- `pipeline::run` returns `(Grounded<...>, Trace)`.
-- `prism-btc-node` assembles the wire-format Block and submits.
-- A user runs `prism-verify::certify_from_trace` on the trace; this
-  runs structurally against the trace's events without invoking any
-  decider or hasher (TC-05).
+- `prism-btc::mine` builds the 108-byte `MiningTask` from the
+  template prefix + decoded target and invokes
+  `BitcoinMiningModel::forward(task)`. This is the typed-iso surface
+  call (ADR-020); foundation 0.4.1's `pipeline::evaluate_term_tree`
+  catamorphism evaluates the verb's term arena.
+- Encountering the `Term::FirstAdmit` node (ADR-034 Mechanism 2), the
+  catamorphism iterates `idx` ascending through `witt_domain::W32`
+  (`CYCLE_SIZE = 2^32`), threads each candidate through the predicate
+  via `FIRST_ADMIT_IDX_NAME_INDEX`, and short-circuits on the first
+  non-zero `hash(concat(prefix, idx)) <= target` result.
+- `forward` returns `Grounded<MiningResult, MiningTag>` whose
+  `output_bytes()` carries the 6-byte `(disc, idx_bytes)` coproduct.
+  `prism-btc::mine` parses the admitting `u32` nonce from those
+  bytes and assembles the wire-format Block.
+- `prism-btc-node` submits via `submitblock`.
+- A user runs `enforcement::replay::certify_from_trace` on the
+  emitted trace; this runs structurally against the trace's events
+  without invoking any decider or hasher (TC-05).
 
 Compile time produces the executable; runtime produces the block.
 
@@ -1121,18 +1189,17 @@ Compile time produces the executable; runtime produces the block.
 
 - **No SHA-256 inversion.** The strong cryptanalytic claim is not
   asserted. `nonce_fiber_traversal`'s structural form
-  `first_admit(W32, |n| hash(concat(input, n)) <= input)` declares
-  the typed predicate the catamorphism evaluates; the catamorphism
-  evaluates the predicate at fiber points (per the implementation
-  runtime's strategy under ADR-026 G16) until admission. The
-  evaluation count is a property of the constraint's structural
+  `first_admit(W32, |n| hash(concat(input.prefix, n)) <= input.target)`
+  declares the typed predicate; foundation 0.4.1's
+  `Term::FirstAdmit` evaluator iterates `idx` ascending and evaluates
+  the predicate per fiber visit until admission (ADR-034 Mechanism 2).
+  The evaluation count is a property of the constraint's structural
   complexity (the number of leading-zero bits the `Le` admission
   enforces) and the `Hasher` substitution-axis impl's per-call cost.
   Different `Hasher` selections (e.g., `Sha256dHasher` vs an
-  intrinsics-backed equivalent) and different implementation
-  runtimes (sequential vs parallel coset partition vs fully
-  parallel via a different ADR-007 axis selection) change this cost
-  parametrically.
+  intrinsics-backed equivalent bound at the model declaration site)
+  change this cost parametrically without changing the verb body
+  or the structural surface.
 - **`Hasher` per-evaluation cost is a substitution-axis property,
   not a prism-btc property.** prism-btc's `Sha256dHasher` is one
   `Hasher` impl (pure-Rust, no external crypto dep, ADR-013
@@ -1148,21 +1215,23 @@ Compile time produces the executable; runtime produces the block.
   architecture exposes for the implementor to choose, not a fixed
   cost.
 - **No foundation amendments asserted by this document.** Foundation
-  0.3.6's `PrismModel<H, B, A>` (ADR-020) + `IntoBindingValue`
+  0.4.1's `PrismModel<H, B, A>` (ADR-020) + `IntoBindingValue`
   (ADR-023) + `pipeline::run_route` (ADR-022 D5) +
-  `evaluate_term_tree` (ADR-029, recursive `Term::Recurse`) +
-  `Grounded::output_bytes` (ADR-028) + `TERM_VALUE_MAX_BYTES = 4096`
-  per-value capacity + `PrimitiveOp::{Le, Lt, Ge, Gt, Concat}`
-  (substrate amendment per ADR-013/TR-08) + closure-body-grammar
-  binary comparison operators + `concat(...)` keyword supply the
-  typed-iso surface prism-btc requires. The W32 fiber traversal
-  lives in prism-btc per ADR-026 G16's three-way responsibility
-  split (substrate provides structural primitives; prism provides
-  the operator declaration; the implementation provides the runtime
-  traversal that respects the structural declaration). This document
-  forbids importing an opaque external crate (`sha2`, `blake3`, etc.)
-  in lieu of `Sha256dHasher`, the application's pure-Rust `Hasher`
-  substitution-axis selection.
+  `evaluate_term_tree` (ADR-029) + `Grounded::output_bytes` (ADR-028)
+  + `PrimitiveOp::{Le, Lt, Ge, Gt, Concat}` (ADR-013/TR-08) +
+  `Term::AxisInvocation` over the canonical hash axis (ADR-030) +
+  `CYCLE_SIZE` on `ConstrainedTypeShape` (ADR-032) +
+  `PartitionProductFields` + `Term::ProjectField` (ADR-033 G20) +
+  `Term::FirstAdmit` (ADR-034 Mechanism 2) supply the complete
+  typed-iso surface prism-btc requires. Per ADR-026 G16's three-way
+  split, the W32 search is now end-to-end inside the substrate:
+  substrate provides `Term::FirstAdmit` (ascending search with
+  admission short-circuit), prism provides `first_admit` as the typed
+  declaration form, and the implementation provides only the verb
+  declaration. There is no implementor-side runtime override. This
+  document forbids importing an opaque external crate (`sha2`,
+  `blake3`, etc.) in lieu of `Sha256dHasher`, the application's
+  pure-Rust `Hasher` substitution-axis selection.
 - **No mining-pool integration.** Stratum protocol, share submission,
   pool wallet management — all out of scope. prism-btc is solo-mining
   only; the bitcoind it talks to is the user's own.
@@ -1361,12 +1430,13 @@ written.
 |---|---|---|
 | `Sha256dHasher` | `prism_btc::shapes::hasher::Sha256dHasher` | Foundation `Hasher` substitution-axis selection. Body is pure-Rust SHA-256d. ADR-010 conforming (deterministic, fixed-width 32 bytes, idempotent, distinct identifier IRI). |
 | `PrismBtcBounds` | `prism_btc::shapes::bounds::PrismBtcBounds` | Foundation `HostBounds` selection. ADR-018 capacity constants. |
-| `MiningInput` | `prism_btc::model::MiningInput` | `ConstrainedTypeShape` (80 W8 sites) + hand-rolled `IntoBindingValue` (MAX_BYTES = 80). The 80-byte canonical wire-format Bitcoin block header. |
-| `BitcoinMiningModel` + `BitcoinMiningRoute` | `prism_btc::model::*` | `PrismModel<DefaultHostTypes, PrismBtcBounds, Sha256dHasher>` declared via `prism_model!`. Route body `hash(input)` (ADR-026 G19) lowers to `[Term::Variable {0}, Term::AxisInvocation {0,0,0}]`. |
-| (`TemplatePrefixShape`, `TargetSubBundle`) | _conceptual only_ | The architecture's input/output sub-bundle distinction is carried inside `MiningInput`'s 76/4 byte split and `NonceFiberTraversal`'s halt predicate. Foundation 0.4.1 seals `GroundedShape` to `ConstrainedTypeInput`, so these conceptual shapes do not appear as separate `ConstrainedTypeShape` types in code. |
-| `Sha256Compression`, `Sha256dProjection`, `HeaderSerialization`, `MerkleRootDerivation`, `CoinbaseConstruction` | `prism_btc::ops::*` | Pure-Rust runtime evaluators; no `sha2` dependency. The σ-projection runtime is identical to what `Sha256dHasher` does inside `pipeline::run_route`. |
-| `NonceFiberTraversal` | `prism_btc::ops::traversal` | An optional ADR-026 G16 implementation-runtime override. Foundation 0.4.1 evaluates the [`crate::verbs::nonce_fiber_traversal`] verb's `Term::FirstAdmit` end-to-end per ADR-034 Mechanism 2 (no implementation-side delegation needed for structural correctness). prism-btc's runtime adds two practical capabilities the foundation evaluator doesn't yet expose: parallel coset-partition traversal (`traverse_parallel`, ADR-026 G16 sanctions parallel overrides) and external cancellation (the bitcoind boundary's tip-watcher signals via the [`Cancel`] trait through every fiber visit). |
-| `mine()` | `prism_btc::pipeline::mine` | The public entry point. Walks the W32 fiber to find an admitting nonce, constructs `MiningInput` from the 80-byte serialized header, calls `BitcoinMiningModel::forward(input)` to mint the foundation-sealed `Grounded<ConstrainedTypeInput>`, tags it with `MiningTag`, returns `MiningOutcome`. |
+| `MiningTask` | `prism_btc::model::MiningTask` | `partition_product` of `TemplatePrefixShape` (76 bytes) and `TargetShape` (32 bytes); 108 bytes total. `PartitionProductFields::FIELD_NAMES = ["prefix", "target"]` per ADR-033 G20. |
+| `MiningResult` | `prism_btc::model::MiningResult` | 6-byte coproduct emitted by foundation's `Term::FirstAdmit` for a W32 domain (`disc, idx_bytes` per ADR-034 M2). |
+| `BitcoinMiningModel` + `BitcoinMiningRoute` | `prism_btc::model::*` | `PrismModel<DefaultHostTypes, PrismBtcBounds, Sha256dHasher>` declared via `prism_model!`. Route body `nonce_fiber_traversal(input)` invokes the verb (ADR-024). |
+| `TemplatePrefixShape`, `TargetShape` | `prism_btc::model::*` | Per-factor `ConstrainedTypeShape` impls combined into `MiningTask` via `partition_product` (ADR-026 G17). |
+| `Sha256Compression`, `Sha256dHasher` body, `HeaderSerialization`, `MerkleRootDerivation`, `CoinbaseConstruction` | `prism_btc::shapes::hasher`, `prism_btc::ops::*` | Pure-Rust hasher body + host-side wire helpers; no `sha2` dependency. The hasher body is invoked by foundation's catamorphism on each `Term::AxisInvocation{0,0,..}` per fiber visit. |
+| `nonce_fiber_traversal` | `prism_btc::verbs::nonce_fiber_traversal` (verb declaration only) | The W32 search is the verb's `first_admit` body; foundation 0.4.1's `Term::FirstAdmit` (ADR-034 M2) evaluates it end-to-end. There is no implementor-side runtime. |
+| `mine()` | `prism_btc::pipeline::mine` | The public entry point. Builds a `MiningTask` from `(BlockHeader, Target)`, calls `BitcoinMiningModel::forward(task)` (foundation 0.4.1 catamorphism evaluates the verb's `Term::FirstAdmit` end-to-end), parses the admitting nonce from the FirstAdmit coproduct, reconstructs the 80-byte header, and returns `MiningOutcome` with the foundation-sealed `Grounded<MiningResult, MiningTag>` witness. |
 
 The substrate-vs-implementor split above is the architecture's
 load-bearing distinction. Foundation does not ship a search runtime,
@@ -1456,7 +1526,7 @@ admission constraint enforces.
 | `nonce_fiber_traversal_term_arena()` | same | same | one verb declaration |
 | Substitution-axis triple `(H, B, A)` | same | same | one `impl PrismModel<…>` site |
 | Catamorphism evaluator | same | same | foundation `pipeline::run_route` |
-| Implementation runtime per ADR-026 G16 | same | same | one runtime in `ops/traversal` |
+| Search runtime | foundation's `Term::FirstAdmit` evaluator | foundation's `Term::FirstAdmit` evaluator | one catamorphism in `pipeline::evaluate_term_tree` |
 | `Grounded::output_bytes` semantics | block hash | block hash | ADR-028 invariant |
 | `getblocktemplate.bits` (runtime input) | `0x207fffff` | `0x17xxxxxx` | network-dependent runtime *value*, not configuration |
 
@@ -1468,25 +1538,25 @@ prism-btc declares its mining-domain verbs in
 a `&'static [Term]` slice emitted at the application's compile time;
 the SDK runs the verb-closure check (closure under foundation
 primitives ∪ own-implementation verbs ∪ imported verbs; acyclicity
-through non-`recurse` operators); the implementation provides the
-runtime that evaluates the declaration per ADR-026 G16's three-way
-responsibility split.
+through non-`recurse` operators). Foundation 0.4.1's catamorphism
+evaluates the verb's term arena end-to-end via `pipeline::run_route`
+when [`BitcoinMiningModel::forward`] is invoked.
 
 #### `nonce_fiber_traversal`
 
 | Field | Value |
 |---|---|
-| Body | `first_admit(witt_domain::W32, \|nonce\| hash(concat(input, nonce)) <= input)` |
-| Lowering | `[Variable {0}, Concat(input, nonce), AxisInvocation(0,0,_), Le(_, input), Recurse { measure: LiteralExpr(W32::CYCLE_SIZE @ W64), base: Literal(0), step: <predicate> }]` (per ADR-026 G16 + G19, ADR-013/TR-08, ADR-030, ADR-032) |
-| Implementation runtime | [`crate::ops::traversal::traverse_sequential`](crates/prism-btc/src/ops/traversal.rs) (sequential) and [`traverse_parallel`](crates/prism-btc/src/ops/traversal.rs) (parallel coset partition over `Z/(2^32)Z`) |
-| Conformance test | ADR-026 G16: "for any (domain, predicate) pair, the implementation's runtime produces the same first-admitting index as a reference sequential traversal would." prism-btc's `traverse_sequential` IS the reference sequential traversal. |
+| Body | `first_admit(witt_domain::W32, \|nonce\| hash(concat(input.prefix, nonce)) <= input.target)` |
+| Lowering | `[…, ProjectField(input, "prefix"), ProjectField(input, "target"), Concat(prefix, nonce), AxisInvocation{axis:0, kernel:0, …}, Le(digest, target), FirstAdmit{domain_size: LiteralExpr(W32::CYCLE_SIZE @ W64), predicate: …}]` (per ADR-026 G16 + G19, ADR-013/TR-08, ADR-030, ADR-032, ADR-033 G20, ADR-034 M2) |
+| Evaluator | foundation 0.4.1's `pipeline::evaluate_term_tree`. `Term::FirstAdmit` iterates `nonce` ascending from 0 to 2^32, threads the candidate via `FIRST_ADMIT_IDX_NAME_INDEX`, and short-circuits on the first non-zero predicate result. |
 
 Pinned by [`crate::verbs::tests`](crates/prism-btc/src/verbs.rs):
 - `verb_term_arena_is_emitted_and_nonempty`
-- `verb_arena_contains_a_recurse_node` (ADR-026 G16 lowering)
+- `verb_arena_contains_a_first_admit_node` (ADR-034 M2 lowering)
 - `verb_arena_contains_a_canonical_hash_axis_invocation` (ADR-026 G19 + ADR-030)
 - `verb_arena_contains_concat_application` (ADR-013/TR-08 byte-packing)
 - `verb_arena_contains_le_application` (ADR-013/TR-08 byte-comparison)
+- `verb_arena_evaluates_through_foundation_catamorphism` (ADR-034 M2 evaluator end-to-end)
 
 #### Substrate amendments closing the wiki's intended semantics
 
@@ -1502,39 +1572,41 @@ structural form end-to-end against ADR-026 G16's specification:
 | No field-access projection for product-of-shapes inputs | `PartitionProductFields` + `Term::ProjectField` admit `input.<field>` in closure bodies per ADR-033 G20 (foundation 0.4.0). prism-btc's `MiningInput` is a single 80-byte shape, so no field access is required. |
 | SDK bound `idx_ident` to the measure root (constant), not the iteration counter; `Term::Recurse` had no admission short-circuit | `first_admit` lowers to `Term::FirstAdmit { domain_size_index, predicate_index }` per ADR-034 Mechanism 2 (foundation 0.4.1). The catamorphism iterates `idx` ascending from 0 to `CYCLE_SIZE`, threads the candidate `idx` through the predicate via `FIRST_ADMIT_IDX_NAME_INDEX`, and short-circuits on the first non-zero predicate result. |
 
-#### `ops/traversal.rs` is now an optional ADR-026 G16 override
+#### Foundation drives the search end-to-end
 
-With ADR-034 Mechanism 2 in place, foundation's catamorphism evaluates
-the W32 search end-to-end through the verb's term arena:
+With ADR-034 Mechanism 2 in place, foundation's catamorphism
+evaluates the W32 search through the verb's term arena:
 
-- The predicate body `hash(concat(input.prefix, nonce)) <= input.target`
-  lowers to a Term subtree (`AxisInvocation`, `Concat`, `Le`,
-  `FirstAdmitIdxPlaceholder`) with the candidate `nonce` threaded per
-  iteration.
+- The predicate body
+  `hash(concat(input.prefix, nonce)) <= input.target` lowers to a
+  Term subtree (`ProjectField`, `Concat`, `AxisInvocation`, `Le`,
+  `FirstAdmitIdxPlaceholder`) with the candidate `nonce` threaded
+  per iteration.
 - `Term::FirstAdmit` walks the W32 ring, evaluates the predicate per
-  fiber visit, and returns `(0x01, idx_bytes)` on admission or
-  `(0x00, padding)` on exhaustion.
+  fiber visit, and short-circuits with `(0x01, idx_bytes)` on
+  admission or returns `(0x00, padding)` on exhaustion.
+- `pipeline::run_route` attaches the coproduct to the
+  `Grounded<MiningResult, MiningTag>`'s `output_bytes` (ADR-028).
 
-The implementation runtime in [`crate::ops::traversal`] is no longer
-load-bearing for structural correctness. It remains as an **optional
-override per ADR-026 G16** for two practical capabilities the
-substrate-side `Term::FirstAdmit` evaluator doesn't yet expose:
+The W32 search runtime that earlier prism-btc revisions hand-rolled
+(`ops/traversal.rs`, `traverse_sequential`, `traverse_parallel`,
+`Cancel`, `NeverCancel`, `FiberOutcome`) has been retired. Mining
+runs end-to-end through prism's typed-iso surface — there is no
+implementor-side search loop in this crate.
 
-1. **Parallel coset-partition traversal**. ADR-026 G16 explicitly
-   permits implementations to "replace the default with their own
-   runtime" for parallel traversal across coset partitions of the
-   ring. prism-btc's [`crate::ops::traversal::traverse_parallel`]
-   provides std-thread-scoped parallelism.
-2. **External cancellation**. The bitcoind boundary's tip-watcher
-   needs to abort an in-flight traversal on chain advance. Foundation's
-   evaluator has no cancellation hook; prism-btc's runtime threads a
-   [`crate::ops::traversal::Cancel`] trait object through every fiber
-   visit.
+Two operational features the prior runtime exposed are not yet in
+the substrate-side `Term::FirstAdmit` evaluator:
 
-The verb declaration is bit-identical regardless of which runtime
-evaluates it. `BitcoinMiningModel::forward` going through foundation's
-evaluator and prism-btc's `mine()` going through `traverse_sequential`
-produce the same admitting nonce per the ADR-026 G16 conformance test.
+- **Parallel coset-partition traversal.** Foundation may add a
+  parallel `Term::FirstAdmit` evaluator under ADR-026 G16 (the
+  architecture sanctions parallel evaluators); none ships in 0.4.1.
+- **External cancellation** (the bitcoind boundary's tip-watcher).
+  Foundation's evaluator runs to completion; if the chain advances
+  mid-search the boundary discards the result post-hoc rather than
+  cancelling in-flight.
+
+These are foundation-side concerns to address through future
+substrate amendments, not prism-btc-side work.
 
 ---
 
@@ -1602,16 +1674,16 @@ Source: [05 Building Block View](https://github.com/UOR-Foundation/UOR-Framework
 | `enforcement::transcendentals` | foundation-fixed wire-format constants used in trace serialisation. | §6.4 |
 | `enforcement::combinators` | composing UOR-domain values inside the pipeline. | §5 |
 | `mint primitives` (`mint_datum`, `mint_triad`, `mint_derivation`, `mint_freerank`) | invoked by `pipeline::run` at admission stages; not by prism-btc. | §6.2, §9 |
-| `bridge::ConstrainedTypeShape` trait | `MiningInput` impls this; the 76/4-byte split is carried inside the 80-byte payload (§4.7, §4.8). | §4.7, §4.8 |
+| `bridge::ConstrainedTypeShape` trait | `MiningTask`, `MiningResult`, `TemplatePrefixShape`, `TargetShape` impl this. | §4.7 |
 | `bridge::Grounding` trait | prism-btc's Grounding impls. | §7.4 |
 | `bridge::trace::{Trace, TraceEvent}` | prism-btc's trace structure. | §6.4 |
-| `bridge::cert::{Certificate, ContentFingerprint, ContentAddress}` | the certificate the pipeline emits and `prism-verify` certifies. | §6.6 |
+| `bridge::cert::{Certificate, ContentFingerprint, ContentAddress}` | the certificate the pipeline emits and the foundation-supplied `enforcement::replay::certify_from_trace` certifies. | §6.6 |
 | `kernel::HostTypes`, `kernel::HostBounds` traits | `DefaultHostTypes` and `PrismBtcBounds` impl. | §3.1, §3.2 |
-| `kernel::convergence` | `NonceFiberTraversal` is a convergence-driven W32 fold. | §4.6 |
+| `kernel::convergence` | `Term::FirstAdmit`'s ascending search with admission short-circuit is the convergence-driven W32 fold (ADR-034 M2). | §4.6 |
 | `kernel::primitives` (closed primitive set) | every prism-btc operation is closed under this set. | §4 |
-| `prism::pipeline::run` | the single entry point to a `Grounded<T>`. | §1, §5, §6.2 |
+| `prism::pipeline::run_route` | the single entry point to a `Grounded<T>`; called by `BitcoinMiningModel::forward`. | §1, §5, §6.2 |
 | `prism::seal regime` | `Validated`, `Grounded`, `Certified` are sealed; prism-btc consumes via mint primitives. | §6.3 |
-| `prism::replay::certify_from_trace` | trace replay yielding `Certified<GroundingCertificate>`. | §6.6 |
+| `enforcement::replay::certify_from_trace` | trace replay yielding `Certified<GroundingCertificate>`. | §6.6 |
 
 ### 14.4 Runtime View
 
@@ -1619,8 +1691,8 @@ Source: [06 Runtime View](https://github.com/UOR-Foundation/UOR-Framework/wiki/0
 
 | Wiki scenario | prism-btc usage | §-refs |
 |---|---|---|
-| Scenario 1 Principal data path execution | One `pipeline::run` per (template, extranonce); produces Grounded + Trace simultaneously. | §6.2 |
-| Scenario 2 Trace-replay verification | `prism-verify::certify_from_trace` walks the 5-event trace structurally. | §6.6 |
+| Scenario 1 Principal data path execution | One `BitcoinMiningModel::forward` per (template, extranonce); the catamorphism evaluates the verb's `Term::FirstAdmit` end-to-end and produces Grounded + Trace simultaneously. | §6.2 |
+| Scenario 2 Trace-replay verification | `enforcement::replay::certify_from_trace` walks the trace structurally. | §6.6 |
 | Scenario 3 Compile-time UORassembly enforcement | `cargo build` checks all impls + bounds; emits `prism-mine`. | §10 |
 | Scenario 4 Distribute and run | `prism-mine` distributed externally; user runs on own hardware with own bitcoind. | §1, §9 |
 
@@ -1630,17 +1702,17 @@ Source: [08 Concepts](https://github.com/UOR-Foundation/UOR-Framework/wiki/08-Co
 
 | Wiki term | prism-btc usage | §-refs |
 |---|---|---|
-| Datum | the 80-byte `MiningInput` byte sequence the W32 fiber admitted; folded by `pipeline::run_route` into the binding's `content_address`. | §5 |
+| Datum | the 108-byte `MiningTask` byte sequence the verb's predicate admits against; folded by `pipeline::run_route` into the binding's `content_address`. | §5 |
 | Triad (foundation `Triad<T>`) | accessible from `MiningWitness::triad()` (foundation 0.4.1). Coordinates: `(stratum, spectrum, address)` derived from the `Grounded`'s `unit_address`. The digest-domain projection over the block-hash bytes is the prism-btc-supplied [`crate::domain::TriadicCoords`] on `MiningOutcome::coords`. | §7.7, §7.8 |
 | Derivation | the foundation `Derivation` (`MiningWitness::derivation()`) recording the typed-iso path the W32 admission traversed; replayable to re-derive the certificate. | §5 |
-| FreeRank | the W32 fiber's free coordinate; collapses on admission (the runtime selects the unique winning nonce). | §5 |
-| Validated, Grounded, Certified | `Validated<CompileUnit, FinalPhase>`, `Grounded<ConstrainedTypeInput, MiningTag>`, `Certified<GroundingCertificate>`. | §5, §6.6, §7.1 |
-| ConstrainedTypeShape | `MiningInput` (the literal PrismModel input). The architecture's `TemplatePrefixShape`/`TargetSubBundle` are conceptual; foundation 0.4.1 seals `GroundedShape` to `ConstrainedTypeInput`. | §4.7, §4.8 |
-| Grounding | Foundation 0.4.1's `pipeline::run_route` admits `MiningInput` directly via `IntoBindingValue`; no separate `Grounding` impl is required at the prism implementor level. | §7.4 |
+| FreeRank | the W32 fiber's free coordinate; collapses on admission as `Term::FirstAdmit` short-circuits on the first non-zero predicate result. | §5 |
+| Validated, Grounded, Certified | `Validated<CompileUnit, FinalPhase>`, `Grounded<MiningResult, MiningTag>`, `Certified<GroundingCertificate>`. | §5, §6.6, §7.1 |
+| ConstrainedTypeShape | `MiningTask` (the PrismModel input as a `partition_product` of `TemplatePrefixShape` and `TargetShape`); `MiningResult` (the FirstAdmit output coproduct). | §4.7 |
+| Grounding | Foundation 0.4.1's `pipeline::run_route` admits `MiningTask` directly via `IntoBindingValue`; no separate `Grounding` impl is required at the prism implementor level. | §7.4 |
 | Hasher | `Sha256dHasher`. | §3.3, §7.2 |
 | HostTypes, HostBounds | `DefaultHostTypes`, `PrismBtcBounds`. | §3.1, §3.2 |
-| Trace | five-event sequence per `pipeline::run`. | §6.4 |
-| Resolution | the W32 fiber's free coordinate is resolved by `NonceFiberTraversal`. | §4.6, §5 |
+| Trace | event sequence per `forward()`. | §6.4 |
+| Resolution | the W32 fiber's free coordinate is resolved by foundation's `Term::FirstAdmit` evaluator (ADR-034 M2). | §4.6, §5 |
 
 ### 14.6 Context and Scope
 

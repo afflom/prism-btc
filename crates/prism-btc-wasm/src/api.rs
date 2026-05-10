@@ -2,7 +2,7 @@ extern crate alloc;
 use alloc::format;
 
 use crate::types::{JsBlockHeader, JsMiningResult};
-use prism_btc::{mine, Bits, BlockHeader, MerkleRoot, NeverCancel, Target, Timestamp, Version};
+use prism_btc::{mine, Bits, BlockHeader, MerkleRoot, Target, Timestamp, Version};
 use wasm_bindgen::prelude::*;
 
 /// Mine a block header from JavaScript.
@@ -22,7 +22,7 @@ pub fn mine_block(js_header: &JsBlockHeader, nbits: u32) -> Result<JsMiningResul
         bits: Bits(js_header.bits),
     };
 
-    mine(&header, Target::new(nbits), &NeverCancel)
+    mine(&header, Target::new(nbits))
         .map(|outcome| {
             JsMiningResult::new(
                 outcome.coords.datum,

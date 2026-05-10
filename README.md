@@ -25,68 +25,71 @@ invisible to the type system and untraced.
 
 prism-btc is the converse: **bit-identical output to a traditional
 miner, derived through Prism's vocabulary alone.** No `sha2` import,
-no `rayon`, no opaque crate imports. SHA-256d is a pure-Rust
-foundation `Hasher` impl ([`Sha256dHasher`](crates/prism-btc/src/shapes/hasher.rs)).
-The W32 nonce traversal is prism-btc's own runtime
-([`NonceFiberTraversal`](crates/prism-btc/src/ops/traversal.rs)),
-expressed as a deterministic walk over the foundation-typed ring.
+no `rayon`, no opaque crate imports, no implementor-side W32 search
+loop. SHA-256d is a pure-Rust foundation `Hasher` impl
+([`Sha256dHasher`](crates/prism-btc/src/shapes/hasher.rs)) promoted
+to a 1-tuple `AxisTuple` via foundation's blanket impl (ADR-030); the
+W32 search is the
+[`nonce_fiber_traversal` verb](crates/prism-btc/src/verbs.rs)'s
+`first_admit` body, evaluated end-to-end by foundation 0.4.1's
+`Term::FirstAdmit` catamorphism (ADR-034 Mechanism 2).
 
-The architecture's **categorical routing through types** is realised
-on foundation 0.3.2 by a `PrismModel<H, B, A>` declaration
-([`BitcoinMiningModel`](crates/prism-btc/src/model.rs)): `Input =
-MiningInput` (80 W8 sites — the canonical wire-format header), `Output =
-ConstrainedTypeInput` (foundation's identity), `Hasher = Sha256dHasher`.
-prism-btc's runtime walks the W32 fiber to the admitting input;
-foundation's `pipeline::run_route` mints the
-`Grounded<ConstrainedTypeInput, MiningTag>` shape attestation over it.
+The mining inference is one `BitcoinMiningModel::forward` call on
+foundation 0.4.1
+([`BitcoinMiningModel`](crates/prism-btc/src/model.rs)):
+
+- `Input  = MiningTask` — `partition_product` of `TemplatePrefixShape`
+  (76 bytes) and `TargetShape` (32 bytes), with field access
+  (`input.prefix`, `input.target`) per ADR-033 G20.
+- `Output = MiningResult` — the 6-byte `(disc, idx_bytes)` coproduct
+  foundation's `Term::FirstAdmit` returns for a W32 domain.
+- Route: `nonce_fiber_traversal(input)`, with body
+  `first_admit(witt_domain::W32, |nonce| hash(concat(input.prefix, nonce)) <= input.target)`.
+- Application axis: `Sha256dHasher` (canonical hash axis at
+  `(axis: 0, kernel: 0)` per ADR-030).
 
 ## Workspace
 
 | Crate | Role |
 |---|---|
-| [`prism-btc`](crates/prism-btc/) | The prism implementor. Public `mine()` entry point. Pure-Rust SHA-256/SHA-256d. W32 fiber traversal (sequential + parallel). Domain types, `ConstrainedTypeShape` impls, `HostBounds` impl, `Hasher` impl. **No external crypto dep.** |
-| [`prism-btc-node`](crates/prism-btc-node/) | Bitcoin Core RPC boundary. `getblocktemplate` → `prism_btc::mine` → `submitblock`. Two layers: `PrismMiner` (single-shot) and `MiningSession` (extranonce + tip-watcher + parallel). `prism-mine` CLI binary. |
+| [`prism-btc`](crates/prism-btc/) | The prism implementor. Declares `BitcoinMiningModel` + `nonce_fiber_traversal` verb. Public `mine()` entry point composes a `MiningTask`, calls `forward`, parses the FirstAdmit coproduct. Pure-Rust SHA-256/SHA-256d for `Sha256dHasher`. **No external crypto dep, no search loop.** |
+| [`prism-btc-node`](crates/prism-btc-node/) | Bitcoin Core RPC boundary. `getblocktemplate` → `prism_btc::mine` → `submitblock`. `PrismMiner::mine_one_block` is the single API; `prism-mine` CLI binary. |
 | [`prism-btc-wasm`](crates/prism-btc-wasm/) | `wasm-bindgen` JS surface around `prism_btc::mine`. |
-| [`prism-btc-lean/`](prism-btc-lean/) | Lean 4 formal proofs: ring identity (W8/W32), triadic coords, FreeRank protocol, shape constraint monotonicity, σ-convergence termination. |
+| [`prism-btc-lean/`](prism-btc-lean/) | Lean 4 formal proofs: ring identity (W8/W32), triadic coords, FreeRank protocol, shape constraint monotonicity. |
 
-Three application crates plus three external Prism crates
-(`uor-foundation`, `prism`, `prism-verify`).
+## The substrate-vs-implementor split (ADR-024 + ADR-026 G16)
 
-## The substrate-vs-implementor split
+**`uor-foundation` (0.4.1)** provides: sealed types, `PrimitiveOp`
+enum (15 generators), `Term` variants (including `AxisInvocation`,
+`FirstAdmit`), the `AxisTuple` / `Hasher` / `HostBounds` /
+`HostTypes` substitution-axis traits, the `mint_*` primitives, the
+`Trace` / `TraceEvent` structures, `enforcement::replay::certify_from_trace`,
+and the catamorphism `pipeline::evaluate_term_tree` whose
+`Term::FirstAdmit` fold-rule (ADR-034 M2) drives the W32 search
+end-to-end.
 
-prism-btc reconciliation makes ARCHITECTURE.md §13's split explicit:
-
-**`uor-foundation` provides** the substrate — sealed types (`Datum`,
-`Triad`, `Derivation`, `FreeRank`, `Validated`, `Grounded`,
-`Certified`), the `PrimitiveOp` enum (10 dihedral generators), `Term`
-variants, the `Hasher`/`HostBounds`/`HostTypes`/`GroundingMapKind`
-substitution-axis traits, the `mint_*` primitives, the `Trace` and
-`TraceEvent` structures, and `enforcement::replay::certify_from_trace`.
-It does **not** ship a runtime that evaluates `Term`s, nor a
-fold-with-halt-on-predicate primitive, nor SHA-256, nor any "operations
-helper". Foundation is substrate, not runtime.
-
-**prism-btc provides** what the substrate delegates to the prism
-implementor: the [Sha256dHasher](crates/prism-btc/src/shapes/hasher.rs),
-the [W32 fiber traversal](crates/prism-btc/src/ops/traversal.rs), the
-[merkle-tree derivation](crates/prism-btc/src/ops/merkle.rs),
-the [coinbase + header serialisation](crates/prism-btc/src/ops/header.rs),
-the [σ-projection runtime](crates/prism-btc/src/ops/sigma.rs),
-the [`ConstrainedTypeShape` impls](crates/prism-btc/src/shapes/),
-the [`PrismBtcBounds`](crates/prism-btc/src/shapes/bounds.rs)
-substitution-axis selection, and the public
-[`mine()`](crates/prism-btc/src/pipeline.rs) entry point. Foundation
-provides the type vocabulary; prism-btc provides the Bitcoin
-realisation.
+**`prism-btc`** declares: the
+[`Sha256dHasher`](crates/prism-btc/src/shapes/hasher.rs) (the
+application's `Hasher` substitution-axis selection),
+[`PrismBtcBounds`](crates/prism-btc/src/shapes/bounds.rs) (the
+`HostBounds` selection), the
+[`nonce_fiber_traversal` verb](crates/prism-btc/src/verbs.rs) (the
+mining inference's structural form), the
+[`BitcoinMiningModel`](crates/prism-btc/src/model.rs) (`PrismModel`
+declaration whose route invokes the verb), and the public
+[`mine()`](crates/prism-btc/src/pipeline.rs) entry point that builds
+the `MiningTask` and parses the `MiningResult` coproduct. Plus
+host-side wire helpers: pure-Rust SHA-256d, header serialization,
+merkle-root reduction.
 
 ## Public API
 
 ```rust
 use prism_btc::{
-    mine, mine_parallel, block_hash_grounded,
-    BitcoinMiningModel, MiningInput,
+    mine, block_hash_grounded,
+    BitcoinMiningModel, MiningTask, MiningResult,
     BlockHeader, MerkleRoot, Target, Bits, Timestamp, Version,
-    NeverCancel, MiningOutcome, MiningFailure, MiningWitness,
+    MiningOutcome, MiningFailure, MiningWitness,
     Sha256dHasher, PrismBtcBounds,
 };
 
@@ -103,41 +106,34 @@ let header = BlockHeader {
     bits: Bits(0x1d00ffff),
 };
 
-// Real-time structural inference: mine() walks the W32 fiber under the
-// declared σ-projection composition, halts at the first admitting
-// nonce, mints the foundation-sealed Grounded shape attestation.
-let outcome = mine(&header, Target::new(0x207fffff), &NeverCancel)
+// Foundation 0.4.1's catamorphism evaluates the verb's term arena
+// end-to-end via Term::FirstAdmit (ADR-034 M2): iterate `nonce`
+// ascending, evaluate `hash(concat(prefix, nonce)) <= target` per
+// fiber visit, short-circuit on first admission.
+let outcome = mine(&header, Target::new(0x207fffff))
     .expect("easy target must admit");
 
-assert_eq!(outcome.witness.witt_level_bits(), 32); // W32 ceiling
+assert_eq!(outcome.witness.witt_level_bits(), 32);
 assert!(Target::new(0x207fffff).is_satisfied_by_bytes(&outcome.digest));
 ```
 
-For long-running real-network mining, use the parallel variant:
-
-```rust
-let outcome = mine_parallel(&header, target, /* threads */ 8, &NeverCancel)?;
-```
-
 The `MiningOutcome` carries the foundation-sealed `MiningWitness =
-Grounded<ConstrainedTypeInput, MiningTag>`, the admitting nonce, the
-digest, and the digest's `TriadicCoords` (datum + 2-adic stratum +
-spectrum parity).
+Grounded<MiningResult, MiningTag>`, whose `output_bytes()` carries
+the 6-byte `(disc, idx_bytes)` coproduct from foundation's
+`Term::FirstAdmit`. `outcome.nonce` is the admitting u32 extracted
+from the coproduct; `outcome.digest` is the block hash in display
+order; `outcome.coords` is the digest's `TriadicCoords` (datum +
+2-adic stratum + Walsh–Hadamard parity).
 
 ## Real-network mining (`prism-btc-node`)
 
 The `prism-mine` CLI drives `prism_btc::mine` against any running
-bitcoind. Two modes:
-
-**Single-shot** (default): one template, one `prism_btc::mine` call,
-one submit. For regtest where the W32 traversal admits trivially.
+bitcoind. Each invocation fetches one template, runs one
+`forward()`, submits one block.
 
 ```bash
 just regtest-demo   # mines 10 blocks against a local bitcoind
 ```
-
-**Session** (`--session`): long-running with extranonce rolling,
-tip-staleness watcher, and `mine_parallel` per (template, extranonce).
 
 ```bash
 prism-mine \
@@ -145,8 +141,6 @@ prism-mine \
   --rpc-user RPCUSER --rpc-pass RPCPASS \
   --network testnet4 \
   --payout TB1Q... \
-  --session \
-  --threads 8 \
   --blocks 1
 ```
 

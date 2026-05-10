@@ -9,8 +9,8 @@
 //! > within its own routes [...] Implementation introduces no new
 //! > operators, only new named compositions.
 //!
-//! The verbs below are the architectural commitment that names the
-//! mining inference's structure. Each is declared via `verb!` with a
+//! The verb below is the architectural commitment that names the
+//! mining inference's structure. It is declared via `verb!` with a
 //! closure body composed from G1–G19 (substrate-level forms G1–G11 +
 //! prism operators G12–G19, including the `concat` keyword and the
 //! byte-comparison binary operators `<=`, `<`, `>=`, `>` per
@@ -20,76 +20,45 @@
 //!
 //! - [`nonce_fiber_traversal`] — the W32 search. Body is the wiki's
 //!   intended structural form
-//!   `first_admit(witt_domain::W32, |nonce| hash(concat(input, nonce)) <= input)`
-//!   (ADR-026 G16 + G19, ADR-013/TR-08 amendments). The runtime that
-//!   evaluates this declaration is
-//!   [`crate::ops::traversal::traverse_sequential`] (sequential) and
-//!   [`crate::ops::traversal::traverse_parallel`] (parallel coset
-//!   partition over the W32 ring), per ADR-026 G16's three-way
-//!   responsibility split.
+//!   `first_admit(witt_domain::W32, |nonce| hash(concat(input.prefix, nonce)) <= input.target)`
+//!   (ADR-026 G16 + G19, ADR-013/TR-08, ADR-033 G20, ADR-034
+//!   Mechanism 2). Foundation 0.4.1's catamorphism evaluates this
+//!   end-to-end through `Term::FirstAdmit`'s ascending-with-short-circuit
+//!   fold-rule. There is no implementor-side runtime override.
 //!
 //! ## Conformance against the wiki
 //!
-//! ADR-026 G16 (`first_admit`'s three-way runtime responsibility)
-//! splits the search across all three layers:
+//! ADR-026 G16 split:
 //!
 //! - **Substrate** owns the structural primitives:
-//!   `Term::FirstAdmit` for bounded ascending search with
-//!   admission short-circuit (ADR-034 Mechanism 2);
-//!   `Term::AxisInvocation` against the canonical hash axis for
-//!   `hash(...)` (ADR-030); `Term::Application(Concat, [a, b])` for
-//!   byte-sequence packing; `Term::Application(Le, [a, b])` for
-//!   byte-level lexicographic comparison; `witt_domain::W32` for the
-//!   domain's cardinality (ADR-032: `CYCLE_SIZE = 2^32`).
+//!   `Term::FirstAdmit` (ADR-034 M2) for ascending search with
+//!   admission short-circuit; `Term::AxisInvocation` against the
+//!   canonical hash axis (ADR-030) for `hash(...)`; `PrimitiveOp::Concat`
+//!   for byte-sequence packing; `PrimitiveOp::Le` for byte-level
+//!   lexicographic comparison; `witt_domain::W32` for the domain's
+//!   cardinality (ADR-032: `CYCLE_SIZE = 2^32`); `Term::ProjectField`
+//!   (ADR-033 G20) for partition-product field access.
 //! - **Prism** owns `first_admit` as the typed declaration form. The
 //!   `uor-foundation-sdk` lowering reads
-//!   `<witt_domain::W32 as ConstrainedTypeShape>::CYCLE_SIZE` at the
-//!   consumer's compile time (ADR-032) and emits
-//!   `Term::FirstAdmit { domain_size_index, predicate_index }` with
-//!   `idx_ident` bound to the foundation-fixed
-//!   `FIRST_ADMIT_IDX_NAME_INDEX` placeholder, which the catamorphism
-//!   threads to the candidate iteration index per ADR-034 Mechanism 2.
-//! - **Implementation** owns the runtime traversal. The conformance
-//!   test (ADR-026 G16): the runtime produces the same first-admitting
-//!   index a reference sequential traversal would. prism-btc's
-//!   [`crate::ops::traversal::traverse_sequential`] IS the reference
-//!   sequential traversal — the conformance test is satisfied
-//!   trivially.
-//!
-//! ## Foundation 0.4.1 closes the architectural gap (ADR-034)
-//!
-//! Foundation 0.4.1 ships ADR-034's two mechanisms — both closing the
-//! prior delegations to the implementation runtime:
-//!
-//! - **Mechanism 1**: `recurse(measure, base, |self, idx| step)`
-//!   admits a 2-parameter step closure where the second parameter is
-//!   the iteration counter (bound via `RECURSE_IDX_NAME_INDEX`).
-//! - **Mechanism 2**: `first_admit(<domain>, |idx| pred)` lowers to
-//!   `Term::FirstAdmit { domain_size_index, predicate_index }`. The
-//!   evaluator iterates `idx` ascending from 0 to N (read from the
-//!   domain's `CYCLE_SIZE`), evaluates the predicate per fiber visit
-//!   with the candidate `idx` threaded via
-//!   `FIRST_ADMIT_IDX_NAME_INDEX`, and **short-circuits on the first
-//!   non-zero predicate result**. The result is a coproduct value:
-//!   `(disc=0x01, idx_bytes)` on admission, `(disc=0x00, padding)` on
-//!   exhaustion.
-//!
-//! With ADR-034 Mechanism 2, foundation's catamorphism evaluates the
-//! W32 search end-to-end through the verb's term arena. The
-//! implementation runtime ([`crate::ops::traversal`]) is no longer
-//! load-bearing for structural correctness; it remains as an
-//! **optional ADR-026 G16 override** for parallel coset-partition
-//! traversal and external cancellation hooks (the substrate-side
-//! `Term::FirstAdmit` evaluator does not yet expose either).
+//!   `<witt_domain::W32 as ConstrainedTypeShape>::CYCLE_SIZE`
+//!   (ADR-032) and emits
+//!   `Term::FirstAdmit { domain_size_index, predicate_index }`,
+//!   threading the candidate `idx` through the predicate via
+//!   `FIRST_ADMIT_IDX_NAME_INDEX`.
+//! - **Implementation** owns the `verb!` declaration above; the
+//!   structural commitment names the mining inference in prism
+//!   vocabulary. Foundation's catamorphism evaluates the verb's
+//!   term-tree fragment when [`crate::model::BitcoinMiningModel::forward`]
+//!   is invoked.
 
 use uor_foundation_sdk::verb;
 
-use crate::model::MiningInput;
+use crate::model::{MiningResult, MiningTask};
 
 verb! {
-    pub fn nonce_fiber_traversal(input: MiningInput) -> MiningInput {
+    pub fn nonce_fiber_traversal(input: MiningTask) -> MiningResult {
         first_admit(uor_foundation::pipeline::witt_domain::W32, |nonce| {
-            hash(concat(input, nonce)) <= input
+            hash(concat(input.prefix, nonce)) <= input.target
         })
     }
 }
@@ -113,15 +82,10 @@ mod tests {
 
     #[test]
     fn verb_arena_contains_a_first_admit_node() {
-        // ADR-026 G16 + ADR-034 Mechanism 2 (foundation 0.4.1):
-        // `first_admit` lowers to `Term::FirstAdmit`, a dedicated
-        // bounded-search variant whose evaluator iterates `idx`
-        // ascending from 0 to N (= domain's CYCLE_SIZE) and
-        // short-circuits on the first non-zero predicate result.
-        // Earlier substrates (0.3.x – 0.4.0) lowered to `Term::Recurse`
-        // and required the implementation runtime to drive the search;
-        // 0.4.1 closes that delegation by making the search a
-        // first-class catamorphism fold-rule.
+        // ADR-026 G16 + ADR-034 Mechanism 2: `first_admit` lowers to
+        // `Term::FirstAdmit`, the dedicated bounded-search variant
+        // whose evaluator iterates `idx` ascending and short-circuits
+        // on the first non-zero predicate result.
         let arena = nonce_fiber_traversal_term_arena();
         let has_first_admit = arena.iter().any(|t| matches!(t, Term::FirstAdmit { .. }));
         assert!(
@@ -134,9 +98,9 @@ mod tests {
     fn verb_arena_contains_a_canonical_hash_axis_invocation() {
         // ADR-026 G19 + ADR-030: `hash(...)` lowers to
         // `Term::AxisInvocation { axis_index: 0, kernel_id: 0, .. }` —
-        // the canonical hash axis (HashAxis::KERNEL_HASH = 0). The
-        // blanket `impl<H: Hasher> AxisTuple for H` routes the (0, 0)
-        // dispatch through `Sha256dHasher`.
+        // the canonical hash axis. The blanket
+        // `impl<H: Hasher> AxisTuple for H` routes the (0, 0) dispatch
+        // through `Sha256dHasher`.
         let arena = nonce_fiber_traversal_term_arena();
         let has_canonical_hash = arena.iter().any(|t| {
             matches!(
@@ -195,39 +159,32 @@ mod tests {
         );
     }
 
-    /// Foundation 0.4.1 evaluates `Term::FirstAdmit` end-to-end per
-    /// ADR-034 Mechanism 2: the catamorphism iterates `idx` ascending
-    /// through the domain, threads the candidate `idx` to the predicate
-    /// via `FIRST_ADMIT_IDX_NAME_INDEX`, and short-circuits on the first
-    /// non-zero predicate result. This test pins that the
-    /// `nonce_fiber_traversal` verb's term arena is foundation-evaluable
-    /// — i.e., that prism-btc's verb declaration is structurally
-    /// well-formed against the foundation evaluator's per-variant
-    /// fold-rules. The implementation runtime in `ops::traversal` is
-    /// thus an *optional* ADR-026 G16 override, not a load-bearing
-    /// substitute for foundation's evaluator.
+    /// Foundation 0.4.1 evaluates the verb's term arena end-to-end.
+    /// `Term::FirstAdmit` iterates `idx` ascending through the W32
+    /// domain, threads the candidate via `FIRST_ADMIT_IDX_NAME_INDEX`,
+    /// and short-circuits on the first non-zero predicate result. This
+    /// test pins that the verb's structural form is foundation-evaluable
+    /// against an actual `Sha256dHasher` axis dispatch.
     #[test]
     fn verb_arena_evaluates_through_foundation_catamorphism() {
         use crate::shapes::hasher::Sha256dHasher;
         use uor_foundation::pipeline::evaluate_term_tree;
 
         let arena = nonce_fiber_traversal_term_arena();
-        // Use a small input so the evaluator runs in test budget. The
-        // verb body's predicate is `hash(concat(input, nonce)) <= input`
-        // — the comparison treats both sides as u64-truncated big-endian
-        // values. For an all-0xff input, the right-hand side is u64::MAX,
-        // so any digest lhs satisfies the Le admission, and FirstAdmit
-        // returns at idx=0. The output is the coproduct
-        // `(disc=0x01, idx_bytes=[0,0,0,0])` per the ADR-034 Mechanism 2
-        // fold-rule's admission encoding.
-        let input = [0xffu8; 80];
-        let result = evaluate_term_tree::<Sha256dHasher>(arena, &input)
+        // Permissive target ⇒ `Le(hash(...), target)` admits at idx=0.
+        let mut prefix = [0u8; 76];
+        prefix[0] = 0x01;
+        let target = [0xffu8; 32];
+        let task = MiningTask::new(prefix, target);
+
+        let result = evaluate_term_tree::<Sha256dHasher>(arena, &task.0)
             .expect("verb arena must be foundation-evaluable per ADR-029 + ADR-034 M2");
 
         let bytes = result.bytes();
-        assert!(
-            !bytes.is_empty(),
-            "FirstAdmit's evaluator must emit a coproduct (disc, idx_bytes) value"
+        assert_eq!(
+            bytes.len(),
+            6,
+            "FirstAdmit emits (disc, idx_bytes) of 6 bytes for W32 (cycle 2^32 needs 5 BE bytes)"
         );
         assert_eq!(
             bytes[0], 0x01,
