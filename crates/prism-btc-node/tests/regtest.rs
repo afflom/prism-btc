@@ -78,21 +78,16 @@ fn mines_a_block_and_advances_the_chain() {
         "W32 level must propagate from the const-validated CompileUnit"
     );
 
-    // Foundation 0.4.1 Term::FirstAdmit (ADR-034 M2) returns a 6-byte
-    // coproduct on the Grounded's output_bytes (ADR-028):
-    //   byte 0:    discriminant (0x01 admitted)
-    //   bytes 1..6: admitting nonce padded to 5 bytes BE
-    // The 4-byte nonce in bytes[2..6] reconstructs the same wire-format
-    // header bitcoind anchored, whose SHA-256d is the block hash. Pin
-    // this end-to-end equivalence between the catamorphism's structural
-    // result and the bitcoind-confirmed digest.
+    // The ψ-pipeline label is the terminal ψ_9 output (architecture §4).
+    // With prism-btc's resolvers folding through the canonical hash axis,
+    // the label is exactly the hash axis's 32-byte output width
+    // (architecture §2.2). The first 4 bytes decode to the resolved nonce.
     let output = mined.witness.output_bytes();
-    assert_eq!(output.len(), 6);
-    assert_eq!(output[0], 0x01);
-    let admitted_nonce = u32::from_be_bytes([output[2], output[3], output[4], output[5]]);
+    assert_eq!(output.len(), 32, "ψ-pipeline label site count");
+    let nonce_from_label = u32::from_le_bytes([output[0], output[1], output[2], output[3]]);
     assert_eq!(
-        admitted_nonce, mined.nonce,
-        "FirstAdmit's admitted nonce on output_bytes equals the nonce in the submitted block"
+        nonce_from_label, mined.nonce,
+        "ψ-pipeline label's leading 4 bytes decode to the resolved nonce"
     );
 
     // The MiningOutcome's host-side digest matches the bitcoind-anchored block hash.

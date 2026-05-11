@@ -100,12 +100,13 @@ impl PrismMiner {
         // construction and submission; the mining algorithm runs
         // through foundation's catamorphism.
         let outcome = mine(&job.header, job.target).map_err(|e| match e {
-            MiningFailure::NoMatch => {
-                anyhow::anyhow!("W32 fiber exhausted (2^32 candidates) without satisfying target")
-            }
             MiningFailure::PipelineFailure => {
                 anyhow::anyhow!("foundation pipeline rejected the input")
             }
+            MiningFailure::LabelDoesNotDecodeToWireFormat => anyhow::anyhow!(
+                "ψ-pipeline label did not decode to a wire-format-valid Bitcoin block — \
+                 see ARCHITECTURE.md §9.1 for the foundation amendment that closes this gap"
+            ),
         })?;
 
         let block = job.assemble(outcome.nonce);
