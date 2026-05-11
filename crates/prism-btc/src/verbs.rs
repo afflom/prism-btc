@@ -168,7 +168,7 @@ mod tests {
     #[test]
     fn verb_arena_evaluates_through_foundation_catamorphism() {
         use crate::shapes::hasher::Sha256dHasher;
-        use uor_foundation::pipeline::evaluate_term_tree;
+        use uor_foundation::pipeline::{evaluate_term_tree, NullResolverTuple};
 
         let arena = nonce_fiber_traversal_term_arena();
         // Permissive target ⇒ `Le(hash(...), target)` admits at idx=0.
@@ -177,7 +177,14 @@ mod tests {
         let target = [0xffu8; 32];
         let task = MiningTask::new(prefix, target);
 
-        let result = evaluate_term_tree::<Sha256dHasher>(arena, &task.0)
+        // The verb body uses only σ-axis primitives (Concat, AxisInvocation,
+        // Le, FirstAdmit, ProjectField) — no ψ-Term variants — so a
+        // NullResolverTuple satisfies foundation 0.4.2's ResolverTuple
+        // contract (ADR-035 / ADR-036). When prism-btc's mining model
+        // migrates to the ψ-chain, this is where the application-supplied
+        // ResolverTuple is bound.
+        let resolvers = NullResolverTuple;
+        let result = evaluate_term_tree::<Sha256dHasher, _>(arena, &task.0, &resolvers)
             .expect("verb arena must be foundation-evaluable per ADR-029 + ADR-034 M2");
 
         let bytes = result.bytes();
