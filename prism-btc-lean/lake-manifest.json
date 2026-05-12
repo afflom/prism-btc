@@ -5,11 +5,11 @@
    "type": "git",
    "subDir": null,
    "scope": "",
-   "rev": "453341c21973355d22929dea2bc196abeef31d2f",
+   "rev": "746075cba03cf03bf88d53f5b9ea8fb540f34be7",
    "name": "uor",
    "manifestFile": "lake-manifest.json",
    "inputRev": "main",
    "inherited": false,
    "configFile": "lakefile.lean"}],
- "name": "«prism-btc-lean»",
+ "name": "PrismBtcLean",
  "lakeDir": ".lake"}

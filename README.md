@@ -171,12 +171,22 @@ just fmt-check  # cargo fmt --check
 # Formal proofs (requires elan / Lean 4)
 just verify
 
+# Complete V&V suite (see VERIFICATION.md)
+just vv
+
 # WebAssembly
 just build-wasm
 
 # End-to-end regtest exercise
 just regtest-demo
 ```
+
+## Verification & Validation
+
+See [VERIFICATION.md](VERIFICATION.md) for the complete V&V suite —
+architectural conformance, fail-closed mining contract, wire-format
+equivalence, ψ-pipeline determinism, Lean proofs, and regtest
+end-to-end. `just vv` reproduces it.
 
 ## Real-network mining (`prism-btc-node`)
 

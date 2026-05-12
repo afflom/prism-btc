@@ -38,6 +38,28 @@ verify:
 verify-check:
     cd prism-btc-lean && lake check
 
+# Complete V&V suite (architecture invariants, fail-closed mining
+# contract, wire-format equivalence, ψ-pipeline determinism, Lean
+# proofs, regtest end-to-end if bitcoind is reachable). See
+# VERIFICATION.md.
+vv:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "── §1 fmt + clippy ──────────────────────────────────────────"
+    just fmt-check
+    just lint
+    echo "── §2 prism-btc unit + integration + V&V tests (release) ────"
+    cargo test --workspace --release
+    echo "── §3 Lean proofs ──────────────────────────────────────────"
+    just verify
+    echo "── §4 regtest end-to-end (skipped if PRISM_RPC_URL unset) ──"
+    if [ -n "${PRISM_RPC_URL:-}" ] && [ -n "${PRISM_PAYOUT:-}" ]; then
+        cargo test -p prism-btc-node --release -- --ignored --nocapture
+    else
+        echo "    SKIPPED: set PRISM_RPC_URL, PRISM_RPC_USER, PRISM_RPC_PASS, PRISM_PAYOUT to run"
+    fi
+    echo "── V&V complete ─────────────────────────────────────────────"
+
 # Fast CI (excludes Lean and wasm-pack — run separately)
 ci:
     just fmt-check
