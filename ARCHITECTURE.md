@@ -12,9 +12,10 @@
 > **Normative references.**
 > [UOR-Foundation/UOR-Framework wiki](https://github.com/UOR-Foundation/UOR-Framework/wiki),
 > ADR-035 (ψ-chain Term variants + ψ-residuals discipline), ADR-036
-> (ResolverTuple substitution-axis), and the canonical foundation
-> ontology artifacts shipped at
-> [v0.4.3 release assets](https://github.com/UOR-Foundation/UOR-Framework/releases/tag/v0.4.3)
+> (ResolverTuple substitution-axis), ADR-037 (`HostBounds`-parametric
+> capacity ceilings), and the canonical foundation ontology artifacts
+> shipped at
+> [v0.4.4 release assets](https://github.com/UOR-Foundation/UOR-Framework/releases/tag/v0.4.4)
 > (`uor.foundation.{ttl,jsonld,owl,nt}`, `uor.shapes.ttl`, `uor.term.ebnf`).
 
 ---
@@ -357,13 +358,19 @@ produce bytes, and the composition's final output is the label. The
 specific byte-level semantics of each ψ-stage for Bitcoin are part of
 prism-btc's design — see `crates/prism-btc/src/resolvers.rs`.
 
-### 9.3 Capacity ceilings
+### 9.3 Capacity ceilings — closed in 0.4.4
 
-`primitive_simplicial_nerve_betti<T: ConstrainedTypeShape>()`'s
-`NERVE_CONSTRAINTS_CAP = 8` and `NERVE_SITES_CAP = 8` are tight. If
-prism-btc's hierarchical feature decomposition produces a constraint
-nerve exceeding these caps, foundation must raise them or move the cap
-to a `HostBounds`-parametric constant.
+Foundation 0.4.4 (ADR-037) moved the previously hard-coded ceilings
+into `HostBounds`-parametric constants: `BETTI_DIMENSION_MAX`,
+`NERVE_CONSTRAINTS_MAX`, `NERVE_SITES_MAX`, `JACOBIAN_SITES_MAX`,
+`TERM_VALUE_MAX_BYTES`, `AXIS_OUTPUT_BYTES_MAX`, `FOLD_UNROLL_THRESHOLD`,
+`RECURSION_TRACE_DEPTH_MAX`, `OP_CHAIN_DEPTH_MAX`, `AFFINE_COEFFS_MAX`,
+`CONJUNCTION_TERMS_MAX`, `ROUTE_INPUT_BUFFER_BYTES`,
+`ROUTE_OUTPUT_BUFFER_BYTES`, `UNFOLD_ITERATIONS_MAX`, and the eight
+per-ψ-stage `*_OUTPUT_BYTES_MAX` ceilings. As prism-btc's hierarchical
+feature decomposition grows, [`PrismBtcBounds`](crates/prism-btc/src/shapes/bounds.rs)
+raises the relevant constants without changing the verb body or the
+model declaration.
 
 ### 9.4 Resolver-output bit width
 

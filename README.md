@@ -13,8 +13,9 @@ No σ-enumeration anywhere; mining is not an algorithm.
 >
 > **Substrate:** [UOR-Framework wiki](https://github.com/UOR-Foundation/UOR-Framework/wiki)
 > (ADR-035 ψ-chain Term variants + ψ-residuals discipline,
-> ADR-036 `ResolverTuple`) +
-> [foundation 0.4.3 release artifacts](https://github.com/UOR-Foundation/UOR-Framework/releases/tag/v0.4.3)
+> ADR-036 `ResolverTuple`, ADR-037 `HostBounds`-parametric capacity
+> ceilings) +
+> [foundation 0.4.4 release artifacts](https://github.com/UOR-Foundation/UOR-Framework/releases/tag/v0.4.4)
 > (`uor.foundation.{ttl,jsonld,owl,nt}`, `uor.shapes.ttl`, `uor.term.ebnf`).
 > Foundation 0.4.3's SDK enforces the ψ-residuals discipline at
 > proc-macro expansion: `<=` / `<` / `>=` / `>` / `concat(...)` /
