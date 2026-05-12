@@ -102,13 +102,18 @@ the typed inference admits; its `output_bytes()` carry the label.
 | `Hasher` | [`Sha256dHasher`](crates/prism-btc/src/shapes/hasher.rs) — pure-Rust SHA-256-then-SHA-256. The canonical hash axis is a **content-addressing primitive**, not an algorithm prism-btc runs. |
 | `ResolverTuple` | [`BitcoinResolverTuple`](crates/prism-btc/src/resolvers.rs) — Bitcoin-specific realization of the eight resolver-bound ψ-stages (ψ_1, ψ_2, ψ_3, ψ_5, ψ_6, ψ_7, ψ_8, ψ_9; ψ_4 Betti is resolver-free). |
 
-## Bit-identicality contract (architecture §6)
+## Bit-identicality + fail-closed contract (architecture §6)
 
-For any `MiningTask` derived from a Bitcoin Core `getblocktemplate`
-response, `BitcoinMiningModel::forward(task)` produces a
-`Grounded<MiningResult>` whose `output_bytes()` are byte-for-byte
-identical to a wire-format Bitcoin block that Bitcoin Core's
-`submitblock` RPC accepts for the corresponding template.
+`BitcoinMiningModel::forward(task)` always returns a
+`Grounded<MiningResult>` whose `output_bytes()` are exactly 80 bytes —
+the wire-format Bitcoin header. The host-boundary entry point
+`mine(header, target)` verifies that the κ-derived header's SHA-256d
+digest is lex-≤ `target` and only returns `Ok(MiningOutcome)` when
+admission holds; otherwise it returns `Err(MiningFailure::DidNotAdmit)`.
+
+**Valid input either produces a valid mined-block header or surfaces a
+`DidNotAdmit` for the host to handle.** `mine()` never returns a
+non-admitting outcome dressed as success.
 
 prism-btc's transform is structural (the ψ-pipeline); a traditional
 miner's transform is algorithmic (enumerate nonces, double-SHA-256,
@@ -116,6 +121,15 @@ compare to target). The two paths arrive at byte-for-byte equivalent
 wire-format output because both are determined by the same wire-format
 protocol — prism-btc declares the protocol structurally; the traditional
 miner discovers it by enumeration. The label is the same artifact.
+
+**Network-invariant.** Same `BitcoinMiningModel`, same ψ-pipeline verb
+body, same `BitcoinResolverTuple` across regtest, signet, testnet,
+testnet4, and mainnet. The network-dependent value is the runtime byte
+threshold from the template's `Bits` field; the host boundary
+(`prism-btc-node`) iterates over template-derived `MiningTask`
+variations (extranonce roll) until the deterministic ψ-pipeline lands
+on an admitting κ-derived header. The ψ-pipeline runs **once per
+`MiningTask` variation**, not per nonce.
 
 ## Foundation gaps the implementation surfaces
 

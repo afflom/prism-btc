@@ -230,26 +230,23 @@ is the canonical typed-iso surface. The `Grounded<MiningResult>` is the
 foundation-sealed certificate that the typed inference admits; its
 `output_bytes()` carry the label — the wire-format-valid Bitcoin block.
 
-## 6. Bit-identicality contract
+## 6. Bit-identicality and fail-closed contract
 
-**Invariant.** `BitcoinMiningModel::forward(task)` returns a
+**Invariant.** `BitcoinMiningModel::forward(task)` always returns a
 `Grounded<MiningResult>` whose `output_bytes()` are exactly 80 bytes —
 the wire-format Bitcoin header (`prefix(76) ‖ nonce(4 LE)`). The leading
 76 bytes are unchanged from `task.prefix`; the trailing 4 bytes are the
-κ-derived nonce. The host boundary's `mine()` reads these bytes
-directly and verifies admission against the template's target.
+κ-derived nonce.
 
-This is not a claim about path. prism-btc's transform is structural (the
-ψ-pipeline over Bitcoin's typed feature hierarchy); a traditional miner's
-transform is algorithmic (enumerate nonces, double-SHA-256, compare to
-target). For permissive targets, the κ-derived header admits
-deterministically; for restrictive targets, the host boundary (§7)
-iterates over template-derived `MiningTask` variations (extranonce roll,
-timestamp slack) until the deterministic κ-pipeline lands on an admitting
-witness. Across both regimes, every produced header is byte-for-byte
-indistinguishable from a wire-format header a traditional miner would
-submit — the label is the same artifact, derived through prism's
-structural pipeline.
+**Fail-closed.** The host-boundary `mine(header, target)` entry point
+verifies that the κ-derived header's SHA-256d digest is lexicographically
+≤ `target` and only returns `Ok(MiningOutcome)` when admission holds.
+When the deterministic κ-derivation lands on a non-admitting nonce,
+`mine` returns `Err(MiningFailure::DidNotAdmit)` — the host boundary
+(§7) varies the template-derived `MiningTask` and retries. **Valid
+input either produces a valid mined-block header or surfaces a
+`DidNotAdmit` for the host to handle.** `mine()` never returns a
+`MiningOutcome` whose header does not actually admit.
 
 The bit-identicality guarantee composes from the structural commitments:
 
@@ -267,24 +264,52 @@ The bit-identicality guarantee composes from the structural commitments:
 4. The boundary's submitblock assembly (§7) is byte-for-byte the same
    serialization a traditional miner uses.
 
+**Network-invariant.** The mining inference is identical across
+regtest, signet, testnet, testnet4, and mainnet: same
+`BitcoinMiningModel`, same ψ-pipeline verb body, same
+`BitcoinResolverTuple`. The network-dependent value is the runtime
+byte threshold encoded in the template's `Bits` field. For permissive
+regtest targets, the κ-derived header typically admits on the first
+template variation; for restrictive mainnet targets, the host boundary
+iterates extranonces (each producing a distinct `MiningTask` → distinct
+κ-derived header) until admission lands. In every regime, a returned
+`MiningOutcome`'s wire-format header genuinely satisfies the target —
+no compromises, no invalid output.
+
 ## 7. Host boundary
 
 `crates/prism-btc-node/` is the bitcoind boundary. It is **not** part of
 the transform; it adapts between prism's typed-iso surface and Bitcoin
-Core's JSON-RPC surface.
+Core's JSON-RPC surface, and it owns the **template-variation loop**
+that iterates `MiningTask` inputs until the deterministic ψ-pipeline
+lands on an admitting κ-derived header.
 
-The boundary's responsibilities:
+`PrismMiner::mine_one_block`'s loop:
 
-1. Call `getblocktemplate` and decode the response into a
-   `MiningTask` (the typed input to `BitcoinMiningModel::forward`).
-2. Compose the coinbase transaction with the user's payout address and a
-   chosen extranonce.
-3. Derive the `MerkleRoot` from the coinbase + the template's transaction
-   list.
-4. Invoke `BitcoinMiningModel::forward(task)`.
-5. Extract the label from `Grounded<MiningResult>::output_bytes()`,
-   assemble the wire-format Block (Header + TxCount + Transactions), and
-   submit via `submitblock`.
+1. Call `getblocktemplate` once per block attempt.
+2. Initialize `extranonce = 0`.
+3. Compose the coinbase transaction with the user's payout address and
+   the current extranonce (which lands in the coinbase's `scriptSig`).
+4. Derive the `MerkleRoot` from the modified coinbase + the template's
+   transaction list.
+5. Build a `MiningTask` from `(version, prev_hash, merkle_root,
+   timestamp, bits, decoded_target)`.
+6. Call `prism_btc::mine(header, target)`:
+   - `Ok(outcome)` ⇒ assemble the wire-format Block, submit via
+     `submitblock`, return summary.
+   - `Err(MiningFailure::DidNotAdmit)` ⇒ increment `extranonce`, goto
+     step 3. The wrapped extranonce (after `~10¹⁹` variations) signals
+     template exhaustion without admission — the chain has typically
+     advanced first, so the caller fetches a new template and retries.
+   - `Err(MiningFailure::PipelineFailure)` ⇒ propagate; the ψ-pipeline
+     rejected the typed input (should not happen for well-formed
+     templates).
+
+The boundary's loop is the wire-format adaptation; the typed-iso
+surface inside is pure-prism. The ψ-pipeline runs **once per
+`MiningTask` variation**, not per nonce — there is no
+nonce-enumeration anywhere; the resolved nonce is the deterministic
+κ-derived projection of the task's typed bytes.
 
 The pure-Rust SHA-256 helpers in `crates/prism-btc/src/ops/sha256.rs`,
 `ops/merkle.rs`, and `ops/header.rs` exist **only** to serialize bytes for

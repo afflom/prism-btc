@@ -68,7 +68,21 @@ impl PrismMiner {
         })
     }
 
-    /// Fetch a block template, mine it via [`prism_btc::mine`], submit, return summary.
+    /// Fetch a block template, drive the ψ-pipeline against template-
+    /// derived `MiningTask` variations until an admitting κ-label
+    /// lands, submit via `submitblock`, return the summary.
+    ///
+    /// The host boundary owns the template-variation loop
+    /// (architecture §7): it rolls the coinbase extranonce, which
+    /// changes the coinbase txid, which changes the `MerkleRoot`,
+    /// which changes the `TemplatePrefix`, which yields a new
+    /// `MiningTask` whose ψ-pipeline κ-derived header may admit.
+    /// prism-btc owns the per-task ψ-pipeline inference.
+    ///
+    /// This call blocks until an admitting variation is found,
+    /// `submitblock` rejects, or the u64 extranonce space wraps
+    /// (~10¹⁹ variations — typically reached only on adversarial
+    /// targets; for any real network the chain advances first).
     pub fn mine_one_block(&self) -> Result<MinedBlock> {
         let rules: &[GetBlockTemplateRules] = match self.network {
             Network::Signet => &[
@@ -93,37 +107,45 @@ impl PrismMiner {
             )
             .context("getblocktemplate RPC")?;
 
-        let job = MiningJob::from_template(&template, &self.payout_address)?;
+        let mut extranonce: u64 = 0;
+        loop {
+            let job = MiningJob::from_template_with_extranonce(
+                &template,
+                &self.payout_address,
+                extranonce,
+            )?;
 
-        // Delegate the mining inference to prism-btc — the prism
-        // implementor for Bitcoin. The boundary's job is template
-        // construction and submission; the mining algorithm runs
-        // through foundation's catamorphism.
-        let outcome = mine(&job.header, job.target).map_err(|e| match e {
-            MiningFailure::PipelineFailure => {
-                anyhow::anyhow!("foundation pipeline rejected the input")
+            // One ψ-pipeline inference per template variation. The
+            // resolver chain is deterministic; finding admission
+            // means finding the MiningTask variation whose κ-derived
+            // nonce satisfies the target.
+            match mine(&job.header, job.target) {
+                Ok(outcome) => {
+                    let block = job.assemble(outcome.nonce);
+                    self.client
+                        .submit_block(&block)
+                        .context("submitblock rejected")?;
+                    return Ok(MinedBlock {
+                        hash: block.block_hash(),
+                        height: template.height,
+                        nonce: outcome.nonce,
+                        witness: outcome.witness,
+                        tx_count: block.txdata.len(),
+                    });
+                }
+                Err(MiningFailure::DidNotAdmit) => {
+                    extranonce = extranonce.wrapping_add(1);
+                    if extranonce == 0 {
+                        anyhow::bail!(
+                            "u64 extranonce space exhausted for this template without admission"
+                        );
+                    }
+                }
+                Err(MiningFailure::PipelineFailure) => {
+                    anyhow::bail!("foundation pipeline rejected the input");
+                }
             }
-        })?;
-        if !outcome.admits {
-            anyhow::bail!(
-                "ψ-pipeline κ-label did not admit this template's target; \
-                 the bitcoind boundary may iterate over template-derived MiningTask variations"
-            );
         }
-
-        let block = job.assemble(outcome.nonce);
-
-        self.client
-            .submit_block(&block)
-            .context("submitblock rejected")?;
-
-        Ok(MinedBlock {
-            hash: block.block_hash(),
-            height: template.height,
-            nonce: outcome.nonce,
-            witness: outcome.witness,
-            tx_count: block.txdata.len(),
-        })
     }
 
     pub fn network(&self) -> Network {
@@ -154,10 +176,6 @@ pub(crate) struct MiningJob {
 }
 
 impl MiningJob {
-    pub(crate) fn from_template(tpl: &GetBlockTemplateResult, payout: &Address) -> Result<Self> {
-        Self::from_template_with_extranonce(tpl, payout, 0)
-    }
-
     pub(crate) fn from_template_with_extranonce(
         tpl: &GetBlockTemplateResult,
         payout: &Address,
