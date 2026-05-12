@@ -10,11 +10,15 @@ Proved at two Witt levels used by Bitcoin types:
 - W8  (Z/(2^8)Z)  — per-byte hash ring — exhaustive via `decide` (256 values)
 - W32 (Z/(2^32)Z) — nonce ring         — symbolic via `omega` + `simp`
 
-Division of labor with Rust:
-- The Rust `uor!` assertions in prism-btc-types/src/assertions.rs cover 4 spot checks
-  at compile time. These Lean proofs cover the full universal statement.
-- The Rust `ring_identity_u8` / `ring_identity_u32` functions in prism-btc-primitives
-  verify at runtime; these proofs verify formally.
+Division of labor with the Rust implementation:
+- The architectural commitment is that prism-btc's ψ-pipeline composes
+  only foundation's PrimitiveOp closure (ADR-013) and the canonical
+  ψ-chain Term variants (ADR-035); the ring identity is the load-
+  bearing algebraic fact behind ADR-013's closure soundness.
+- These Lean theorems cover the universal statement; foundation's
+  conformance suite + the verb-arena V&V tests
+  (`crates/prism-btc/tests/verification.rs` §1) pin the structural
+  invariants at the application level.
 -/
 
 -- Exhaustive proof for UInt8 (W8 level) — 256 values, decidable by computation

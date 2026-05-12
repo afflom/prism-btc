@@ -1,7 +1,7 @@
 //! prism-btc — the prism implementor for Bitcoin proof-of-work.
 //!
 //! Mining inference end-to-end through prism's typed-iso surface
-//! (foundation 0.4.2). The mining transform is the ψ-pipeline
+//! (foundation 0.4.5). The mining transform is the ψ-pipeline
 //! (wiki ADR-035) applied to Bitcoin's typed feature hierarchy
 //! (architecture §2); the catamorphism dispatches each resolver-bound
 //! ψ-stage through [`resolvers::BitcoinResolverTuple`] (ADR-036). No

@@ -157,7 +157,7 @@ The encoding is pinned by V&V tests in
 (§7: algebraic-structure invariants).
 
 The exact `ConstraintRef` encoding is one of foundation's catalog
-variants — see §9 for the gap analysis between what foundation 0.4.2 ships
+variants — see §9 for the substrate amendments foundation 0.4.5 ships
 in its closed `ConstraintRef` catalog and what the structural admission
 relation requires.
 
@@ -483,7 +483,7 @@ the typed carriers; the typed-iso surface now refuses any miswired
 | **TC-02 sealing** | Every `Datum`, `Triad`, `Derivation`, `FreeRank`, `Validated`, `Grounded`, `Certified` arrives via foundation's mint primitives or as a `pipeline::run_route` return value. prism-btc constructs zero sealed types directly. |
 | **TC-03 path singularity** | `BitcoinMiningModel::forward` (which delegates to `pipeline::run_route → pipeline::evaluate_term_tree`) is the only pathway to a `Grounded<MiningResult>`. `Grounded` is sealed; `MiningTag` is a phantom over it. |
 | **TC-04 declarative semantics** | The mining model is declarative: typed primitives + structural admission constraint + ψ-pipeline transform composition. No algorithmic body in prism-btc's code; the catamorphism evaluates the structural declaration. |
-| **TC-05 replayability** | The pipeline emits a `Trace` (foundation 0.4.2 `enforcement::trace`); `enforcement::replay::certify_from_trace` re-validates the typed inference structurally without invoking any hasher's hashing method or any decider written by prism-btc. |
+| **TC-05 replayability** | The pipeline emits a `Trace` (foundation 0.4.5 `enforcement::trace`); `enforcement::replay::certify_from_trace` re-validates the typed inference structurally without invoking any hasher's hashing method or any decider written by prism-btc. |
 | **TC-06 local execution** | Every stage executes locally on the user's hardware. No oracle, no service call, no remote evaluator. |
 
 ## 11. Cross-reference to UOR ontology
@@ -533,7 +533,7 @@ foundation classes.
   it does not iterate Nonce, does not invoke SHA-256d as an algorithmic
   step, does not "search."
 - **No `Term::FirstAdmit` usage in the mining verb body.** FirstAdmit is
-  a substrate primitive (foundation 0.4.2) for bounded structural search
+  a substrate primitive (foundation 0.4.5) for bounded structural search
   over small typed domains; it is not the mining transform.
 - **No traditional-miner complexity framing.** prism-btc's wall-clock
   cost is the cost of the parametric ψ-pipeline's catamorphism

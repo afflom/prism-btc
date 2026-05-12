@@ -1,7 +1,7 @@
 //! `BitcoinMiningModel` — prism-btc's `PrismModel<H, B, A, R>` declaration
 //! (wiki ADR-020 + ADR-036; architecture §5).
 //!
-//! The mining inference is end-to-end prism: foundation 0.4.2's
+//! The mining inference is end-to-end prism: foundation 0.4.5's
 //! catamorphism evaluates the ψ-chain verb arena
 //! ([`crate::verbs::mining_inference`]) dispatching each resolver-bound
 //! ψ-Term through [`crate::resolvers::BitcoinResolverTuple`]. There is

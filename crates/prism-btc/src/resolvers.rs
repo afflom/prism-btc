@@ -42,7 +42,7 @@
 
 use core::marker::PhantomData;
 
-use uor_foundation::enforcement::{Hasher, ShapeViolation, Term};
+use uor_foundation::enforcement::{Hasher, ShapeViolation};
 use uor_foundation::pipeline::{
     ChainComplexBytes, ChainComplexResolver, CochainComplexBytes, CochainComplexResolver,
     CohomologyGroupResolver, HomologyGroupResolver, HomotopyGroupResolver, HomotopyGroupsBytes,
@@ -431,8 +431,3 @@ const _: () = {
         "ψ_9 κ-label exceeds K_INVARIANTS_OUTPUT_BYTES_MAX"
     );
 };
-
-// Hush the unused-Term import in non-test builds without a separate
-// `#[allow]` block at the use site.
-#[allow(dead_code)]
-const _: Option<Term> = None;

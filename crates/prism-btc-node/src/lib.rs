@@ -1,13 +1,14 @@
 //! Bitcoin Core RPC integration for prism-btc.
 //!
 //! [`PrismMiner::mine_one_block`] is the entry point: fetch a template
-//! via `getblocktemplate`, invoke [`prism_btc::mine`] (which drives the
-//! W32 search through foundation 0.4.1's catamorphism end-to-end),
-//! assemble the wire-format block, and submit via `submitblock`.
+//! via `getblocktemplate`, then drive prism-btc's ψ-pipeline against
+//! template-derived `MiningTask` variations (extranonce roll) until an
+//! admitting κ-derived header lands; assemble the wire-format block
+//! and submit via `submitblock` (architecture §7).
 //!
 //! prism-btc owns the mining inference (the typed-iso surface
-//! foundation evaluates); rust-bitcoin owns the transaction / script /
-//! block container; this crate is the wiring.
+//! foundation 0.4.5's catamorphism evaluates); rust-bitcoin owns the
+//! transaction / script / block container; this crate is the wiring.
 
 use anyhow::{bail, Context, Result};
 use bitcoin::absolute::LockTime;

@@ -1,14 +1,20 @@
-//! prism-btc operations: host-side helpers for assembling the inputs
-//! the typed-iso surface evaluates.
+//! Host-boundary wire-format helpers.
 //!
-//! Foundation 0.4.1's catamorphism evaluates the
-//! [`crate::verbs::nonce_fiber_traversal`] verb's term arena
-//! end-to-end, so prism-btc no longer carries an implementor-side W32
-//! search runtime. What remains in `ops` is purely host-side wire
-//! assembly: pure-Rust SHA-256 (the algorithm body
-//! [`crate::shapes::hasher::Sha256dHasher`] uses internally), the
-//! 80-byte canonical header serializer, and the merkle-root reducer
-//! the bitcoind boundary uses for coinbase commitment.
+//! These are **not** part of the ψ-pipeline transform — they are
+//! host-side byte-assembly utilities the bitcoind boundary uses to
+//! materialise the wire-format Bitcoin block bytes for `submitblock`.
+//! The ψ-pipeline's resolver chain produces the 80-byte κ-label
+//! (architecture §6); the helpers here serialize headers, derive the
+//! coinbase merkle root, and compute SHA-256d digests at the host
+//! boundary (architecture §7).
+//!
+//! - [`header`] — canonical 80-byte header serialization +
+//!   nonce-splicing.
+//! - [`merkle`] — pairwise-SHA-256d merkle root reduction over
+//!   transaction txids.
+//! - [`sha256`] — pure-Rust SHA-256 / SHA-256d (the algorithm body
+//!   [`crate::shapes::hasher::Sha256dHasher`] uses internally for the
+//!   canonical hash axis).
 
 pub mod header;
 pub mod merkle;
