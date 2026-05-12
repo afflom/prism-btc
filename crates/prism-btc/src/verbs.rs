@@ -112,6 +112,12 @@ mod tests {
         // Concat, or AxisInvocation. The canonical hash axis is consumed
         // by resolvers (architecture §3) — never by the verb body's term
         // composition.
+        //
+        // Foundation 0.4.3's SDK enforces this discipline at proc-macro
+        // expansion time (architecture §9.0); any future regression to a
+        // σ-residual form would fail at compile time. This test pins the
+        // emitted-arena invariant as a belt-and-suspenders check against
+        // SDK-emission anomalies.
         let arena = mining_inference_term_arena();
         let has_first_admit = arena.iter().any(|t| matches!(t, Term::FirstAdmit { .. }));
         let has_axis_invocation = arena

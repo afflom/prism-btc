@@ -621,9 +621,9 @@ dependencies = [
 
 [[package]]
 name = "nix"
-version = "0.31.2"
+version = "0.31.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d6d0705320c1e6ba1d912b5e37cf18071b6c2e9b7fa8215a1e8a7651966f5d3"
+checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
 dependencies = [
  "bitflags",
  "cfg-if",
@@ -1070,18 +1070,18 @@ checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
 
 [[package]]
 name = "uor-foundation"
-version = "0.4.2"
+version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60ada9c763aa32c0fb55aa7a6434188860607aad41283db9f41979dbc5c9f413"
+checksum = "fd3d2c982775f5e46418c519e9190ad981f42a2c085ff502b560eca993f3e254"
 dependencies = [
  "libm",
 ]
 
 [[package]]
 name = "uor-foundation-sdk"
-version = "0.4.2"
+version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94a12cb52cb99792e2f3db29b7967404fcd82baf5d53bfb2742624992243342e"
+checksum = "b0eebd25996c6c2641eb7903942725d18c1cea340e50c78fdd2fd9981b40eda5"
 dependencies = [
  "proc-macro2",
  "quote",

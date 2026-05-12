@@ -12,9 +12,16 @@ No σ-enumeration anywhere; mining is not an algorithm.
 > specification.
 >
 > **Substrate:** [UOR-Framework wiki](https://github.com/UOR-Foundation/UOR-Framework/wiki)
-> (ADR-035 ψ-chain Term variants, ADR-036 `ResolverTuple`) +
-> [foundation 0.4.2 ontology release artifacts](https://github.com/UOR-Foundation/UOR-Framework/releases/tag/v0.4.2)
+> (ADR-035 ψ-chain Term variants + ψ-residuals discipline,
+> ADR-036 `ResolverTuple`) +
+> [foundation 0.4.3 release artifacts](https://github.com/UOR-Foundation/UOR-Framework/releases/tag/v0.4.3)
 > (`uor.foundation.{ttl,jsonld,owl,nt}`, `uor.shapes.ttl`, `uor.term.ebnf`).
+> Foundation 0.4.3's SDK enforces the ψ-residuals discipline at
+> proc-macro expansion: `<=` / `<` / `>=` / `>` / `concat(...)` /
+> `first_admit(...)` / `hash(...)` are rejected in verb bodies with
+> error messages naming `k_invariants(homotopy_groups(postnikov_tower(
+> nerve(input))))` as the canonical compiled form. prism-btc's verb body
+> is exactly that — the discipline is substrate-enforced.
 
 ## The architectural commitment
 

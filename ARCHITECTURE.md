@@ -11,9 +11,10 @@
 
 > **Normative references.**
 > [UOR-Foundation/UOR-Framework wiki](https://github.com/UOR-Foundation/UOR-Framework/wiki),
-> ADR-035 (ψ-chain Term variants), ADR-036 (ResolverTuple substitution-axis),
-> and the canonical foundation ontology artifacts shipped at
-> [v0.4.2 release assets](https://github.com/UOR-Foundation/UOR-Framework/releases/tag/v0.4.2)
+> ADR-035 (ψ-chain Term variants + ψ-residuals discipline), ADR-036
+> (ResolverTuple substitution-axis), and the canonical foundation
+> ontology artifacts shipped at
+> [v0.4.3 release assets](https://github.com/UOR-Foundation/UOR-Framework/releases/tag/v0.4.3)
 > (`uor.foundation.{ttl,jsonld,owl,nt}`, `uor.shapes.ttl`, `uor.term.ebnf`).
 
 ---
@@ -43,10 +44,11 @@ prism declares the universal vocabulary for typed structural inference:
   the chain is monoidal composition of these functors. Foundation 0.4.2
   ships the chain as `Term::{Nerve, ChainComplex, HomologyGroups, Betti,
   CochainComplex, CohomologyGroups, PostnikovTower, HomotopyGroups,
-  KInvariants}`. Eight of the nine are *resolver-bound* through the
-  application's `ResolverTuple` (ψ_4 Betti is resolver-free byte
-  projection); the catamorphism dispatches each stage through the
-  application-supplied resolver.
+  KInvariants}`; foundation 0.4.3's SDK enforces the ψ-residuals
+  discipline at proc-macro expansion (architecture §9.0). Eight of the
+  nine are *resolver-bound* through the application's `ResolverTuple`
+  (ψ_4 Betti is resolver-free byte projection); the catamorphism
+  dispatches each stage through the application-supplied resolver.
 - **Label generation** — applying the ψ-pipeline to a typed input produces
   a structural witness — the **label**. The label is the output bytes the
   parametric transformation generates. For Bitcoin, the label IS the
@@ -299,6 +301,22 @@ prism-btc's pure-prism architecture exercises foundation surfaces at the
 edge of what's currently expressible. The gaps below are surfaced by the
 implementation and proposed as upstream amendments to
 `UOR-Foundation/UOR-Framework`.
+
+### 9.0 ψ-residuals discipline — closed in 0.4.3
+
+Foundation 0.4.3's SDK enforces the ψ-residuals discipline at
+proc-macro expansion time: the `verb!` and `prism_model!` closure-body
+parsers reject `<=` / `<` / `>=` / `>` (byte-comparison ops), `concat(...)`
+(`PrimitiveOp::Concat` application), `first_admit(...)` (ψ-enumeration
+over a counter domain), and `hash(...)` (axis dispatch from a verb body)
+with explicit error messages that name `k_invariants(homotopy_groups(
+postnikov_tower(nerve(input))))` as the canonical compiled form. The
+substrate additionally enforces ψ-chain receiver-shape compatibility
+(ADR-035: `chain_complex` requires a `SimplicialComplex` operand,
+`homology_groups` requires a `ChainComplex` operand, …) at macro
+expansion. prism-btc's pure-prism architecture is now substrate-enforced;
+the discipline cannot regress to σ-residual forms without a build-time
+failure naming the violation.
 
 ### 9.1 Structural admission encoding
 
