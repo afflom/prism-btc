@@ -35,19 +35,30 @@ impl HostBounds for PrismBtcBounds {
     const TRACE_MAX_EVENTS: usize = 64;
     const WITT_LEVEL_MAX_BITS: u32 = 32;
 
-    // ADR-037 catamorphism ceilings — track foundation defaults until
-    // prism-btc's feature decomposition needs to grow them.
+    // ADR-037 catamorphism ceilings — track foundation defaults except
+    // where prism-btc's algebraic-closure target (architecture §2.3
+    // IT_7d: χ(N(C)) = SITE_COUNT, β_k = 0) demands a wider constraint
+    // geometry. The wire-format Bitcoin header's 80-site `MiningResult`
+    // implies a constraint nerve over up to 80 vertices; the algebraic-
+    // closure expressibility scales with these caps. Foundation 0.4.5's
+    // `primitive_simplicial_nerve_betti<T>` currently consults
+    // `DefaultHostBounds`'s `NERVE_CONSTRAINTS_MAX = NERVE_SITES_MAX =
+    // 8` directly (the primitive is not yet `HostBounds`-parametric);
+    // raising prism-btc's caps here is the application-side declaration
+    // of the algebraic-closure target. When foundation's nerve
+    // primitive becomes `HostBounds`-parametric, this declaration is
+    // the binding ceiling.
     const TERM_VALUE_MAX_BYTES: usize = 4096;
     const AXIS_OUTPUT_BYTES_MAX: usize = 4096;
     const FOLD_UNROLL_THRESHOLD: usize = 8;
-    const BETTI_DIMENSION_MAX: usize = 8;
-    const NERVE_CONSTRAINTS_MAX: usize = 8;
-    const NERVE_SITES_MAX: usize = 8;
-    const JACOBIAN_SITES_MAX: usize = 8;
+    const BETTI_DIMENSION_MAX: usize = 80;
+    const NERVE_CONSTRAINTS_MAX: usize = 128;
+    const NERVE_SITES_MAX: usize = 80;
+    const JACOBIAN_SITES_MAX: usize = 80;
     const RECURSION_TRACE_DEPTH_MAX: usize = 16;
     const OP_CHAIN_DEPTH_MAX: usize = 8;
-    const AFFINE_COEFFS_MAX: usize = 8;
-    const CONJUNCTION_TERMS_MAX: usize = 8;
+    const AFFINE_COEFFS_MAX: usize = 80;
+    const CONJUNCTION_TERMS_MAX: usize = 128;
     const ROUTE_INPUT_BUFFER_BYTES: usize = 4096;
     const ROUTE_OUTPUT_BUFFER_BYTES: usize = 4096;
     const UNFOLD_ITERATIONS_MAX: usize = 256;

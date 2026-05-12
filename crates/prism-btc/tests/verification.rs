@@ -25,11 +25,11 @@
 
 use prism_btc::{
     mine, serialize_header, sha256d_display, BitcoinMiningModel, BitcoinResolverTuple, Bits,
-    BlockHeader, MerkleRoot, MiningFailure, MiningTask, PrismBtcBounds, Sha256dHasher, Target,
-    Timestamp, Version, VERB_TERMS_MINING_INFERENCE,
+    BlockHeader, MerkleRoot, MiningFailure, MiningResult, MiningTask, PrismBtcBounds,
+    Sha256dHasher, Target, Timestamp, Version, VERB_TERMS_MINING_INFERENCE,
 };
 use uor_foundation::enforcement::Term;
-use uor_foundation::pipeline::PrismModel;
+use uor_foundation::pipeline::{ConstrainedTypeShape, ConstraintRef, PrismModel};
 use uor_foundation::DefaultHostTypes;
 
 fn canonical_header(version: u32, timestamp: u32, bits: u32) -> BlockHeader {
@@ -349,4 +349,94 @@ fn v_compile_unit_fingerprint_identifies_the_typed_iso_path() {
     assert_eq!(ga.unit_address(), gb.unit_address());
     assert_eq!(ga.witt_level_bits(), gb.witt_level_bits());
     assert_eq!(ga.witt_level_bits(), 32);
+}
+
+// ─── §7. Algebraic structure of MiningResult::CONSTRAINTS ──────────────
+
+#[test]
+fn v_mining_result_constraints_have_eight_atomic_instances() {
+    // Architecture §2.3: the algebraic encoding declares exactly 8
+    // top-level `ConstraintRef` instances — 4 `Site` constraints
+    // pinning the nonce sites + 4 `Carry` constraints encoding the
+    // Witt-tower carry structure on those sites. This is the
+    // foundation-cap-bounded admissible model
+    // (NERVE_CONSTRAINTS_CAP = 8 under DefaultHostBounds).
+    let cs = <MiningResult as ConstrainedTypeShape>::CONSTRAINTS;
+    assert_eq!(cs.len(), 8);
+}
+
+#[test]
+fn v_constraint_nerve_has_four_one_simplices_no_higher() {
+    // Architecture §2.3: the constraint nerve N(C) has vertices = the
+    // 8 constraints. Each (Site_i, Carry_i) pair shares site i and
+    // forms a 1-simplex; constraints across different nonce-byte
+    // indices have disjoint support. So |0-simplices| = 8,
+    // |1-simplices| = 4, no higher simplices. Euler characteristic
+    // χ = 8 - 4 = 4. (The algebraic-closure target χ = 80 requires
+    // foundation-cap expansion; this test pins the
+    // foundation-cap-bounded model.)
+    let cs = <MiningResult as ConstrainedTypeShape>::CONSTRAINTS;
+
+    fn site_support(c: &ConstraintRef) -> Option<u32> {
+        match c {
+            ConstraintRef::Site { position } => Some(*position),
+            ConstraintRef::Carry { site } => Some(*site),
+            _ => None,
+        }
+    }
+
+    let mut overlaps = 0usize;
+    for i in 0..cs.len() {
+        for j in (i + 1)..cs.len() {
+            match (site_support(&cs[i]), site_support(&cs[j])) {
+                (Some(a), Some(b)) if a == b => overlaps += 1,
+                _ => {}
+            }
+        }
+    }
+    assert_eq!(
+        overlaps, 4,
+        "exactly 4 (Site_i, Carry_i) pairs share site support"
+    );
+}
+
+#[test]
+fn v_constraint_site_supports_lie_in_the_nonce_field() {
+    // Architecture §2.3: the algebraic encoding's site support lives
+    // entirely in the nonce-field byte range [76..80) of the
+    // wire-format header. The 76 template-prefix bytes are
+    // unconstrained at the type-shape level — they are pinned by the
+    // host-supplied template at runtime (via MiningTask's `prefix`
+    // factor of the partition_product).
+    let cs = <MiningResult as ConstrainedTypeShape>::CONSTRAINTS;
+    for c in cs {
+        let site = match c {
+            ConstraintRef::Site { position } => *position,
+            ConstraintRef::Carry { site } => *site,
+            other => {
+                panic!("unexpected constraint variant in MiningResult::CONSTRAINTS: {other:?}")
+            }
+        };
+        assert!(
+            (76..80).contains(&site),
+            "constraint site {site} must lie in the nonce field [76, 80)"
+        );
+    }
+}
+
+#[test]
+fn v_prism_btc_bounds_declare_algebraic_closure_target() {
+    // Architecture §2.3 + §9.3: PrismBtcBounds declares prism-btc's
+    // algebraic-closure target ceilings (NERVE_CONSTRAINTS_MAX = 128,
+    // NERVE_SITES_MAX = 80, AFFINE_COEFFS_MAX = 80, etc.) — the
+    // application-side binding ceiling that becomes the operational
+    // cap when foundation's nerve primitive becomes HostBounds-
+    // parametric. Pin the architectural target here.
+    use uor_foundation::HostBounds;
+    const _: () = {
+        assert!(<PrismBtcBounds as HostBounds>::NERVE_SITES_MAX >= 80);
+        assert!(<PrismBtcBounds as HostBounds>::NERVE_CONSTRAINTS_MAX >= 80);
+        assert!(<PrismBtcBounds as HostBounds>::BETTI_DIMENSION_MAX >= 80);
+        assert!(<PrismBtcBounds as HostBounds>::AFFINE_COEFFS_MAX >= 80);
+    };
 }

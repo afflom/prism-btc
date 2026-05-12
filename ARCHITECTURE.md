@@ -97,16 +97,64 @@ is the sequenced concatenation of its factors under
 `partition:PartitionProduct`'s structural-operad-governed nesting
 (`operad:StructuralOperad`).
 
-### 2.3 The admission constraint
+### 2.3 The admission constraint — algebraic encoding via homology + cohomology
 
-The structural admission relation lives on `MiningResult::CONSTRAINTS`
-as a `ConstraintRef::Hamming { bound: 256 }` instance from the closed
-catalog. The relation is structural, not algorithmic: we do not say
-"iterate Nonce until SHA-256d(Header) ≤ Target." We declare *the
-structural relationship* on the typed surface, and let the ψ-pipeline
-observe it. Foundation's `primitive_simplicial_nerve_betti<MiningResult>()`
-reads this CONSTRAINTS list and constructs the constraint nerve the
-catamorphism folds through the resolver-bound ψ-stages.
+`MiningResult::CONSTRAINTS` algebraically encodes the wire-format
+Bitcoin header's structural admission relation using foundation's
+closed `ConstraintRef` catalog (8 atomic constraints — 4 `Site` + 4
+`Carry`). The encoding is **template-invariant**: the constraint list
+is a compile-time `&'static [ConstraintRef]` declaring the algebraic
+shape of valid Bitcoin headers; the runtime `(prefix, target)`
+parameterizes specific values that the ψ-pipeline's resolver chain
+materializes into the κ-label.
+
+| # | Constraint | Site | Role |
+|---|---|---|---|
+| 1 | `Site { position: 76 }` | nonce byte 0 | Declare the nonce-byte site is constrained by the algebra |
+| 2 | `Site { position: 77 }` | nonce byte 1 | same |
+| 3 | `Site { position: 78 }` | nonce byte 2 | same |
+| 4 | `Site { position: 79 }` | nonce byte 3 | same |
+| 5 | `Carry { site: 76 }` | nonce byte 0 | Witt-tower carry-propagation structure of SHA-256d at this byte |
+| 6 | `Carry { site: 77 }` | nonce byte 1 | same |
+| 7 | `Carry { site: 78 }` | nonce byte 2 | same |
+| 8 | `Carry { site: 79 }` | nonce byte 3 | same |
+
+The four 76-byte template-prefix sites are unconstrained at the
+type-shape level — they are pinned by the host-supplied template at
+runtime via `MiningTask.prefix` (the partition_product factor).
+
+**The constraint nerve N(C)** (architecture §2.3, IT_7d): vertices =
+the 8 constraints; 1-simplices = constraint pairs with intersecting
+site support. Each `(Site_i, Carry_i)` pair shares site `i` and forms
+an edge; constraints across different nonce-byte indices have disjoint
+support and form no edges. The nerve is four disjoint edges over the
+four nonce-byte indices: **β_0 = 4, β_k = 0 for k ≥ 1, χ = 4**.
+
+**Algebraic-closure target.** The UOR Index Theorem
+([`docs/content/concepts/analytical-completeness.md`](https://github.com/UOR-Foundation/UOR-Framework/blob/main/docs/content/concepts/analytical-completeness.md))'s
+identity IT_7d states: *resolution is complete iff χ(N(C)) = n and
+all β_k = 0 for k ≥ 1*. The canonical target for prism-btc is
+χ(N(`MiningResult::CONSTRAINTS`)) = 80 (the `SITE_COUNT`) with no
+higher-dimensional voids — at which point IT_7c gives resolution cost
+≥ 0, the constraint geometry uniquely determines the inhabitant, and
+the ψ-pipeline computes the κ-label by direct algebraic projection.
+
+**Foundation capacity gap.** Foundation 0.4.5's
+`primitive_simplicial_nerve_betti<T>` reads `DefaultHostBounds`'s
+`NERVE_CONSTRAINTS_MAX = NERVE_SITES_MAX = 8` directly (the primitive
+is not yet `HostBounds`-parametric). The 8-constraint encoding above
+is the foundation-cap-bounded admissible model; expanding it to the
+80-site disjoint encoding the algebraic-closure target requires
+foundation's nerve primitive to consume the application's `HostBounds`
+caps. prism-btc's `PrismBtcBounds` declares the binding ceiling
+(`NERVE_CONSTRAINTS_MAX = 128`, `NERVE_SITES_MAX = 80`,
+`BETTI_DIMENSION_MAX = 80`, `AFFINE_COEFFS_MAX = 80`,
+`CONJUNCTION_TERMS_MAX = 128`) — the application-side declaration
+that becomes operational when the primitive scales with `HostBounds`.
+
+The encoding is pinned by V&V tests in
+[`crates/prism-btc/tests/verification.rs`](crates/prism-btc/tests/verification.rs)
+(§7: algebraic-structure invariants).
 
 The exact `ConstraintRef` encoding is one of foundation's catalog
 variants — see §9 for the gap analysis between what foundation 0.4.2 ships

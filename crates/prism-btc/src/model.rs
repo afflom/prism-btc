@@ -188,21 +188,65 @@ impl PartitionProductFields for MiningTask {
 // emits an 80-byte κ-label whose bytes ARE the wire-format Bitcoin
 // header by construction (architecture §6 bit-identicality contract).
 //
-// `MiningResult::CONSTRAINTS` carries one `ConstraintRef::Hamming` —
-// the structural admission encoding currently expressible in
-// foundation 0.4.5's closed catalog. The Hamming bound names "the
-// digest's bit-weight is ≤ 256" (trivially-true for a 32-byte hash);
-// the load-bearing structural admission relation lives in
-// [`crate::verbs::mining_inference`]'s ψ-chain composition over this
-// nerve. Foundation's `primitive_simplicial_nerve_betti<MiningResult>()`
-// reads this CONSTRAINTS list and produces the constraint nerve the
-// catamorphism evaluates.
+// `MiningResult::CONSTRAINTS` algebraically encodes the wire-format
+// Bitcoin header's structural admission relation using foundation
+// 0.4.5's closed `ConstraintRef` catalog (architecture §2.3). The
+// encoding is **template-invariant**: a compile-time
+// `&'static [ConstraintRef]` declaring the algebraic shape of valid
+// Bitcoin headers; the runtime `(prefix, target)` parameterize specific
+// values that the ψ-pipeline's resolver chain materializes into the
+// κ-label.
+//
+// The eight constraints divide as:
+//   - 4 `Site` constraints pinning each of the four nonce-byte sites
+//     (positions 76, 77, 78, 79 in the wire-format header)
+//   - 4 `Carry` constraints encoding the per-nonce-byte carry-
+//     propagation structure that the Witt-tower decomposition of
+//     SHA-256d's round arithmetic induces (architecture §2.3 +
+//     algebraic-laws.md CA_1..CA_6, WC_1..WC_12)
+//
+// The constraint nerve N(C): vertices = the 8 constraints; 1-simplices
+// = constraint pairs with intersecting site support. Each (Site_i,
+// Carry_i) pair shares site i and forms an edge; constraints across
+// different nonce-byte indices have disjoint support and form no edges.
+// The nerve is therefore four disjoint edges over the four nonce-byte
+// indices: β_0 = 4, β_k = 0 for k ≥ 1, χ = 4.
+//
+// **Algebraic-closure target** (architecture §2.3, IT_7d): the canonical
+// criterion is χ(N(C)) = SITE_COUNT and β_k = 0 for k ≥ 1. For
+// `MiningResult`'s 80 sites this requires up to 80 disjoint
+// constraints, which exceeds foundation 0.4.5's
+// `NERVE_CONSTRAINTS_CAP = NERVE_SITES_CAP = 8` (the primitive
+// `primitive_simplicial_nerve_betti<T>` reads these from
+// `DefaultHostBounds` directly, not from the application's
+// `HostBounds`). The current 8-constraint encoding is the
+// foundation-cap-bounded admissible model; the algebraic-closure
+// target is the binding ceiling [`PrismBtcBounds`](crate::shapes::bounds)
+// declares.
 output_shape! {
     pub struct MiningResult;
     impl ConstrainedTypeShape for MiningResult {
         const IRI: &'static str = "https://prism.btc/shape/MiningResult";
         const SITE_COUNT: usize = 80;
-        const CONSTRAINTS: &'static [ConstraintRef] = &[ConstraintRef::Hamming { bound: 256 }];
+        const CONSTRAINTS: &'static [ConstraintRef] = &[
+            // Pin the four nonce sites (positions 76..80 in the
+            // wire-format header). The Site constraint declares that
+            // these sites are constrained by the algebra — their
+            // values are materialized by the ψ-chain's resolver chain.
+            ConstraintRef::Site { position: 76 },
+            ConstraintRef::Site { position: 77 },
+            ConstraintRef::Site { position: 78 },
+            ConstraintRef::Site { position: 79 },
+            // Carry-propagation structure on each nonce site
+            // encoding the Witt-tower decomposition of SHA-256d's
+            // round arithmetic at byte i. The carry constraint's
+            // single-site support pairs with the corresponding Site
+            // constraint to form one 1-simplex in the nerve.
+            ConstraintRef::Carry { site: 76 },
+            ConstraintRef::Carry { site: 77 },
+            ConstraintRef::Carry { site: 78 },
+            ConstraintRef::Carry { site: 79 },
+        ];
     }
 }
 
@@ -281,9 +325,44 @@ mod tests {
     #[test]
     fn mining_result_carries_structural_admission_constraint() {
         // Architecture §2.3: MiningResult::CONSTRAINTS carries the
-        // structural admission encoding. Foundation's
+        // structural admission encoding — 8 constraints (4 Site + 4
+        // Carry) covering the four nonce-byte sites. Foundation's
         // `primitive_simplicial_nerve_betti<MiningResult>()` reads this
         // list and constructs the constraint nerve the ψ-chain folds.
-        assert!(!<MiningResult as ConstrainedTypeShape>::CONSTRAINTS.is_empty());
+        let cs = <MiningResult as ConstrainedTypeShape>::CONSTRAINTS;
+        assert_eq!(cs.len(), 8, "8 constraints (4 Site + 4 Carry)");
+    }
+
+    #[test]
+    fn mining_result_constraints_pin_the_four_nonce_sites() {
+        // Architecture §2.3: the four `Site` constraints pin positions
+        // 76, 77, 78, 79 — the Bitcoin nonce-field bytes in the
+        // wire-format header (`prefix(76) ‖ nonce(4 LE)`).
+        let cs = <MiningResult as ConstrainedTypeShape>::CONSTRAINTS;
+        let site_positions: Vec<u32> = cs
+            .iter()
+            .filter_map(|c| match c {
+                ConstraintRef::Site { position } => Some(*position),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(site_positions, vec![76, 77, 78, 79]);
+    }
+
+    #[test]
+    fn mining_result_constraints_encode_carry_structure_on_nonce_bytes() {
+        // Architecture §2.3: the four `Carry` constraints encode the
+        // Witt-tower carry-propagation structure on the nonce bytes —
+        // the algebraic content of SHA-256d's round arithmetic per
+        // algebraic-laws.md CA_1..CA_6 / WC_1..WC_12.
+        let cs = <MiningResult as ConstrainedTypeShape>::CONSTRAINTS;
+        let carry_sites: Vec<u32> = cs
+            .iter()
+            .filter_map(|c| match c {
+                ConstraintRef::Carry { site } => Some(*site),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(carry_sites, vec![76, 77, 78, 79]);
     }
 }
