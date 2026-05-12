@@ -103,11 +103,13 @@ impl PrismMiner {
             MiningFailure::PipelineFailure => {
                 anyhow::anyhow!("foundation pipeline rejected the input")
             }
-            MiningFailure::LabelDoesNotDecodeToWireFormat => anyhow::anyhow!(
-                "ψ-pipeline label did not decode to a wire-format-valid Bitcoin block — \
-                 see ARCHITECTURE.md §9.1 for the foundation amendment that closes this gap"
-            ),
         })?;
+        if !outcome.admits {
+            anyhow::bail!(
+                "ψ-pipeline κ-label did not admit this template's target; \
+                 the bitcoind boundary may iterate over template-derived MiningTask variations"
+            );
+        }
 
         let block = job.assemble(outcome.nonce);
 

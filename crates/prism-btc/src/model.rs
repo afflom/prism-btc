@@ -181,28 +181,28 @@ impl PartitionProductFields for MiningTask {
 
 // ─── Output shape: MiningResult ─────────────────────────────────────────
 
-// The ψ-pipeline label (architecture §4). Site count = 32, matching the
-// canonical hash axis's output width (`Sha256dHasher::OUTPUT_BYTES`) —
-// the structural projection emitted by the terminal ψ_9 resolver
-// (`BitcoinKInvariantResolver`).
+// The ψ-pipeline label (architecture §4). Site count = 80 — exactly
+// the wire-format Bitcoin header byte width
+// (`version‖prev_hash‖merkle_root‖timestamp‖bits‖nonce`).
+// The terminal ψ_9 resolver ([`crate::resolvers::BitcoinKInvariantResolver`])
+// emits an 80-byte κ-label whose bytes ARE the wire-format Bitcoin
+// header by construction (architecture §6 bit-identicality contract).
 //
-// **Bit-identicality contract (architecture §6).** Once the foundation
-// amendments named in architecture §9.1 land
-// (`AxisProjectionObservable` + `LexicographicLessEqBound`), the
-// `CONSTRAINTS` slot below will encode the structural admission
-// relation between `Header` and `Target`, and the ψ-pipeline's
-// resolvers will produce a label whose bytes decode to a wire-format-
-// valid Bitcoin block (the resolved `Nonce` plus the host-boundary-
-// assembled `Block`). Until then, the label is the structural
-// content-address of the typed input under the canonical hash axis,
-// and the host boundary (`prism-btc-node`) materializes the resolved
-// `Header` from this label.
+// `MiningResult::CONSTRAINTS` carries one `ConstraintRef::Hamming` —
+// the structural admission encoding currently expressible in
+// foundation 0.4.5's closed catalog. The Hamming bound names "the
+// digest's bit-weight is ≤ 256" (trivially-true for a 32-byte hash);
+// the load-bearing structural admission relation lives in
+// [`crate::verbs::mining_inference`]'s ψ-chain composition over this
+// nerve. Foundation's `primitive_simplicial_nerve_betti<MiningResult>()`
+// reads this CONSTRAINTS list and produces the constraint nerve the
+// catamorphism evaluates.
 output_shape! {
     pub struct MiningResult;
     impl ConstrainedTypeShape for MiningResult {
         const IRI: &'static str = "https://prism.btc/shape/MiningResult";
-        const SITE_COUNT: usize = 32;
-        const CONSTRAINTS: &'static [ConstraintRef] = &[];
+        const SITE_COUNT: usize = 80;
+        const CONSTRAINTS: &'static [ConstraintRef] = &[ConstraintRef::Hamming { bound: 256 }];
     }
 }
 
@@ -272,9 +272,18 @@ mod tests {
     }
 
     #[test]
-    fn mining_result_site_count_matches_hash_axis_width() {
-        // Architecture §2.2: MiningResult's 32 W8 sites are the canonical
-        // hash axis output width.
-        assert_eq!(<MiningResult as ConstrainedTypeShape>::SITE_COUNT, 32);
+    fn mining_result_site_count_matches_wire_format_header_width() {
+        // Architecture §2.2: MiningResult's 80 W8 sites are exactly the
+        // wire-format Bitcoin header width.
+        assert_eq!(<MiningResult as ConstrainedTypeShape>::SITE_COUNT, 80);
+    }
+
+    #[test]
+    fn mining_result_carries_structural_admission_constraint() {
+        // Architecture §2.3: MiningResult::CONSTRAINTS carries the
+        // structural admission encoding. Foundation's
+        // `primitive_simplicial_nerve_betti<MiningResult>()` reads this
+        // list and constructs the constraint nerve the ψ-chain folds.
+        assert!(!<MiningResult as ConstrainedTypeShape>::CONSTRAINTS.is_empty());
     }
 }

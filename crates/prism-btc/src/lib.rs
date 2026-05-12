@@ -42,7 +42,7 @@ pub use domain::{
     TriadicCoords, Version,
 };
 pub use model::{BitcoinMiningModel, BitcoinMiningRoute, MiningResult, MiningTask, TemplatePrefix};
-pub use pipeline::{block_hash_grounded, mine, MiningFailure, MiningOutcome};
+pub use pipeline::{mine, MiningFailure, MiningOutcome};
 pub use resolvers::{
     BitcoinChainComplexResolver, BitcoinCochainComplexResolver, BitcoinCohomologyGroupResolver,
     BitcoinHomologyGroupResolver, BitcoinHomotopyGroupResolver, BitcoinKInvariantResolver,
