@@ -1070,18 +1070,18 @@ checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
 
 [[package]]
 name = "uor-foundation"
-version = "0.4.4"
+version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f11ee338210393d7c4a60297ebfb49b65b2d5b8c5ad4786c0985ffbcb36a548f"
+checksum = "e78ac6de65d602dc3997447b7f2ed11b02070518ffb8b119e3ffc1bebd6cf0de"
 dependencies = [
  "libm",
 ]
 
 [[package]]
 name = "uor-foundation-sdk"
-version = "0.4.4"
+version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85f0dd8a29d493262a4678c1dc70750f6012232c140041a26139c7148907fb4e"
+checksum = "3999b08eb2b860561f6278a2a09da091c70a0daaf900553b513e61a224de58cd"
 dependencies = [
  "proc-macro2",
  "quote",

@@ -35,8 +35,10 @@ use core::marker::PhantomData;
 
 use uor_foundation::enforcement::{Hasher, ShapeViolation};
 use uor_foundation::pipeline::{
-    ChainComplexResolver, CochainComplexResolver, CohomologyGroupResolver, HomologyGroupResolver,
-    HomotopyGroupResolver, KInvariantResolver, NerveResolver, PostnikovResolver,
+    ChainComplexBytes, ChainComplexResolver, CochainComplexBytes, CochainComplexResolver,
+    CohomologyGroupResolver, HomologyGroupResolver, HomotopyGroupResolver, HomotopyGroupsBytes,
+    KInvariantResolver, NerveResolver, PostnikovResolver, PostnikovTowerBytes,
+    SimplicialComplexBytes,
 };
 use uor_foundation_sdk::resolver;
 
@@ -69,6 +71,9 @@ pub struct BitcoinNerveResolver<H>(PhantomData<H>);
 impl<H: Hasher> uor_foundation::pipeline::__sdk_seal::Sealed for BitcoinNerveResolver<H> {}
 
 impl<H: Hasher> NerveResolver<H> for BitcoinNerveResolver<H> {
+    // ψ_1 input is byte-shaped (per-value bytes from the typed input);
+    // it is the entry point of the ψ-chain and does not carry an
+    // upstream typed-coordinate carrier.
     fn resolve(&self, input: &[u8], out: &mut [u8]) -> Result<usize, ShapeViolation> {
         fold_axis::<H>(input, out)
     }
@@ -85,8 +90,12 @@ pub struct BitcoinChainComplexResolver<H>(PhantomData<H>);
 impl<H: Hasher> uor_foundation::pipeline::__sdk_seal::Sealed for BitcoinChainComplexResolver<H> {}
 
 impl<H: Hasher> ChainComplexResolver<H> for BitcoinChainComplexResolver<H> {
-    fn resolve(&self, input: &[u8], out: &mut [u8]) -> Result<usize, ShapeViolation> {
-        fold_axis::<H>(input, out)
+    fn resolve(
+        &self,
+        input: SimplicialComplexBytes<'_>,
+        out: &mut [u8],
+    ) -> Result<usize, ShapeViolation> {
+        fold_axis::<H>(input.as_bytes(), out)
     }
 }
 
@@ -100,8 +109,12 @@ pub struct BitcoinHomologyGroupResolver<H>(PhantomData<H>);
 impl<H: Hasher> uor_foundation::pipeline::__sdk_seal::Sealed for BitcoinHomologyGroupResolver<H> {}
 
 impl<H: Hasher> HomologyGroupResolver<H> for BitcoinHomologyGroupResolver<H> {
-    fn resolve(&self, input: &[u8], out: &mut [u8]) -> Result<usize, ShapeViolation> {
-        fold_axis::<H>(input, out)
+    fn resolve(
+        &self,
+        input: ChainComplexBytes<'_>,
+        out: &mut [u8],
+    ) -> Result<usize, ShapeViolation> {
+        fold_axis::<H>(input.as_bytes(), out)
     }
 }
 
@@ -115,8 +128,12 @@ pub struct BitcoinCochainComplexResolver<H>(PhantomData<H>);
 impl<H: Hasher> uor_foundation::pipeline::__sdk_seal::Sealed for BitcoinCochainComplexResolver<H> {}
 
 impl<H: Hasher> CochainComplexResolver<H> for BitcoinCochainComplexResolver<H> {
-    fn resolve(&self, input: &[u8], out: &mut [u8]) -> Result<usize, ShapeViolation> {
-        fold_axis::<H>(input, out)
+    fn resolve(
+        &self,
+        input: ChainComplexBytes<'_>,
+        out: &mut [u8],
+    ) -> Result<usize, ShapeViolation> {
+        fold_axis::<H>(input.as_bytes(), out)
     }
 }
 
@@ -130,8 +147,12 @@ pub struct BitcoinCohomologyGroupResolver<H>(PhantomData<H>);
 impl<H: Hasher> uor_foundation::pipeline::__sdk_seal::Sealed for BitcoinCohomologyGroupResolver<H> {}
 
 impl<H: Hasher> CohomologyGroupResolver<H> for BitcoinCohomologyGroupResolver<H> {
-    fn resolve(&self, input: &[u8], out: &mut [u8]) -> Result<usize, ShapeViolation> {
-        fold_axis::<H>(input, out)
+    fn resolve(
+        &self,
+        input: CochainComplexBytes<'_>,
+        out: &mut [u8],
+    ) -> Result<usize, ShapeViolation> {
+        fold_axis::<H>(input.as_bytes(), out)
     }
 }
 
@@ -146,8 +167,12 @@ pub struct BitcoinPostnikovResolver<H>(PhantomData<H>);
 impl<H: Hasher> uor_foundation::pipeline::__sdk_seal::Sealed for BitcoinPostnikovResolver<H> {}
 
 impl<H: Hasher> PostnikovResolver<H> for BitcoinPostnikovResolver<H> {
-    fn resolve(&self, input: &[u8], out: &mut [u8]) -> Result<usize, ShapeViolation> {
-        fold_axis::<H>(input, out)
+    fn resolve(
+        &self,
+        input: SimplicialComplexBytes<'_>,
+        out: &mut [u8],
+    ) -> Result<usize, ShapeViolation> {
+        fold_axis::<H>(input.as_bytes(), out)
     }
 }
 
@@ -161,8 +186,12 @@ pub struct BitcoinHomotopyGroupResolver<H>(PhantomData<H>);
 impl<H: Hasher> uor_foundation::pipeline::__sdk_seal::Sealed for BitcoinHomotopyGroupResolver<H> {}
 
 impl<H: Hasher> HomotopyGroupResolver<H> for BitcoinHomotopyGroupResolver<H> {
-    fn resolve(&self, input: &[u8], out: &mut [u8]) -> Result<usize, ShapeViolation> {
-        fold_axis::<H>(input, out)
+    fn resolve(
+        &self,
+        input: PostnikovTowerBytes<'_>,
+        out: &mut [u8],
+    ) -> Result<usize, ShapeViolation> {
+        fold_axis::<H>(input.as_bytes(), out)
     }
 }
 
@@ -186,8 +215,12 @@ pub struct BitcoinKInvariantResolver<H>(PhantomData<H>);
 impl<H: Hasher> uor_foundation::pipeline::__sdk_seal::Sealed for BitcoinKInvariantResolver<H> {}
 
 impl<H: Hasher> KInvariantResolver<H> for BitcoinKInvariantResolver<H> {
-    fn resolve(&self, input: &[u8], out: &mut [u8]) -> Result<usize, ShapeViolation> {
-        fold_axis::<H>(input, out)
+    fn resolve(
+        &self,
+        input: HomotopyGroupsBytes<'_>,
+        out: &mut [u8],
+    ) -> Result<usize, ShapeViolation> {
+        fold_axis::<H>(input.as_bytes(), out)
     }
 }
 

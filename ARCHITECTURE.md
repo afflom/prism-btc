@@ -13,9 +13,9 @@
 > [UOR-Foundation/UOR-Framework wiki](https://github.com/UOR-Foundation/UOR-Framework/wiki),
 > ADR-035 (ψ-chain Term variants + ψ-residuals discipline), ADR-036
 > (ResolverTuple substitution-axis), ADR-037 (`HostBounds`-parametric
-> capacity ceilings), and the canonical foundation ontology artifacts
-> shipped at
-> [v0.4.4 release assets](https://github.com/UOR-Foundation/UOR-Framework/releases/tag/v0.4.4)
+> capacity ceilings), ADR-041 (typed-coordinate resolver carriers), and
+> the canonical foundation ontology artifacts shipped at
+> [v0.4.5 release assets](https://github.com/UOR-Foundation/UOR-Framework/releases/tag/v0.4.5)
 > (`uor.foundation.{ttl,jsonld,owl,nt}`, `uor.shapes.ttl`, `uor.term.ebnf`).
 
 ---
@@ -372,15 +372,20 @@ feature decomposition grows, [`PrismBtcBounds`](crates/prism-btc/src/shapes/boun
 raises the relevant constants without changing the verb body or the
 model declaration.
 
-### 9.4 Resolver-output bit width
+### 9.4 Typed-coordinate resolver carriers — closed in 0.4.5
 
-Resolver outputs are byte-flat (`out: &mut [u8]`). The ψ-pipeline's final
-output (the label) for Bitcoin must be exactly the wire-format block
-bytes; the resolver chain must thread structural data of arbitrary width
-through each ψ-stage. The byte-flat carrier may need to grow to a
-typed-coordinate carrier (e.g., `Coordinate<L>` per
-`type:Coordinate`/`type:MetricAxis`) if prism-btc's ψ-stages need richer
-structural carriers than raw bytes.
+Foundation 0.4.5 (ADR-041) replaced the resolver traits' byte-flat
+`input: &[u8]` parameter with per-ψ-stage typed-coordinate carriers
+(`SimplicialComplexBytes`, `ChainComplexBytes`, `HomologyGroupsBytes`,
+`CochainComplexBytes`, `CohomologyGroupsBytes`, `PostnikovTowerBytes`,
+`HomotopyGroupsBytes`, `KInvariantsBytes`, `BettiNumbersBytes`). Each
+wrapper is `#[repr(transparent)]` over `&'a [u8]` — zero-cost at
+runtime; the typing is purely compile-time discrimination so ψ-stage
+composition is type-checked at the resolver-impl boundary. ψ_1
+`Nerve` keeps `&[u8]` input as the ψ-chain entry point.
+[`BitcoinResolverTuple`](crates/prism-btc/src/resolvers.rs) consumes
+the typed carriers; the typed-iso surface now refuses any miswired
+ψ-chain composition at compile time.
 
 ## 10. Conformance under the pure-prism framing
 
