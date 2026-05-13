@@ -199,6 +199,16 @@ architectural conformance, fail-closed mining contract, wire-format
 equivalence, ψ-pipeline determinism, Lean proofs, and regtest
 end-to-end. `just vv` reproduces it.
 
+## Analyses
+
+[ANALYSIS.md](ANALYSIS.md) — does the UOR triadic coordinate
+decomposition expose any non-uniform-random structure in SHA-256d
+that could be exploited for Bitcoin-style mining? Theoretical
+derivation + 10⁷-sample empirical verification. (Short answer: no —
+`(stratum, spectrum)` is admission-orthogonal both under the
+random-oracle model and empirically.) Reproducible via
+`cargo run --release --example triadic_uniformity_analysis`.
+
 ## Real-network mining (`prism-btc-node`)
 
 ```bash
