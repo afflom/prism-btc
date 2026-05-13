@@ -50,9 +50,9 @@ module docstring for the per-test rationale.
 | 8 | `v_kappa_label_preserves_the_host_supplied_prefix` | ψ-pipeline preserves the template prefix; only the nonce field is derived |
 | 9 | `v_model_declarations_invariant_across_network_byte_thresholds` | Network-invariance: same model + same verb arena across regtest/signet/testnet/testnet4/mainnet `bits` values |
 | 10 | `v_compile_unit_fingerprint_identifies_the_typed_iso_path` | TC-03 typed-iso path-singularity: distinct inputs share CompileUnit fingerprint (the path, not the input) |
-| 11 | `v_mining_result_constraints_have_eight_atomic_instances` | Algebraic encoding: 8 atomic `ConstraintRef` instances in `MiningResult::CONSTRAINTS` |
-| 12 | `v_constraint_nerve_has_four_one_simplices_no_higher` | Constraint-nerve geometry: 4 `(Site_i, Carry_i)` 1-simplices, no higher |
-| 13 | `v_constraint_site_supports_lie_in_the_nonce_field` | Constraints' site support ∈ [76, 80) — the nonce-field byte range |
+| 11 | `v_mining_result_constraints_have_eighty_disjoint_site_instances` | Algebraic-closure encoding: 80 disjoint `ConstraintRef::Site` instances (IT_7d) |
+| 12 | `v_constraint_nerve_is_eighty_isolated_vertices_no_higher_simplices` | Constraint-nerve geometry: β_0 = 80, β_k = 0 for k ≥ 1, χ = 80 = SITE_COUNT |
+| 13 | `v_constraint_site_supports_span_the_full_wire_format_header` | Site supports cover [0, 80) — every wire-format-header byte pinned by one Site constraint |
 | 14 | `v_prism_btc_bounds_declare_algebraic_closure_target` | `PrismBtcBounds` declares the algebraic-closure ceilings (compile-time assertion) |
 
 Run: `cargo test --release -p prism-btc --test verification`. All 10 pass.

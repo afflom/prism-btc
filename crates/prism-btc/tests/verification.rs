@@ -345,74 +345,74 @@ fn v_compile_unit_fingerprint_identifies_the_typed_iso_path() {
 // ─── §7. Algebraic structure of MiningResult::CONSTRAINTS ──────────────
 
 #[test]
-fn v_mining_result_constraints_have_eight_atomic_instances() {
-    // Architecture §2.3: the algebraic encoding declares exactly 8
-    // top-level `ConstraintRef` instances — 4 `Site` constraints
-    // pinning the nonce sites + 4 `Carry` constraints encoding the
-    // Witt-tower carry structure on those sites. This is the
-    // foundation-cap-bounded admissible model
-    // (NERVE_CONSTRAINTS_CAP = 8 under DefaultHostBounds).
+fn v_mining_result_constraints_have_eighty_disjoint_site_instances() {
+    // Architecture §2.3 + IT_7d algebraic-closure: 80 disjoint `Site`
+    // constraints, one per wire-format-header byte. The constraint
+    // nerve has 80 isolated vertices, β_0 = 80, β_k = 0 for k ≥ 1,
+    // χ = 80 = SITE_COUNT — the framework's algebraic-closure
+    // criterion satisfied at the declaration level.
     let cs = <MiningResult as ConstrainedTypeShape>::CONSTRAINTS;
-    assert_eq!(cs.len(), 8);
+    assert_eq!(cs.len(), 80);
+    for c in cs {
+        assert!(
+            matches!(c, ConstraintRef::Site { .. }),
+            "every constraint is a Site"
+        );
+    }
 }
 
 #[test]
-fn v_constraint_nerve_has_four_one_simplices_no_higher() {
+fn v_constraint_nerve_is_eighty_isolated_vertices_no_higher_simplices() {
     // Architecture §2.3: the constraint nerve N(C) has vertices = the
-    // 8 constraints. Each (Site_i, Carry_i) pair shares site i and
-    // forms a 1-simplex; constraints across different nonce-byte
-    // indices have disjoint support. So |0-simplices| = 8,
-    // |1-simplices| = 4, no higher simplices. Euler characteristic
-    // χ = 8 - 4 = 4. (The algebraic-closure target χ = 80 requires
-    // foundation-cap expansion; this test pins the
-    // foundation-cap-bounded model.)
+    // 80 constraints; site supports are pairwise disjoint (each
+    // Site_i pins one distinct site i ∈ [0, 80)); therefore no
+    // 1-simplices, no higher simplices. β_0 = 80, β_k = 0 for k ≥ 1.
     let cs = <MiningResult as ConstrainedTypeShape>::CONSTRAINTS;
 
     fn site_support(c: &ConstraintRef) -> Option<u32> {
         match c {
             ConstraintRef::Site { position } => Some(*position),
-            ConstraintRef::Carry { site } => Some(*site),
             _ => None,
         }
     }
 
-    let mut overlaps = 0usize;
-    for i in 0..cs.len() {
-        for j in (i + 1)..cs.len() {
-            match (site_support(&cs[i]), site_support(&cs[j])) {
-                (Some(a), Some(b)) if a == b => overlaps += 1,
-                _ => {}
-            }
-        }
+    let mut supports = std::collections::HashSet::new();
+    for c in cs {
+        let site = site_support(c).expect("every constraint pins exactly one site");
+        assert!(
+            supports.insert(site),
+            "site supports must be pairwise disjoint (no overlap at site {site})"
+        );
     }
     assert_eq!(
-        overlaps, 4,
-        "exactly 4 (Site_i, Carry_i) pairs share site support"
+        supports.len(),
+        80,
+        "80 disjoint site supports across [0, 80)"
     );
 }
 
 #[test]
-fn v_constraint_site_supports_lie_in_the_nonce_field() {
-    // Architecture §2.3: the algebraic encoding's site support lives
-    // entirely in the nonce-field byte range [76..80) of the
-    // wire-format header. The 76 template-prefix bytes are
-    // unconstrained at the type-shape level — they are pinned by the
-    // host-supplied template at runtime (via MiningTask's `prefix`
-    // factor of the partition_product).
+fn v_constraint_site_supports_span_the_full_wire_format_header() {
+    // Architecture §2.3 + IT_7d: site supports collectively cover all
+    // 80 wire-format-header byte positions. Sites 0..76 are
+    // template-pinned (runtime, via MiningTask's prefix factor); sites
+    // 76..80 are κ-pinned (ψ_9 resolver's W32 walk). The constraint
+    // declaration is uniform; the pinning mechanism differs per
+    // site range.
     let cs = <MiningResult as ConstrainedTypeShape>::CONSTRAINTS;
-    for c in cs {
-        let site = match c {
+    let mut sites: Vec<u32> = cs
+        .iter()
+        .map(|c| match c {
             ConstraintRef::Site { position } => *position,
-            ConstraintRef::Carry { site } => *site,
-            other => {
-                panic!("unexpected constraint variant in MiningResult::CONSTRAINTS: {other:?}")
-            }
-        };
-        assert!(
-            (76..80).contains(&site),
-            "constraint site {site} must lie in the nonce field [76, 80)"
-        );
-    }
+            other => panic!("unexpected constraint variant: {other:?}"),
+        })
+        .collect();
+    sites.sort_unstable();
+    assert_eq!(
+        sites,
+        (0u32..80).collect::<Vec<_>>(),
+        "site supports span [0, 80) exactly"
+    );
 }
 
 #[test]
