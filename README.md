@@ -204,16 +204,27 @@ end-to-end. `just vv` reproduces it.
 [ANALYSIS.md](ANALYSIS.md) — **UOR-and-prism-informed
 cryptanalysis of SHA-256d**. UOR as ultrametric framework; Prism
 as causal-semantic transport field on a content-addressed
-semantic manifold; eight empirical tests at 10⁷ samples each
-covering triadic coordinates, ultrametric avalanche, Walsh–Hadamard
-spectrum at 32 non-trivial frequencies, stratum / κ-derivation
-autocorrelation, generalized p-adic stratification for
-`p ∈ {3, 5, 7}`, pairwise admission independence, and differential
-cryptanalysis at six Δ-weights. All pass α=0.001. Extrapolates to a
-framework-level **σ-Projection Hardening Principle**, a proposed
+semantic manifold. Two empirical chapters:
+
+- **§3 Cryptanalysis battery (8 tests at 10⁷ samples).** Triadic
+  coordinates, ultrametric avalanche, Walsh–Hadamard spectrum at
+  32 non-trivial frequencies, stratum / κ-derivation autocorrelation,
+  generalized p-adic stratification for `p ∈ {3, 5, 7}`, pairwise
+  admission independence, differential cryptanalysis at six
+  Δ-weights — all pass α=0.001. Reproducible via
+  `cargo run --release --example uor_cryptanalysis`.
+- **§5 Conjunction as typed information channel.** Empirical K-sweep
+  shows substrate `type:Conjunction` is a Shannon channel: K
+  independent typed predicates encode K bits of structural
+  commitment in the κ-label at PRF-bounded `2^K` cost. Reproducible
+  via `cargo run --release --example bandwidth_scaling`.
+
+§4 + §5 extrapolate to framework contributions: a six-condition
+**σ-Projection Hardening Principle** (U1 marginal-uniformity, U2
+joint-independence, U3 admission-orthogonality, U4 avalanche, U5
+autocorrelation-flatness, **U6 bandwidth-additivity**), a proposed
 **UOR Cryptanalysis Battery** as a substrate primitive, a bridge to
-traditional cryptanalysis, and ADR-style framework contributions.
-Reproducible via `cargo run --release --example uor_cryptanalysis`.
+traditional cryptanalysis, and ADR-style framework proposals.
 
 ## Real-network mining (`prism-btc-node`)
 
