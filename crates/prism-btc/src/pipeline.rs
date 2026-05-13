@@ -26,9 +26,6 @@
 //! `MiningTask`; the admission relation is the boundary's
 //! responsibility, not the pipeline's.
 
-#[cfg(not(feature = "std"))]
-use alloc::vec::Vec;
-
 use uor_foundation::pipeline::PrismModel;
 use uor_foundation::DefaultHostTypes;
 
@@ -56,8 +53,12 @@ pub struct MiningOutcome {
     pub nonce: u32,
     /// SHA-256d of the wire-format header in display order.
     pub digest: [u8; 32],
-    /// Digest's triadic coordinates.
-    pub coords: TriadicCoords,
+    /// Canonical UOR property landscape of the κ-label — triadic
+    /// coordinates (`observables.coords`: stratum + spectrum) plus
+    /// p-adic valuations at the canonical small-prime set
+    /// [`crate::observables::CANONICAL_PRIMES`]. The **receiver-side**
+    /// typed lens. Always computed; stack-resident.
+    pub observables: crate::observables::KappaObservables,
     /// Diagnostic state from ψ_9's structural κ-derivation. See
     /// [`crate::diagnostics`].
     pub resolution: ResolutionState,
@@ -147,30 +148,30 @@ pub fn mine(header: &BlockHeader, target: Target) -> Result<MiningOutcome, Minin
         witness: grounded.tag::<MiningTag>(),
         nonce,
         digest,
-        coords: TriadicCoords::from_hash(&digest),
+        observables: crate::observables::KappaObservables::from_digest(&digest),
         resolution,
     })
 }
 
-// ─── UOR-optimal mining: Conjunction'd typed commitment ────────────────
+// ─── UOR-optimal mining: typed predicates ──────────────────────────────
 //
-// The σ-Projection Hardening Principle's U6 Bandwidth-Additivity
-// (ANALYSIS.md §4.1, §5.5) makes the substrate's `type:Conjunction`
-// primitive a typed information channel over the σ-projection: K
-// independent 1-bit predicates encode K bits of structural commitment
-// in the κ-label at expected `2^K × α^-1` template variations, where
-// α is the bare admission probability. The types and entry point
-// below operationalize this channel at the host boundary of
-// prism-btc.
+// The σ-Projection Hardening Principle's U6 Joint-Probability
+// Multiplicativity (ANALYSIS.md §4.1, §5.5) makes typed predicates a
+// first-class observable surface on the κ-label: each Predicate names
+// one UOR observable family the cryptanalysis battery confirmed
+// admission-orthogonal under PRF. The types below are the primitives;
+// they're consumed by [`crate::commitment::TypedCommitment`]
+// implementors (the zero-cost commitment surface) and by individual
+// predicate diagnostics / cryptanalysis tests.
 
 /// A typed predicate over the κ-label's 32-byte content-address.
 ///
 /// Each variant is one of the UOR observable families that the
 /// cryptanalysis battery (ANALYSIS.md §3) confirmed
-/// admission-orthogonal under PRF. Composing K predicates under a
-/// [`MiningCommitment`] declares a Conjunction'd boundary
-/// commitment with bandwidth equal to the sum of per-predicate
-/// `bandwidth_bits` (ANALYSIS.md §5 — U6 Bandwidth-Additivity).
+/// admission-orthogonal under PRF. Used as the primitive building
+/// block for [`crate::commitment::TypedCommitment`] implementors and
+/// for individual-predicate cryptanalysis (`examples/uor_cryptanalysis.rs`
+/// §I + §J).
 #[derive(Debug, Clone, Copy)]
 pub enum Predicate {
     /// Walsh–Hadamard parity at a bit-mask frequency.
@@ -238,6 +239,11 @@ impl Predicate {
     /// under the random-oracle baseline. The Conjunction of K
     /// independent predicates has total bandwidth equal to the sum
     /// of per-predicate `bandwidth_bits` (U6 Bandwidth-Additivity).
+    ///
+    /// `f64`-valued for ergonomic comparison; the **exact** rational
+    /// counterpart is [`Self::accept_prob_rational`] (the direct
+    /// correspondence point to `Predicate.acceptProb : Rat` in
+    /// `prism-btc-lean/PrismBtc/CommitmentChannel.lean`).
     #[must_use]
     pub fn bandwidth_bits(&self) -> f64 {
         match self {
@@ -255,12 +261,78 @@ impl Predicate {
         }
     }
 
+    /// Exact PRF acceptance probability as a rational pair
+    /// `(numerator, denominator)`. Direct correspondence point to
+    /// `Predicate.acceptProb : Rat` in
+    /// `prism-btc-lean/PrismBtc/CommitmentChannel.lean` (§1).
+    ///
+    /// Per-variant:
+    ///
+    /// - `Parity` → `(1, 2)` — Pr = 1/2
+    /// - `StratumEq { k }` → `(1, 2^(k+1))` — Pr = 1/2^(k+1)
+    /// - `PAdicEq { p, k }` → `(p − 1, p^(k+1))` — Pr = (p−1)/p^(k+1)
+    /// - `UltrametricCloseTo { k }` → `(1, 2^k)` — Pr = 1/2^k
+    ///   (`(1, 1)` when `k = 0`).
+    ///
+    /// The pair is **not reduced** — `(2, 4)` and `(1, 2)` are both
+    /// valid representations of probability 1/2. The empirical
+    /// `examples/uor_cryptanalysis.rs` §I (U1 marginal-calibration)
+    /// uses this surface as the gold-standard acceptance rate.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the denominator overflows `u128`. Realistic
+    /// predicate parameters never trigger this — `StratumEq { k }`
+    /// is well-defined for `k ≤ 126`, `UltrametricCloseTo { k }` for
+    /// `k ≤ 127`, and `PAdicEq { p, k }` while `p^(k+1) ≤ u128::MAX`
+    /// (e.g., `p = 3, k ≤ 80`).
+    #[must_use]
+    pub fn accept_prob_rational(&self) -> (u128, u128) {
+        match self {
+            Self::Parity { .. } => (1, 2),
+            Self::StratumEq { k } => {
+                let den = 1u128
+                    .checked_shl(*k + 1)
+                    .expect("StratumEq{k} k+1 exceeds u128::BITS - 1");
+                (1, den)
+            }
+            Self::PAdicEq { p, k } => {
+                let p128 = u128::from(*p);
+                let den = p128
+                    .checked_pow(*k + 1)
+                    .expect("PAdicEq{p,k} p^(k+1) overflows u128");
+                (p128 - 1, den)
+            }
+            Self::UltrametricCloseTo { k, .. } => {
+                let den = 1u128
+                    .checked_shl(*k)
+                    .expect("UltrametricCloseTo{k} k exceeds u128::BITS - 1");
+                (1, den)
+            }
+        }
+    }
+
+    /// PRF acceptance probability as an `f64`. Equivalent to
+    /// `2f64.powf(-self.bandwidth_bits())`; equal to
+    /// `num as f64 / den as f64` of [`Self::accept_prob_rational`]
+    /// (modulo `f64` rounding for `PAdicEq { p ≥ 3 }` whose exact
+    /// value is irrational in log-space but rational in
+    /// probability-space).
+    #[must_use]
+    pub fn accept_prob(&self) -> f64 {
+        let (num, den) = self.accept_prob_rational();
+        (num as f64) / (den as f64)
+    }
+
     /// The predicate's algebraic **support** — which manifold region
     /// it reads. Two predicates with disjoint supports are jointly
     /// independent under the random-oracle baseline (ANALYSIS.md §4.1
-    /// U2 joint-independence); composing them under a [`MiningCommitment`]
-    /// produces a Conjunction whose [`MiningCommitment::bandwidth_bits`]
-    /// is **tight** rather than an upper bound (U6).
+    /// U2 joint-independence). [`crate::commitment::TypedCommitment`]
+    /// implementors discharge the `wellFormed` invariant by construction
+    /// (typically at the type level via the const-generic shape of
+    /// their predicate decomposition); this method is exposed for
+    /// runtime diagnostic / cryptanalysis use only — the typed
+    /// commitment hot path does not call it.
     ///
     /// Per-variant supports:
     ///
@@ -324,10 +396,9 @@ impl Support {
     /// Returns `true` iff `self` and `other` are algebraically
     /// disjoint — i.e. predicates with these supports are jointly
     /// independent under the random-oracle baseline (ANALYSIS.md
-    /// §4.1 U2). When all pairs of supports in a [`MiningCommitment`]
-    /// are disjoint, [`MiningCommitment::bandwidth_bits`] is a tight
-    /// bound on the PRF mining cost; non-disjoint supports make it
-    /// an upper bound.
+    /// §4.1 U2). `TypedCommitment` implementors discharge this
+    /// invariant at the type level by construction; this method is
+    /// retained for diagnostic / cryptanalysis use.
     #[must_use]
     pub fn is_disjoint_from(&self, other: &Self) -> bool {
         match (self, other) {
@@ -361,211 +432,38 @@ fn low_bits_mask(n: u32) -> [u8; 32] {
     mask
 }
 
-/// Errors from [`MiningCommitment::try_add_predicate`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CommitmentError {
-    /// The new predicate's support overlaps the existing predicate at
-    /// `existing_index`. U6 Bandwidth-Additivity (ANALYSIS.md §4.1,
-    /// §5.5) requires pairwise-disjoint supports for
-    /// [`MiningCommitment::bandwidth_bits`] to be a tight bound on
-    /// PRF mining cost rather than an upper bound.
-    OverlappingSupport {
-        /// Index (in the commitment's predicate list) of the existing
-        /// predicate whose support overlaps the new one.
-        existing_index: usize,
-    },
-}
-
-/// A typed boundary commitment — a Conjunction of K independent
-/// typed predicates evaluated on the κ-label's display-order digest.
-/// [`mine_with_commitment`] returns `Ok` only when both the admission
-/// relation AND every predicate in the commitment hold.
-///
-/// **Channel semantics** (ANALYSIS.md §5.4):
-///
-/// - *Sender* — the application that declares the commitment.
-/// - *Channel* — the σ-projection over candidate templates
-///   (`prism_btc::mine`'s structural inference per `MiningTask`).
-/// - *Receiver* — any party reading the κ-label and re-evaluating
-///   the declared predicates on it.
-/// - *Bandwidth* — `commitment.bandwidth_bits()` bits per κ-label,
-///   computed as the sum of per-predicate bandwidth contributions
-///   (U6 Bandwidth-Additivity).
-/// - *Cost* — expected `α^-1 × 2^bandwidth_bits` template variations
-///   per commit-admitting κ-label, where α is the bare admission
-///   probability (PRF baseline per U6).
-///
-/// The substrate's [`uor_foundation::pipeline::ConstraintRef::Conjunction`]
-/// variant provides the compile-time analogue for commitments fixed
-/// at type-definition time; [`MiningCommitment`] is the runtime
-/// surface that lets applications declare commitments per-session.
-#[derive(Debug, Clone, Default)]
-pub struct MiningCommitment {
-    predicates: Vec<Predicate>,
-}
-
-impl MiningCommitment {
-    /// An empty commitment — `mine_with_commitment` reduces exactly
-    /// to [`mine`].
-    #[must_use]
-    pub fn empty() -> Self {
-        Self::default()
-    }
-
-    /// Append a Walsh–Hadamard parity predicate at frequency `omega`
-    /// with the given expected parity (`0` or `1`). Bandwidth: 1 bit.
-    #[must_use]
-    pub fn add_parity(self, omega: [u8; 32], expected: u32) -> Self {
-        self.add_predicate(Predicate::Parity { omega, expected })
-    }
-
-    /// Append a stratum-equality predicate: the digest's 2-adic
-    /// valuation must equal `k`. Bandwidth: `k + 1` bits.
-    #[must_use]
-    pub fn add_stratum_eq(self, k: u32) -> Self {
-        self.add_predicate(Predicate::StratumEq { k })
-    }
-
-    /// Append a p-adic-equality predicate: the digest's `p`-adic
-    /// valuation must equal `k`. Bandwidth: `(k+1)·log₂(p) − log₂(p−1)`
-    /// bits (real-valued for `p > 2`).
-    ///
-    /// # Panics
-    ///
-    /// Panics if `p < 2`.
-    #[must_use]
-    pub fn add_p_adic_eq(self, p: u64, k: u32) -> Self {
-        assert!(p >= 2, "p-adic predicate requires p ≥ 2");
-        self.add_predicate(Predicate::PAdicEq { p, k })
-    }
-
-    /// Append an ultrametric-closeness predicate: the digest must
-    /// share at least `k` low bits with `reference` (equivalently,
-    /// the 2-adic valuation of `digest ⊕ reference` is `≥ k`).
-    /// Bandwidth: `k` bits.
-    #[must_use]
-    pub fn add_ultrametric_close_to(self, reference: [u8; 32], k: u32) -> Self {
-        self.add_predicate(Predicate::UltrametricCloseTo { reference, k })
-    }
-
-    /// Append an arbitrary [`Predicate`], enforcing that its support
-    /// is disjoint from every existing predicate's support.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the new predicate's support overlaps an existing
-    /// predicate's support — that would break U6 Bandwidth-Additivity's
-    /// independence requirement and cause [`Self::bandwidth_bits`] to
-    /// over-state the actual PRF mining cost. Use
-    /// [`Self::try_add_predicate`] to handle overlap dynamically.
-    #[must_use]
-    pub fn add_predicate(self, predicate: Predicate) -> Self {
-        match self.try_add_predicate(predicate) {
-            Ok(c) => c,
-            Err(CommitmentError::OverlappingSupport { existing_index }) => panic!(
-                "MiningCommitment::add_predicate: new predicate has overlapping support \
-                 with existing predicate at index {existing_index}; U6 Bandwidth-Additivity \
-                 requires pairwise-disjoint supports for `bandwidth_bits()` to be a tight \
-                 cost contract. Use try_add_predicate to handle this dynamically."
-            ),
-        }
-    }
-
-    /// Append an arbitrary [`Predicate`], returning `Err` if its
-    /// support overlaps any existing predicate's support.
-    ///
-    /// On success, the returned commitment satisfies the invariant
-    /// that all pairwise supports are disjoint — making
-    /// [`Self::bandwidth_bits`] a **tight** bound on PRF mining cost
-    /// (U6 Bandwidth-Additivity holds with equality under the
-    /// random-oracle baseline).
-    ///
-    /// # Errors
-    ///
-    /// [`CommitmentError::OverlappingSupport`] — names the index of
-    /// the existing predicate whose support overlaps the new one.
-    pub fn try_add_predicate(mut self, predicate: Predicate) -> Result<Self, CommitmentError> {
-        let new_support = predicate.support();
-        for (existing_index, existing) in self.predicates.iter().enumerate() {
-            if !new_support.is_disjoint_from(&existing.support()) {
-                return Err(CommitmentError::OverlappingSupport { existing_index });
-            }
-        }
-        self.predicates.push(predicate);
-        Ok(self)
-    }
-
-    /// Total PRF bandwidth (in bits) the commitment encodes per
-    /// κ-label — the sum of per-predicate `bandwidth_bits` per U6
-    /// Bandwidth-Additivity. The expected mining cost is
-    /// `α^-1 × 2^bandwidth_bits` template variations.
-    #[must_use]
-    pub fn bandwidth_bits(&self) -> f64 {
-        self.predicates.iter().map(Predicate::bandwidth_bits).sum()
-    }
-
-    /// Number of predicates Conjunction'd in the commitment. For
-    /// commitments composed only of [`Predicate::Parity`] this
-    /// equals [`bandwidth_bits`](Self::bandwidth_bits) (integer);
-    /// for the richer surface the two diverge.
-    #[must_use]
-    pub fn predicate_count(&self) -> usize {
-        self.predicates.len()
-    }
-
-    /// True iff the commitment has zero predicates.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.predicates.is_empty()
-    }
-
-    /// Evaluate every predicate in the Conjunction on a digest.
-    /// Returns `true` iff all predicates hold.
-    #[must_use]
-    pub fn evaluate(&self, digest: &[u8; 32]) -> bool {
-        self.predicates.iter().all(|p| p.evaluate(digest))
-    }
-
-    /// Borrow the contained predicates.
-    #[must_use]
-    pub fn predicates(&self) -> &[Predicate] {
-        &self.predicates
-    }
-}
-
-/// Mine with a Conjunction'd typed commitment on the κ-label.
+/// Mine with a typed `TypedCommitment` on the κ-label.
 ///
 /// Returns `Ok(MiningOutcome)` iff the structural κ-derivation:
 ///
 /// 1. produces a wire-format header satisfying the admission
 ///    relation `σ(header) ≤ target`, AND
-/// 2. satisfies every predicate in `commitment`.
+/// 2. satisfies the typed commitment `c`.
 ///
-/// The boundary check is the fail-closed gate (architecture §6) for
-/// both axes; the caller need not re-verify either. From the host's
-/// perspective the function behaves like [`mine`] but with the
-/// additional Conjunction'd predicates folded into the boundary
-/// admission relation.
-///
-/// **Cost.** Per U6 Bandwidth-Additivity (ANALYSIS.md §4.1, §5.5),
-/// expected template variations to land a commit-admitting κ-label
-/// is `α^-1 × 2^B` where α is the bare admission probability and B
-/// is `commitment.bandwidth_bits()`. The substrate's Conjunction
-/// primitive makes the composition free at the typed-iso surface;
-/// the σ-projection enforces the cryptographic `2^B` cost.
+/// **Zero-cost contract.** This entry is monomorphized per concrete
+/// `C: TypedCommitment` at every call site — there is no `Vec<Predicate>`
+/// allocation, no dynamic dispatch, no runtime decision about which
+/// predicates to evaluate. The commitment's `wellFormed` invariant
+/// (Lean: `Commitment.wellFormed`) is discharged at the type level by
+/// the `TypedCommitment` impl, so the Lean theorem
+/// `Commitment.prf_prob_tight_wellFormed` applies at equality:
+/// expected template variations to land an admitting+committed κ-label
+/// is exactly `α^-1 × 2^c.bandwidth_bits()` where α is the bare
+/// admission probability.
 ///
 /// # Errors
 ///
 /// - [`MiningFailure::DidNotAdmit`] — the structural κ-candidate
-///   either failed the admission relation or any predicate in
-///   `commitment`. The host should vary the template and retry.
+///   either failed the admission relation or failed the typed
+///   commitment. The host should vary the template (extranonce roll,
+///   timestamp bump) and retry.
 /// - [`MiningFailure::PipelineFailure`] — defensive variant for
 ///   substrate-level shape violations; unreachable for well-formed
 ///   `MiningTask` inputs.
-pub fn mine_with_commitment(
+pub fn mine_with<C: crate::commitment::TypedCommitment>(
     header: &BlockHeader,
     target: Target,
-    commitment: &MiningCommitment,
+    commitment: C,
 ) -> Result<MiningOutcome, MiningFailure> {
     let outcome = mine(header, target)?;
     if !commitment.evaluate(&outcome.digest) {
@@ -577,6 +475,7 @@ pub fn mine_with_commitment(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commitment::{EmptyCommitment, PayloadCommitment};
     use crate::domain::{Bits, MerkleRoot, Timestamp, Version};
 
     fn permissive_header(timestamp: u32) -> BlockHeader {
@@ -590,18 +489,18 @@ mod tests {
     }
 
     #[test]
-    fn empty_commitment_matches_bare_mine() {
-        // With zero predicates the commitment is the identity:
-        // mine_with_commitment Ok ⇔ mine Ok, and the outcomes
-        // agree byte-for-byte.
+    fn mine_with_empty_commitment_matches_bare_mine() {
+        // With EmptyCommitment the typed entry is the identity:
+        // mine_with Ok ⇔ mine Ok, and the outcomes agree byte-for-byte.
+        // EmptyCommitment monomorphizes to a no-op; the typed-iso
+        // surface adds zero runtime cost over bare mine.
         let target = Target::new(0x207fffff);
-        let empty = MiningCommitment::empty();
 
         for ts in 0u32..16 {
             let header = permissive_header(1_700_000_000_u32.wrapping_add(ts));
             match (
                 mine(&header, target),
-                mine_with_commitment(&header, target, &empty),
+                mine_with(&header, target, EmptyCommitment),
             ) {
                 (Ok(a), Ok(b)) => {
                     assert_eq!(a.digest, b.digest);
@@ -609,12 +508,53 @@ mod tests {
                 }
                 (Err(_), Err(_)) => {}
                 (a, b) => panic!(
-                    "mine vs mine_with_commitment disagreed: a={:?} b={:?}",
+                    "mine vs mine_with(EmptyCommitment) disagreed: a={:?} b={:?}",
                     a.is_ok(),
                     b.is_ok()
                 ),
             }
         }
+    }
+
+    #[test]
+    fn mine_with_typed_commitment_admits_when_satisfied() {
+        // For a permissive target and EmptyCommitment we should find
+        // an admitting κ-label within a small variation window.
+        let target = Target::new(0x207fffff);
+        let mut found = false;
+        for ts in 0u32..32 {
+            let header = permissive_header(1_700_000_000_u32.wrapping_add(ts));
+            if mine_with(&header, target, EmptyCommitment).is_ok() {
+                found = true;
+                break;
+            }
+        }
+        assert!(
+            found,
+            "permissive target must admit with EmptyCommitment within 32 variations"
+        );
+    }
+
+    #[test]
+    fn mine_with_payload_commitment_finds_block_carrying_payload() {
+        // A 1-bit PayloadCommitment doubles the expected cost over bare
+        // admission. At regtest target (~50% admission) the joint
+        // probability is ~25%, well-admittable within the small
+        // template-variation window. The found block's digest carries
+        // the encoded payload bit at position 0.
+        let target = Target::new(0x207fffff);
+        let commitment = PayloadCommitment::<1>::from_bits([true]);
+        for ts in 0u32..64 {
+            let header = permissive_header(1_700_000_000_u32.wrapping_add(ts));
+            if let Ok(outcome) = mine_with(&header, target, commitment) {
+                // Decoder round-trips: digest carries the payload bit
+                // at the position the commitment encodes.
+                let decoded = PayloadCommitment::<1>::decode(&outcome.digest);
+                assert_eq!(decoded, [true]);
+                return;
+            }
+        }
+        panic!("permissive target × 1-bit payload commitment must admit within 64 variations");
     }
 
     #[test]
@@ -681,27 +621,96 @@ mod tests {
     }
 
     #[test]
-    fn commitment_bandwidth_is_additive_over_disjoint_supports() {
-        // U6 Bandwidth-Additivity (ANALYSIS.md §4.1, §5.5) is a
-        // TIGHT bound when supports are pairwise-disjoint; the
-        // typed-iso surface enforces that invariant via
-        // `add_predicate` / `try_add_predicate` (architecture §14.2).
-        let mut high_omega = [0u8; 32];
-        high_omega[8] = 0b0000_0001; // bit 0 of byte 8 — far from byte-31 low bits
+    fn predicate_accept_prob_rational_per_variant() {
+        // Direct correspondence to `Predicate.acceptProb : Rat` in the
+        // Lean model — every variant's PRF acceptance is an exact
+        // rational covering the formal claim.
+        assert_eq!(
+            Predicate::Parity {
+                omega: [0u8; 32],
+                expected: 0
+            }
+            .accept_prob_rational(),
+            (1, 2)
+        );
+        assert_eq!(Predicate::StratumEq { k: 0 }.accept_prob_rational(), (1, 2));
+        assert_eq!(
+            Predicate::StratumEq { k: 5 }.accept_prob_rational(),
+            (1, 64)
+        );
+        // PAdicEq{p=2,k} ≡ StratumEq{k} probability-wise.
+        assert_eq!(
+            Predicate::PAdicEq { p: 2, k: 3 }.accept_prob_rational(),
+            (1, 16)
+        );
+        // PAdicEq{p=3,k=0}: Pr = 2/3.
+        assert_eq!(
+            Predicate::PAdicEq { p: 3, k: 0 }.accept_prob_rational(),
+            (2, 3)
+        );
+        // PAdicEq{p=3,k=1}: Pr = 2/9.
+        assert_eq!(
+            Predicate::PAdicEq { p: 3, k: 1 }.accept_prob_rational(),
+            (2, 9)
+        );
+        // PAdicEq{p=5,k=2}: Pr = 4/125.
+        assert_eq!(
+            Predicate::PAdicEq { p: 5, k: 2 }.accept_prob_rational(),
+            (4, 125)
+        );
+        // UltrametricCloseTo{k=0} ↦ Pr = 1 (every digest qualifies).
+        assert_eq!(
+            Predicate::UltrametricCloseTo {
+                reference: [0u8; 32],
+                k: 0
+            }
+            .accept_prob_rational(),
+            (1, 1)
+        );
+        assert_eq!(
+            Predicate::UltrametricCloseTo {
+                reference: [0u8; 32],
+                k: 8
+            }
+            .accept_prob_rational(),
+            (1, 256)
+        );
+    }
 
-        let c = MiningCommitment::empty()
-            .add_parity(high_omega, 1) // 1 bit, BitSet at byte 8
-            .add_stratum_eq(3) // 4 bits, BitSet on low bits of byte 31
-            .add_p_adic_eq(3, 0); // ≈0.585 bits, Modular {p=3}
-        assert_eq!(c.predicate_count(), 3);
-        assert!(!c.is_empty());
-        let expected = 1.0 + 4.0 + (3.0_f64 / 2.0).log2();
-        assert!((c.bandwidth_bits() - expected).abs() < 1e-12);
-
-        let empty = MiningCommitment::empty();
-        assert_eq!(empty.predicate_count(), 0);
-        assert!((empty.bandwidth_bits()).abs() < 1e-12);
-        assert!(empty.is_empty());
+    #[test]
+    fn predicate_accept_prob_matches_bandwidth_bits_inverse() {
+        // accept_prob() should equal 2^(-bandwidth_bits()) within
+        // f64 rounding for every variant.
+        let cases = [
+            Predicate::Parity {
+                omega: [0u8; 32],
+                expected: 0,
+            },
+            Predicate::StratumEq { k: 0 },
+            Predicate::StratumEq { k: 10 },
+            Predicate::PAdicEq { p: 2, k: 5 },
+            Predicate::PAdicEq { p: 3, k: 2 },
+            Predicate::PAdicEq { p: 5, k: 1 },
+            Predicate::PAdicEq { p: 7, k: 0 },
+            Predicate::UltrametricCloseTo {
+                reference: [0u8; 32],
+                k: 0,
+            },
+            Predicate::UltrametricCloseTo {
+                reference: [0u8; 32],
+                k: 8,
+            },
+        ];
+        for pred in cases {
+            let from_rational = pred.accept_prob();
+            let from_bandwidth = 2f64.powf(-pred.bandwidth_bits());
+            let rel_err = (from_rational - from_bandwidth).abs() / from_rational;
+            assert!(
+                rel_err < 1e-12,
+                "accept_prob/bandwidth_bits mismatch for {pred:?}: \
+                 rational={from_rational}, bandwidth-derived={from_bandwidth}"
+            );
+        }
     }
 
     #[test]
@@ -753,84 +762,5 @@ mod tests {
         let modular = Support::Modular { p: 3 };
         assert!(bit.is_disjoint_from(&modular));
         assert!(modular.is_disjoint_from(&bit));
-    }
-
-    #[test]
-    fn try_add_predicate_rejects_overlapping_support() {
-        // Adding a predicate whose support overlaps an existing one
-        // returns Err with the offending existing index.
-        let c = MiningCommitment::empty().add_stratum_eq(3); // bits 0..3 of byte 31
-        let result = c.try_add_predicate(Predicate::UltrametricCloseTo {
-            reference: [0u8; 32],
-            k: 2,
-        }); // bits 0..1 — overlaps stratum's bits 0,1
-        assert_eq!(
-            result.err(),
-            Some(CommitmentError::OverlappingSupport { existing_index: 0 })
-        );
-    }
-
-    #[test]
-    fn try_add_predicate_accepts_disjoint_support() {
-        let c = MiningCommitment::empty().add_stratum_eq(3);
-        let result = c.try_add_predicate(Predicate::PAdicEq { p: 5, k: 0 });
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().predicate_count(), 2);
-    }
-
-    #[test]
-    #[should_panic(expected = "overlapping support")]
-    fn add_predicate_panics_on_overlapping_support() {
-        // The infallible builder panics on overlap. Match against the
-        // panic message's "overlapping support" substring.
-        let _ = MiningCommitment::empty()
-            .add_stratum_eq(3)
-            .add_ultrametric_close_to([0u8; 32], 2);
-    }
-
-    #[test]
-    fn commitment_evaluates_conjunction_of_mixed_predicates() {
-        // Mix two predicate families and verify Conjunction = AND of
-        // per-predicate evaluations.
-        let mut omega = [0u8; 32];
-        omega[8] = 0b0000_0001;
-        let c = MiningCommitment::empty()
-            .add_parity(omega, 1) // bit 0 of byte 8 = 1
-            .add_stratum_eq(2); // bit 2 of byte 31 = 1, lower zero
-
-        let mut both_hold = [0u8; 32];
-        both_hold[8] = 0b0000_0001;
-        both_hold[31] = 0b0000_0100; // bit 2 set, lower bits zero
-        assert!(c.evaluate(&both_hold));
-
-        // Same digest minus the parity bit ⇒ only stratum holds.
-        let mut only_stratum = [0u8; 32];
-        only_stratum[31] = 0b0000_0100;
-        assert!(!c.evaluate(&only_stratum));
-
-        // Same digest minus the stratum requirement ⇒ only parity holds.
-        let mut only_parity = [0u8; 32];
-        only_parity[8] = 0b0000_0001;
-        assert!(!c.evaluate(&only_parity));
-    }
-
-    #[test]
-    fn mine_with_commitment_admits_when_predicates_hold() {
-        // For a permissive target and an empty commitment we should
-        // find an admitting κ-label within a small variation window.
-        let target = Target::new(0x207fffff);
-        let empty = MiningCommitment::empty();
-        let mut found = false;
-        for ts in 0u32..32 {
-            let header = permissive_header(1_700_000_000_u32.wrapping_add(ts));
-            if mine_with_commitment(&header, target, &empty).is_ok() {
-                found = true;
-                break;
-            }
-        }
-        assert!(
-            found,
-            "permissive target must admit with empty commitment within 32 variations"
-        );
     }
 }

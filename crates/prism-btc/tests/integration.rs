@@ -194,5 +194,5 @@ fn mine_admits_within_a_few_template_variations_against_permissive_target() {
     // is exactly 80 bytes.
     assert!(target.is_satisfied_by_bytes(&outcome.digest));
     assert_eq!(outcome.witness.output_bytes().len(), 80);
-    assert_eq!(outcome.coords.datum, outcome.digest);
+    assert_eq!(outcome.observables.coords.datum, outcome.digest);
 }

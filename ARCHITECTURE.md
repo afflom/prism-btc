@@ -484,8 +484,10 @@ pub use resolvers::BitcoinResolverTuple;
 // Public entry point
 pub use pipeline::{mine, MiningOutcome, MiningFailure};
 
-// UOR-optimal mining: typed Conjunction commitment (architecture §14)
-pub use pipeline::{mine_with_commitment, MiningCommitment, Predicate};
+// UOR-optimal mining: prism's zero-cost typed commitment surface (architecture §14)
+pub use pipeline::{mine_with, Predicate, Support};
+pub use commitment::{TypedCommitment, EmptyCommitment, PayloadCommitment};
+pub use observables::{KappaObservables, ExtendedObservables, CANONICAL_PRIMES};
 
 // Iterative-resolution diagnostic surface
 pub use diagnostics::{ResolutionState, take_resolution_state};
@@ -509,16 +511,23 @@ derived nonce + the `free_rank = 0` convergence observable). On
 ψ_9's `ResolutionState` so the host can inspect the κ-derivation
 that didn't admit.
 
-`mine_with_commitment(header, target, &commitment) → Result<MiningOutcome, MiningFailure>`
+`mine_with<C: TypedCommitment>(header, target, commitment) → Result<MiningOutcome, MiningFailure>`
 is the UOR-optimal mining entry point (architecture §14): the
-host-boundary admission gate is augmented with a Conjunction of
-typed [`Predicate`] instances spanning the UOR observable library
-(Walsh–Hadamard parity, 2-adic stratum equality, p-adic equality,
-ultrametric closeness). Returns `Ok` iff the κ-label satisfies both
-admission and every commitment predicate; expected cost grows as
-`α^-1 × 2^B` template variations per ANALYSIS.md §5.5 (U6
-Bandwidth-Additivity), where `B = commitment.bandwidth_bits()` is
-the sum of per-predicate bandwidth contributions.
+host-boundary admission gate is augmented with a typed commitment.
+Returns `Ok` iff the κ-label satisfies both admission and the typed
+commitment; expected cost = `α^-1 × 2^B` template variations per
+ANALYSIS.md §5.5 (U6 Joint-Probability Multiplicativity), where
+`B = commitment.bandwidth_bits()`.
+
+The function is **monomorphized per concrete `C`** — no `Vec`, no
+dynamic dispatch, no runtime disjointness check. `wellFormed`
+(Lean: `Commitment.wellFormed`) is discharged at the type level by
+the `TypedCommitment` impl's invariants, so the Lean tight-bound
+theorem `Commitment.prf_prob_tight_wellFormed` applies at equality
+(declared bandwidth = operational PRF cost; not an upper bound).
+Every `MiningOutcome` additionally carries a `KappaObservables`
+decoding of the κ-label's canonical UOR property landscape — the
+receiver-side typed lens to the sender-side commitment surface.
 
 ## 9. Substrate surface
 
@@ -740,31 +749,53 @@ The frontier is sharp under PRF — there is no UOR-structural
 shortcut that delivers bandwidth without paying the proportional
 PRF cost.
 
-### 14.2 Implementation surface
+### 14.2 Implementation surface — prism's zero-cost typed commitment
 
-`crates/prism-btc/src/pipeline.rs` exposes the optimal-mining
-surface:
+prism's contract is **zero runtime movement**: the operational cost
+of a typed commitment equals its declared bandwidth at equality, but
+that claim is hollow if the runtime decides anything about *which*
+predicates to evaluate. The commitment surface is therefore fully
+const-generic and monomorphized — no `Vec`, no dynamic dispatch, no
+runtime disjointness check, no fallback to a runtime form.
+
+`crates/prism-btc/src/commitment.rs` exposes the substrate trait
+and built-in typed commitments:
 
 ```rust
-pub enum Predicate {
-    Parity              { omega: [u8; 32], expected: u32 },
-    StratumEq           { k: u32 },
-    PAdicEq             { p: u64, k: u32 },
-    UltrametricCloseTo  { reference: [u8; 32], k: u32 },
+pub trait TypedCommitment: Copy {
+    fn bandwidth_bits(&self) -> f64;
+    fn accept_prob(&self) -> f64;
+    fn evaluate(&self, digest: &[u8; 32]) -> bool;
+    fn predicate_count(&self) -> usize;
 }
 
-pub struct MiningCommitment { /* Vec<Predicate> */ }
+pub struct EmptyCommitment;              // bandwidth 0, accept_prob 1
 
-pub fn mine_with_commitment(
+pub struct PayloadCommitment<const K: usize> {
+    expected: [u32; K],                  // K bits at K low single-bit positions
+}
+```
+
+`crates/prism-btc/src/pipeline.rs`:
+
+```rust
+pub fn mine_with<C: TypedCommitment>(
     header: &BlockHeader,
     target: Target,
-    commitment: &MiningCommitment,
+    commitment: C,
 ) -> Result<MiningOutcome, MiningFailure>;
 ```
 
-The [`Predicate`] enum names the typed predicate library —
-each variant is one of the UOR observables that the cryptanalysis
-battery (ANALYSIS.md §3) confirmed admission-orthogonal under PRF:
+`mine_with` is monomorphized per concrete `C` at every call site.
+Calling `mine_with(_, _, EmptyCommitment)` is identical to bare
+`mine`; `PayloadCommitment<K>` instantiates a separate compile unit
+per K with the loop bounded by the const generic.
+
+The primitive [`Predicate`] enum names the four UOR observable
+families the cryptanalysis battery (ANALYSIS.md §3) confirmed
+admission-orthogonal under PRF — they are the *building blocks* used
+by `TypedCommitment` implementors (and by individual-predicate
+diagnostic / cryptanalysis tests):
 
 | Variant | Predicate condition | PRF probability | Bandwidth (bits) |
 |---|---|---|---|
@@ -773,43 +804,45 @@ battery (ANALYSIS.md §3) confirmed admission-orthogonal under PRF:
 | `PAdicEq { p, k }` | `p_adic_valuation(d, p) == k` | `(p − 1)/p^(k+1)` | `(k+1)·log₂p − log₂(p−1)` |
 | `UltrametricCloseTo { r, k }` | `ultrametric_valuation(d, &r) ≥ k` | `2⁻ᵏ` | `k` |
 
-Each variant exposes `Predicate::evaluate(digest) -> bool` and
-`Predicate::bandwidth_bits() -> f64`. The variants span
+Each variant exposes `evaluate`, `bandwidth_bits`, `accept_prob`,
+`accept_prob_rational`, and `support`. The variants span
 2-adic / 2-adic-shifted / p-adic / ultrametric observables — every
 elementary observable on the content-addressed manifold the
 analysis battery covered.
 
-[`MiningCommitment`] is a runtime Conjunction of K `Predicate`
-instances. Typed builders:
+**Typed-commitment usage** (sender):
 
 ```rust
-let commitment = MiningCommitment::empty()
-    .add_parity(omega, 1)                 // +1 bit
-    .add_stratum_eq(3)                    // +4 bits
-    .add_p_adic_eq(3, 0)                  // +~0.585 bits
-    .add_ultrametric_close_to(reference, 7); // +7 bits
-// commitment.bandwidth_bits() ≈ 12.585
+// Built-in: PayloadCommitment<K>
+let bits = [true, false, true, true, false, false, true, false];
+let commitment = PayloadCommitment::<8>::from_bits(bits);
+let outcome = mine_with(&header, target, commitment)?;
+// outcome.observables.coords carries the κ-label's UOR landscape
+
+// User-defined: implement TypedCommitment on a custom type
+struct MyCommitment<const K: u32> { /* ... */ }
+impl<const K: u32> TypedCommitment for MyCommitment<K> { /* ... */ }
+mine_with(&header, target, MyCommitment::<3> { /* ... */ })?;
 ```
 
-The substrate's [`uor_foundation::pipeline::ConstraintRef::Conjunction`]
-variant is the compile-time analogue for fixed commitments declared
-at type-definition time. [`mine_with_commitment`] wraps [`mine`]
-with the additional boundary check `commitment.evaluate(&digest)`.
-The fail-closed contract holds across both axes:
-`Ok(MiningOutcome)` is returned only when both admission AND every
-commitment predicate hold.
+**`wellFormed` discharged at the type level.** The Lean theorem
+[`Commitment.prf_prob_tight_wellFormed`](../prism-btc-lean/PrismBtc/CommitmentChannel.lean)
+requires the commitment to be `wellFormed` (pairwise-disjoint
+predicate supports). For built-in typed commitments, this is
+guaranteed by construction:
 
-**Bandwidth-additivity (U6) — enforced at the typed-iso surface.**
-`MiningCommitment::bandwidth_bits()` returns the sum of per-predicate
-contributions. Per
-[`PrismBtc.CommitmentChannel.bandwidth_append`](../prism-btc-lean/PrismBtc/CommitmentChannel.lean),
-the Conjunction is monoidal under list-concatenation: bandwidth and
-evaluation distribute over commitment concatenation algebraically.
+- `EmptyCommitment` — vacuously `wellFormed`.
+- `PayloadCommitment<K>` — K parities at K *distinct* single-bit
+  ω-frequencies (the digest's low K bits); supports pairwise-disjoint
+  by indexing.
 
-The probabilistic content of U6 (PRF cost = `α⁻¹ · 2^bandwidth_bits`)
-holds when the predicates are **jointly independent**. prism-btc
-turns this from an honor-system upper bound into a typed-iso
-invariant via the [`Support`] type:
+User-defined `TypedCommitment` implementors are responsible for
+discharging `wellFormed` at the type level — typically via the
+const-generic shape of their predicate decomposition. The runtime
+does not check.
+
+For diagnostic / cryptanalysis use, the [`Support`] type and
+`Predicate::support` are retained:
 
 ```rust
 pub enum Support {
@@ -818,35 +851,60 @@ pub enum Support {
 }
 ```
 
-Each `Predicate` exposes `support() -> Support`. Two supports are
-**disjoint** iff predicates with these supports are jointly
-independent under PRF:
+`Support::is_disjoint_from` decides:
 
 - `BitSet(a)` ⊥ `BitSet(b)` ⇔ `a & b == 0` (bit-disjoint masks).
 - `Modular { p }` ⊥ `BitSet(_)` ⇔ `p ≠ 2`.
 - `Modular { p₁ }` ⊥ `Modular { p₂ }` ⇔ `p₁ ≠ p₂` (coprime primes).
 
 `PAdicEq { p: 2, k }` is canonicalized to `BitSet(low_bits_mask(k+1))`
-at `Predicate::support()` so its independence with bit-set
-predicates is checked correctly.
+so its independence with bit-set predicates is checked correctly.
 
-[`MiningCommitment::add_predicate`] panics on overlap;
-[`MiningCommitment::try_add_predicate`] returns
-[`CommitmentError::OverlappingSupport { existing_index }`]. A
-commitment built only via the typed builders is **well-formed by
-construction** (all pairwise supports disjoint), so
-`bandwidth_bits()` is a tight bound on the PRF mining cost — not an
-upper bound. The Lean theorem
+The Lean theorem
 [`Commitment.wellFormed`](../prism-btc-lean/PrismBtc/CommitmentChannel.lean)
-formalizes the invariant.
+formalizes the invariant; the operational tightness claim is
+[`Commitment.prf_prob_tight_wellFormed`](../prism-btc-lean/PrismBtc/CommitmentChannel.lean)
+in `CommitmentChannel.lean` §2 — under U1 (marginal-uniformity) and
+U2 (joint-independence under disjoint supports) as axioms on the
+σ-projection, the PRF acceptance probability for a well-formed
+commitment equals its declared `acceptProb` exactly, not as an
+upper bound: `Pr[c.evaluate d = true] = acceptProb c`. Equivalent
+log-space statement: `expected mining trials = 1 / acceptProb c =
+2^bandwidth_bits c`.
+
+The Lean model carries `Predicate.acceptProb : Rat` so all four Rust
+variants are faithfully covered (including `PAdicEq{p, k}` for
+primes `p ≥ 3`, whose log-space bandwidth is irrational but whose
+acceptance probability `(p−1)/p^(k+1)` is rational). The direct
+correspondence point from Rust is
+[`Predicate::accept_prob_rational`] returning `(u128, u128)` —
+[`Predicate::bandwidth_bits`] is the `f64` engineering surface, and
+the two are related by `2^(-bandwidth_bits) = num/den`.
+
+U1 + U2 are calibration assumptions; they are empirically witnessed
+in the prism-btc cryptanalysis battery (ANALYSIS.md §3):
+
+- **§I (`section_i_u1_marginal_calibration`)** — at 1M digest
+  samples, each of the four Predicate variants accepts at exactly
+  its claimed `accept_prob_rational()` rate (χ² ≪ 10.83 at α=0.001,
+  df=1) across BitSet (`Parity`, `StratumEq`, `PAdicEq{p=2}`,
+  `UltrametricCloseTo`) and Modular (`PAdicEq{p≥3}`) regimes.
+- **§J (`section_j_u2_joint_independence`)** — disjoint-support
+  pairs in all three regimes (BitSet⊥BitSet, BitSet⊥Modular,
+  Modular⊥Modular) factor as `Pr[A]·Pr[B]` (χ² ≪ 10.83); a
+  non-disjoint negative control diverges sharply (χ² ≈ 3.2·10⁴),
+  validating U2's load-bearing role in the tight-bound theorem.
 
 ### 14.3 Empirical scaling
 
 The example `crates/prism-btc/examples/optimal_mining.rs` runs a
 K-sweep at regtest target `0x207fffff` (`α ≈ 1/2`), averaging
-`N_TRIALS = 50` independent template searches per K. Each search
-rolls the timestamp until [`mine_with_commitment`] returns `Ok`;
-the function defensively re-checks both admission and the
+`N_TRIALS = 50` independent template searches per K. Each K is a
+separate `PayloadCommitment<K>` monomorphization, expanded at
+compile time via `sweep!(0, 1, 2, 3, 4, 5, 6)` — no runtime
+dispatch on K. Each search rolls the timestamp until
+[`mine_with`]`(_, _, PayloadCommitment::<K>::from_bits(bits))` returns
+`Ok`; the function defensively re-checks both admission and the
 commitment on every successful outcome.
 
 | K | bandwidth | PRF prediction (2 · 2^K) | observed mean variations | ratio |
@@ -861,26 +919,61 @@ commitment on every successful outcome.
 
 Ratios cluster around 1.0 within ~25% sampling variance at N = 50;
 the step-to-step doubling is sharp. Reproduce via
-`cargo run --release --example optimal_mining`.
+`cargo run --release --example optimal_mining`. The example also
+demonstrates the user-defined typed-commitment extension pattern
+(`StratumWithParity<K>` impl of `TypedCommitment`) — applications
+declare their own typed commitments without surrendering the
+zero-cost contract.
 
-### 14.4 Reading the κ-label as a typed commitment
+### 14.4 Reading the κ-label as a typed commitment — `KappaObservables`
 
-Every block mined via [`mine_with_commitment`] is wire-format-valid
-for Bitcoin's `submitblock` — Bitcoin Core does not see or check
-the application's typed predicates. But any verifier of the
-application's protocol can re-evaluate the K predicates on the
+Every block mined via [`mine_with`] is wire-format-valid for
+Bitcoin's `submitblock` — Bitcoin Core does not see or check the
+application's typed predicates. But any verifier of the
+application's protocol can re-evaluate the typed commitment on the
 published κ-label and read off the K bits of structural commitment.
-The κ-label is thus simultaneously:
-
-1. A valid Bitcoin block header (PoW + structure as Bitcoin
-   demands), and
-2. A typed commitment to K bits of application-declared
-   information.
-
 The 80-byte κ-label is the same object on both axes — what differs
-is which observer reads it. This is the Shannon-channel
-construction of ANALYSIS.md §5.4, realized for Bitcoin via
-prism-btc's typed-iso surface.
+is which observer reads it (Shannon-channel construction of
+ANALYSIS.md §5.4, realized for Bitcoin via prism-btc's typed-iso
+surface).
+
+The receiver-side typed lens is `KappaObservables` and the
+const-generic `ExtendedObservables<N_PAR, N_REF>`, both in
+`crates/prism-btc/src/observables.rs`:
+
+```rust
+pub const CANONICAL_PRIMES: [u64; 4] = [2, 3, 5, 7];
+
+pub struct KappaObservables {
+    pub coords: TriadicCoords,           // stratum + spectrum
+    pub p_adic: [u32; 4],                // valuations at CANONICAL_PRIMES
+}
+
+pub struct ExtendedObservables<const N_PAR: usize, const N_REF: usize> {
+    pub base: KappaObservables,
+    pub parity_omegas: [[u8; 32]; N_PAR],
+    pub parities: [u32; N_PAR],
+    pub reference_points: [[u8; 32]; N_REF],
+    pub ultrametric_dists: [u32; N_REF],
+}
+```
+
+Every `MiningOutcome` carries a `KappaObservables` decoded from the
+produced κ-label — the canonical UOR property landscape is always
+present, always computed at zero overhead (no `Vec`, stack-resident).
+Applications with custom observable sets use `ExtendedObservables`
+to capture parities at chosen ω-frequencies and ultrametric distances
+to chosen reference points; sizes are const generics, so all the
+arrays are stack-allocated and the from-digest loops are unrolled by
+the optimizer. The round-trip identity `pred.evaluate(d) ==
+ExtendedObservables::from_digest(d, ωs, refs).satisfies(&pred, d)` is
+pinned by a unit test.
+
+The Lean correspondence: `KappaObservables` and `ExtendedObservables`
+are the *receiver-side* typed lens to the *sender-side*
+[`TypedCommitment`] surface — together they realize the sender ↔
+receiver duality of prism's typed information channel
+(ANALYSIS.md §5).
 
 ### 14.5 Pareto-optimality and the limits of UOR
 
@@ -911,11 +1004,14 @@ What UOR cannot improve on (ANALYSIS.md §4.4 boundaries):
   adversarial-input attacks (all out of UOR's observability
   surface).
 
-prism-btc's `mine_with_commitment` is therefore the **absolute
-optimal** mining surface within UOR's framework: it realizes every
-bit of bandwidth that the σ-projection's PRF baseline makes
-available, with no concession to traditional miner tropes (no
-hashrate metric, no GPU offload, no W32 walk inside the ψ-pipeline).
+prism-btc's `mine_with<C: TypedCommitment>` is therefore the
+**absolute optimal** mining surface within UOR's framework: it
+realizes every bit of bandwidth that the σ-projection's PRF baseline
+makes available, with no concession to traditional miner tropes (no
+hashrate metric, no GPU offload, no W32 walk inside the ψ-pipeline),
+and prism's zero-runtime-movement contract is upheld end-to-end:
+every commitment is a monomorphized compile unit, no `Vec`, no
+dynamic dispatch, no runtime disjointness check.
 
 ## 15. Performance model
 

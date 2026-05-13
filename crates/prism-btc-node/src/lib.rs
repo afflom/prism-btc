@@ -73,15 +73,18 @@ impl PrismMiner {
     /// submit the admitting wire-format block via `submitblock`, return
     /// the summary.
     ///
-    /// The ψ_9 resolver's iterative-resolution loop (wiki
-    /// `iterative-resolution.md`) walks the W32 nonce ring internally
-    /// to land an admitting κ-derivation — `prism_btc::mine` is
-    /// one-shot per template from the host's perspective. The host
-    /// boundary's only iteration is the outer extranonce roll, used
-    /// when a single template's W32 ring is walked end-to-end without
-    /// admission (architecture §7) — typically unreached for any
-    /// network whose chain advances faster than ~30 seconds × CPU
-    /// speed × `2^32 / admission-probability`.
+    /// `prism_btc::mine` is one-shot per template: ψ_9's structural
+    /// κ-derivation produces exactly one candidate header for any
+    /// well-formed `MiningTask`. The host boundary iterates the
+    /// **extranonce roll** (architecture §7) — each extranonce value
+    /// produces a distinct coinbase txid → distinct merkle root →
+    /// distinct `MiningTask` → distinct κ-derivation. Under PRF
+    /// baseline, expected extranonce trials before admission is
+    /// `1/α` where `α` is the target's admission probability. The
+    /// u64 extranonce space (2^64) covers every realistic network
+    /// difficulty (mainnet `α ≈ 2^-77`); exhaustion would indicate
+    /// the network's `α` is below the algorithmic floor and is not a
+    /// pipeline bug.
     pub fn mine_one_block(&self) -> Result<MinedBlock> {
         let rules: &[GetBlockTemplateRules] = match self.network {
             Network::Signet => &[
@@ -105,6 +108,24 @@ impl PrismMiner {
                 &[] as &[GetBlockTemplateCapabilities],
             )
             .context("getblocktemplate RPC")?;
+
+        // Signet validity gate (BIP325). When `signet_challenge` is
+        // non-empty, valid signet blocks must carry the operator's
+        // signature in the coinbase witness commitment area —
+        // prism-btc-node does not implement signet block signing.
+        // Fail-closed here rather than producing invalid output.
+        // Empty-challenge signets (private no-challenge setups) are
+        // supported.
+        if self.network == Network::Signet && !template.signet_challenge.as_bytes().is_empty() {
+            bail!(
+                "signet has non-empty signet_challenge ({} bytes); BIP325 block signing \
+                 is required and prism-btc-node does not implement it. Use bitcoind's \
+                 built-in signet signer (signet wallet + generatetoaddress) for \
+                 challenge signets, or run a private no-challenge signet for \
+                 prism-btc-node end-to-end testing.",
+                template.signet_challenge.as_bytes().len()
+            );
+        }
 
         // Template-variation loop: each iteration produces a fresh
         // MiningTask (distinct merkle root via the rolled extranonce)
@@ -169,14 +190,14 @@ pub struct MinedBlock {
     pub nonce: u32,
     pub witness: MiningWitness,
     pub tx_count: usize,
-    /// Diagnostic state from the ψ_9 iterative-resolution loop that
-    /// landed the admitting κ-derivation for the submitted block.
+    /// Diagnostic state from ψ_9's structural κ-derivation that
+    /// landed the admitting κ-label for the submitted block.
     /// See [`prism_btc::diagnostics`].
     pub resolution: prism_btc::ResolutionState,
     /// Number of host-boundary extranonce variations the template
-    /// loop walked before ψ_9 admitted. `0` means the first attempt
-    /// converged; higher values count the
-    /// `InhabitanceImpossibilityWitness` retries (architecture §7).
+    /// loop walked before admission. `0` means the first
+    /// κ-derivation admitted; higher values count subsequent
+    /// extranonce rolls (architecture §7).
     pub extranonce_attempts: u64,
 }
 
@@ -205,7 +226,59 @@ impl MiningJob {
             .map(|t| t.transaction().context("decode template tx"))
             .collect::<Result<_>>()?;
 
-        let coinbase = build_coinbase_tx(tpl, payout, extranonce)?;
+        if tpl.bits.len() != 4 {
+            bail!(
+                "getblocktemplate.bits has unexpected length {}",
+                tpl.bits.len()
+            );
+        }
+        let bits_u32 = u32::from_be_bytes([tpl.bits[0], tpl.bits[1], tpl.bits[2], tpl.bits[3]]);
+
+        let time_u32: u32 = tpl.current_time.try_into().with_context(|| {
+            format!(
+                "template current_time {} exceeds u32::MAX",
+                tpl.current_time
+            )
+        })?;
+
+        Self::from_components(
+            tpl.previous_block_hash.to_byte_array(),
+            tpl.height,
+            bits_u32,
+            time_u32,
+            tpl.version,
+            tpl.coinbase_value.to_sat(),
+            tpl.default_witness_commitment.clone(),
+            other_txs,
+            payout,
+            extranonce,
+        )
+    }
+
+    /// Component-level constructor — testable without a live bitcoind.
+    /// Mirrors [`Self::from_template_with_extranonce`] but takes the
+    /// essential template fields directly. Produces the same
+    /// `MiningJob` for any (template, extranonce) the host loop drives.
+    #[allow(clippy::too_many_arguments)] // every arg is a load-bearing template field
+    pub(crate) fn from_components(
+        prev_hash: [u8; 32],
+        height: u64,
+        bits: u32,
+        time: u32,
+        version: u32,
+        coinbase_value_sat: u64,
+        witness_commitment_script: ScriptBuf,
+        other_txs: Vec<Transaction>,
+        payout: &Address,
+        extranonce: u64,
+    ) -> Result<Self> {
+        let coinbase = build_coinbase_tx(
+            height,
+            coinbase_value_sat,
+            &witness_commitment_script,
+            payout,
+            extranonce,
+        )?;
 
         let mut leaves = Vec::with_capacity(other_txs.len() + 1);
         leaves.push(coinbase.compute_txid().to_raw_hash());
@@ -215,39 +288,22 @@ impl MiningJob {
         let merkle_root_raw = calculate_root(leaves.into_iter())
             .context("merkle root computation (empty leaf set unexpected)")?;
         let btc_merkle = bitcoin::TxMerkleNode::from_raw_hash(merkle_root_raw);
-
-        if tpl.bits.len() != 4 {
-            bail!(
-                "getblocktemplate.bits has unexpected length {}",
-                tpl.bits.len()
-            );
-        }
-        let bits_u32 = u32::from_be_bytes([tpl.bits[0], tpl.bits[1], tpl.bits[2], tpl.bits[3]]);
-        let btc_bits = CompactTarget::from_consensus(bits_u32);
-
-        let time_u32: u32 = tpl.current_time.try_into().with_context(|| {
-            format!(
-                "template current_time {} exceeds u32::MAX",
-                tpl.current_time
-            )
-        })?;
-
-        let version_i32: i32 = tpl
-            .version
-            .try_into()
-            .with_context(|| format!("template version {} exceeds i32::MAX", tpl.version))?;
-
-        let prev_bytes: [u8; 32] = tpl.previous_block_hash.to_byte_array();
         let merkle_bytes: [u8; 32] = merkle_root_raw.to_byte_array();
 
+        let version_i32: i32 = version
+            .try_into()
+            .with_context(|| format!("template version {version} exceeds i32::MAX"))?;
+        let btc_bits = CompactTarget::from_consensus(bits);
+        let btc_prev_hash = BtcBlockHash::from_byte_array(prev_hash);
+
         let header = BlockHeader {
-            version: Version(tpl.version),
-            prev_hash: prev_bytes,
+            version: Version(version),
+            prev_hash,
             merkle_root: MerkleRoot::from_bytes(merkle_bytes),
-            timestamp: Timestamp(time_u32),
-            bits: Bits(bits_u32),
+            timestamp: Timestamp(time),
+            bits: Bits(bits),
         };
-        let target = Target::new(bits_u32);
+        let target = Target::new(bits);
 
         Ok(Self {
             header,
@@ -255,9 +311,9 @@ impl MiningJob {
             coinbase,
             other_txs,
             btc_version: BtcBlockVersion::from_consensus(version_i32),
-            btc_prev_hash: tpl.previous_block_hash,
+            btc_prev_hash,
             btc_merkle,
-            btc_time: time_u32,
+            btc_time: time,
             btc_bits,
         })
     }
@@ -281,14 +337,15 @@ impl MiningJob {
 
 /// Build a BIP141-compliant coinbase transaction.
 fn build_coinbase_tx(
-    tpl: &GetBlockTemplateResult,
+    height: u64,
+    coinbase_value_sat: u64,
+    witness_commitment_script: &ScriptBuf,
     payout: &Address,
     extranonce: u64,
 ) -> Result<Transaction> {
-    let height_i64: i64 = tpl
-        .height
+    let height_i64: i64 = height
         .try_into()
-        .with_context(|| format!("template height {} exceeds i64::MAX", tpl.height))?;
+        .with_context(|| format!("template height {height} exceeds i64::MAX"))?;
 
     let script_sig = ScriptBuilder::new()
         .push_int(height_i64)
@@ -305,15 +362,14 @@ fn build_coinbase_tx(
     input.witness.push(COINBASE_WITNESS_RESERVED);
 
     let mut outputs = vec![TxOut {
-        value: Amount::from_sat(tpl.coinbase_value.to_sat()),
+        value: Amount::from_sat(coinbase_value_sat),
         script_pubkey: payout.script_pubkey(),
     }];
 
-    let commitment_script: &ScriptBuf = &tpl.default_witness_commitment;
-    if !commitment_script.as_bytes().is_empty() {
+    if !witness_commitment_script.as_bytes().is_empty() {
         outputs.push(TxOut {
             value: Amount::ZERO,
-            script_pubkey: commitment_script.clone(),
+            script_pubkey: witness_commitment_script.clone(),
         });
     }
 
@@ -323,4 +379,150 @@ fn build_coinbase_tx(
         input: vec![input],
         output: outputs,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bitcoin::Network;
+
+    /// Regtest payout address (a valid bech32 P2WPKH derived from a
+    /// fixed all-zero key for deterministic test fixtures).
+    fn regtest_payout() -> Address {
+        "bcrt1q6rhpng9evdsfnn833a4f4vej0asu6dk5srld6x"
+            .parse::<Address<_>>()
+            .expect("parse fixture address")
+            .require_network(Network::Regtest)
+            .expect("regtest address")
+    }
+
+    fn fixture_components(extranonce: u64) -> Result<MiningJob> {
+        MiningJob::from_components(
+            [0u8; 32],        // previous block hash
+            1,                // height
+            0x207fffff,       // regtest bits
+            1_700_000_000,    // timestamp
+            0x20000000,       // version (BIP9 base)
+            50 * 100_000_000, // coinbase value (50 BTC)
+            ScriptBuf::new(), // no witness commitment (no SegWit txs)
+            Vec::new(),       // no other transactions
+            &regtest_payout(),
+            extranonce,
+        )
+    }
+
+    #[test]
+    fn extranonce_roll_produces_distinct_merkle_roots() {
+        // Architecture §7: each host-boundary extranonce variation must
+        // produce a distinct MiningTask (distinct prefix → distinct
+        // κ-derivation). The mechanism: extranonce bytes change the
+        // coinbase scriptSig → coinbase txid changes → merkle root
+        // changes → header prefix changes. Without this distinctness
+        // the host loop would re-issue the same κ-derivation every
+        // iteration, never landing admission for harder targets.
+        let job0 = fixture_components(0).expect("build job 0");
+        let job1 = fixture_components(1).expect("build job 1");
+        let job2 = fixture_components(0xDEAD_BEEF).expect("build job 2");
+
+        // The header's merkle_root differs across extranonces — that's
+        // the load-bearing distinctness for κ-derivation variety.
+        assert_ne!(
+            job0.header.merkle_root.as_bytes(),
+            job1.header.merkle_root.as_bytes(),
+            "extranonce 0 vs 1 must produce distinct merkle roots"
+        );
+        assert_ne!(
+            job0.header.merkle_root.as_bytes(),
+            job2.header.merkle_root.as_bytes(),
+            "extranonce 0 vs DEADBEEF must produce distinct merkle roots"
+        );
+        assert_ne!(
+            job1.header.merkle_root.as_bytes(),
+            job2.header.merkle_root.as_bytes(),
+            "extranonce 1 vs DEADBEEF must produce distinct merkle roots"
+        );
+
+        // Same-extranonce determinism: build twice with the same
+        // extranonce; should be byte-identical.
+        let job0_again = fixture_components(0).expect("rebuild job 0");
+        assert_eq!(
+            job0.header.merkle_root.as_bytes(),
+            job0_again.header.merkle_root.as_bytes(),
+            "same extranonce → same merkle root (host loop reproducibility)"
+        );
+    }
+
+    #[test]
+    fn extranonce_roll_holds_non_merkle_header_fields_constant() {
+        // Only the merkle root varies under extranonce roll; version,
+        // prev_hash, timestamp, bits are fixed by the template.
+        let job0 = fixture_components(0).expect("build job 0");
+        let job1 = fixture_components(0xCAFEBABE).expect("build job 1");
+        assert_eq!(job0.header.version, job1.header.version);
+        assert_eq!(job0.header.prev_hash, job1.header.prev_hash);
+        assert_eq!(job0.header.timestamp, job1.header.timestamp);
+        assert_eq!(job0.header.bits, job1.header.bits);
+    }
+
+    #[test]
+    fn assemble_produces_valid_bitcoin_block_with_supplied_nonce() {
+        // assemble(nonce) splices a κ-derived nonce back into a
+        // rust-bitcoin Block. The header's wire-format reconstruction
+        // is byte-for-byte: prev_hash, merkle, time, bits, nonce —
+        // all carried through.
+        let job = fixture_components(42).expect("build job");
+        let expected_merkle: [u8; 32] = *job.header.merkle_root.as_bytes();
+        let expected_prev = job.header.prev_hash;
+        let expected_time = job.header.timestamp.0;
+        let expected_bits = job.header.bits.0;
+        let block = job.assemble(0xDEAD_BEEF);
+
+        assert_eq!(block.header.nonce, 0xDEAD_BEEF);
+        assert_eq!(block.header.time, expected_time);
+        assert_eq!(block.header.bits.to_consensus(), expected_bits);
+        assert_eq!(block.header.prev_blockhash.to_byte_array(), expected_prev);
+        assert_eq!(block.header.merkle_root.to_byte_array(), expected_merkle);
+        // The coinbase is at txdata[0]; in our fixture, no other txs.
+        assert_eq!(block.txdata.len(), 1);
+        // Coinbase has BIP141 witness (single 32-byte zero entry).
+        assert_eq!(block.txdata[0].input[0].witness.len(), 1);
+        // BIP34 height-in-coinbase: first scriptSig push decodes to height.
+        let script_sig = &block.txdata[0].input[0].script_sig;
+        assert!(
+            !script_sig.is_empty(),
+            "BIP34 requires non-empty coinbase scriptSig (height push)"
+        );
+    }
+
+    #[test]
+    fn from_components_accepts_witness_commitment() {
+        // When the template includes a witness commitment (BIP141),
+        // the coinbase carries an additional OP_RETURN output with
+        // the commitment script.
+        let mut commitment_bytes = vec![0x6a, 0x24, 0xaa, 0x21, 0xa9, 0xed];
+        commitment_bytes.extend_from_slice(&[0u8; 32]);
+        let commitment = ScriptBuf::from_bytes(commitment_bytes);
+
+        let job = MiningJob::from_components(
+            [0u8; 32],
+            1,
+            0x207fffff,
+            1_700_000_000,
+            0x20000000,
+            50 * 100_000_000,
+            commitment,
+            Vec::new(),
+            &regtest_payout(),
+            0,
+        )
+        .expect("build job with witness commitment");
+
+        // Coinbase outputs: [0] = payout, [1] = witness commitment.
+        assert_eq!(job.coinbase.output.len(), 2);
+        assert_eq!(job.coinbase.output[1].value, Amount::ZERO);
+        assert!(job.coinbase.output[1]
+            .script_pubkey
+            .as_bytes()
+            .starts_with(&[0x6a, 0x24, 0xaa, 0x21, 0xa9, 0xed]));
+    }
 }

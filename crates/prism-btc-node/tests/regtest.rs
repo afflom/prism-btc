@@ -107,3 +107,75 @@ fn mines_a_block_and_advances_the_chain() {
     );
     assert_ne!(display, [0u8; 32], "block hash is non-zero");
 }
+
+#[test]
+#[serial_test::serial]
+#[ignore = "requires running bitcoind on regtest; set PRISM_RPC_* env vars"]
+fn mines_a_chain_of_blocks_without_fail() {
+    // Architecture §7 / VERIFICATION.md §4: extends the single-block
+    // regtest E2E to a chain of `N_BLOCKS` consecutive mining calls,
+    // pinning the "valid input → valid output without fail" claim
+    // across repeated invocations. Each mining call:
+    //   1. fetches a fresh template (new prev_hash, new transactions),
+    //   2. drives prism-btc's ψ-pipeline through the host-boundary
+    //      extranonce-roll loop,
+    //   3. assembles the wire-format block,
+    //   4. submits via `submitblock` (fail-closed accept).
+    // The chain advances by exactly `N_BLOCKS` and each new tip is
+    // the block prism-btc just mined.
+    const N_BLOCKS: u64 = 10;
+
+    let url = env_or_skip("PRISM_RPC_URL").expect("PRISM_RPC_URL");
+    let user = env_or_skip("PRISM_RPC_USER").expect("PRISM_RPC_USER");
+    let pass = env_or_skip("PRISM_RPC_PASS").expect("PRISM_RPC_PASS");
+    let payout = env_or_skip("PRISM_PAYOUT").expect("PRISM_PAYOUT");
+
+    let observer = Client::new(&url, Auth::UserPass(user.clone(), pass.clone()))
+        .expect("observer RPC connect");
+    let height_before = observer.get_block_count().expect("getblockcount before");
+
+    let miner = PrismMiner::connect(&url, Auth::UserPass(user, pass), &payout, Network::Regtest)
+        .expect("PrismMiner::connect");
+
+    let mut mined_hashes = Vec::with_capacity(N_BLOCKS as usize);
+    for i in 1..=N_BLOCKS {
+        let mined = miner
+            .mine_one_block()
+            .unwrap_or_else(|e| panic!("mine_one_block #{i} failed: {e:?}"));
+        // The observed chain height after this mine matches the
+        // pre-mining height plus the count of mined blocks.
+        let height_now = observer.get_block_count().expect("getblockcount mid-loop");
+        assert_eq!(
+            height_now,
+            height_before + i,
+            "after mining #{i}, height should be height_before + {i}"
+        );
+        // The new tip is the block we just mined.
+        let tip_hash = observer.get_best_block_hash().expect("getbestblockhash");
+        assert_eq!(
+            tip_hash, mined.hash,
+            "after mining #{i}, tip hash should equal the prism-btc-mined block hash"
+        );
+        // Wire-format invariants hold for every block.
+        let output = mined.witness.output_bytes();
+        assert_eq!(
+            output.len(),
+            80,
+            "κ-label is 80 bytes for every mined block"
+        );
+        let nonce_from_label = u32::from_le_bytes([output[76], output[77], output[78], output[79]]);
+        assert_eq!(
+            nonce_from_label, mined.nonce,
+            "κ-label's nonce-field bytes decode to the resolved nonce (block #{i})"
+        );
+        mined_hashes.push(mined.hash);
+    }
+
+    // All mined hashes are distinct (no chain forks, no re-orgs in
+    // this controlled regtest run).
+    let mut seen = std::collections::HashSet::new();
+    for h in &mined_hashes {
+        assert!(seen.insert(*h), "mined block hashes must be distinct");
+    }
+    assert_eq!(seen.len() as u64, N_BLOCKS);
+}

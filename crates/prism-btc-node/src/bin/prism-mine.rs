@@ -60,10 +60,12 @@ fn main() -> Result<()> {
     if args.network == Network::Bitcoin && !args.i_know_what_im_doing {
         bail!(
             "refusing to mine on mainnet without --i-know-what-im-doing. \
-             prism-btc's mining inference is identical across networks; mainnet's \
-             byte-threshold constraint admits a vanishingly small fraction of W32, \
-             so a single forward() pass is overwhelmingly likely to exhaust without \
-             admission. The flag exists to prevent accidental misconfiguration."
+             prism-btc's ψ-pipeline is identical across networks; mainnet's \
+             admission probability α ≈ 2^-77 means the host extranonge roll \
+             would need ~2^77 iterations in expectation, which is computationally \
+             infeasible on consumer hardware. The flag exists to prevent \
+             accidental misconfiguration; the pipeline itself is fully valid for \
+             mainnet input."
         );
     }
 

@@ -24,18 +24,26 @@
 //! - [`ResolutionState`] / [`take_resolution_state`] — diagnostic
 //!   surface for ψ_9's structural κ-derivation
 //!   ([`diagnostics`] module).
-//! - [`mine_with_commitment`] / [`MiningCommitment`] /
-//!   [`Predicate`] — UOR-optimal mining: typed Conjunction
-//!   commitment on the κ-label (architecture §14). The
-//!   [`Predicate`] enum covers Walsh-Hadamard parity, stratum
-//!   equality, p-adic equality, and ultrametric closeness — each a
-//!   typed observable on the content-addressed manifold.
-//! - [`Support`] / [`CommitmentError`] — the algebraic-support
-//!   type and the error returned by [`MiningCommitment::try_add_predicate`]
-//!   when a new predicate's support overlaps an existing one. The
-//!   typed builders enforce support-disjointness, making
-//!   [`MiningCommitment::bandwidth_bits`] a tight cost contract by
-//!   construction (U6 Bandwidth-Additivity, architecture §14.2).
+//! - [`mine_with`] / [`TypedCommitment`] / [`EmptyCommitment`] /
+//!   [`PayloadCommitment`] — UOR-optimal mining: prism's **zero-cost
+//!   typed commitment surface** (architecture §14). Every commitment
+//!   is monomorphized per use site — no `Vec`, no dynamic dispatch,
+//!   no runtime allocation, no runtime disjointness check.
+//!   `wellFormed` is discharged at the type level by the typed
+//!   commitment's invariants; the Lean theorem
+//!   `Commitment.prf_prob_tight_wellFormed` applies at equality
+//!   (declared bandwidth = operational PRF cost, not an upper bound).
+//! - [`Predicate`] / [`Support`] — the primitive typed-predicate
+//!   enum (Parity, StratumEq, PAdicEq, UltrametricCloseTo) and its
+//!   algebraic-support type. Used by [`TypedCommitment`] implementors
+//!   as the building blocks and by individual-predicate cryptanalysis
+//!   (`examples/uor_cryptanalysis.rs` §I + §J).
+//! - [`KappaObservables`] / [`ExtendedObservables`] — the **receiver-
+//!   side** typed lens (architecture §14, ANALYSIS.md §5). Every
+//!   [`MiningOutcome`] carries a [`KappaObservables`] decoding of the
+//!   κ-label's canonical UOR property landscape (stratum, spectrum,
+//!   p-adic valuations at the small-prime set). Applications with
+//!   custom observables use the const-generic [`ExtendedObservables`].
 //! - [`ultrametric_valuation`] / [`walsh_hadamard_parity_at`] /
 //!   [`p_adic_valuation`] — UOR observable surface on the content-
 //!   addressed manifold (ANALYSIS.md §1.3).
@@ -47,9 +55,11 @@
 #[cfg(not(feature = "std"))]
 extern crate alloc;
 
+pub mod commitment;
 pub mod diagnostics;
 pub mod domain;
 pub mod model;
+pub mod observables;
 pub mod ops;
 pub mod pipeline;
 pub mod resolvers;
@@ -57,16 +67,15 @@ pub mod shapes;
 pub mod verbs;
 
 // Public façade — typed surface.
+pub use commitment::{EmptyCommitment, PayloadCommitment, TypedCommitment};
 pub use diagnostics::{take_resolution_state, ResolutionState};
 pub use domain::{
     p_adic_valuation, ultrametric_valuation, walsh_hadamard_parity_at, Bits, BlockHash,
     BlockHeader, MerkleRoot, MiningTag, MiningWitness, Target, Timestamp, TriadicCoords, Version,
 };
 pub use model::{BitcoinMiningModel, BitcoinMiningRoute, MiningResult, MiningTask, TemplatePrefix};
-pub use pipeline::{
-    mine, mine_with_commitment, CommitmentError, MiningCommitment, MiningFailure, MiningOutcome,
-    Predicate, Support,
-};
+pub use observables::{ExtendedObservables, KappaObservables, CANONICAL_PRIMES};
+pub use pipeline::{mine, mine_with, MiningFailure, MiningOutcome, Predicate, Support};
 pub use resolvers::{
     BitcoinChainComplexResolver, BitcoinCochainComplexResolver, BitcoinCohomologyGroupResolver,
     BitcoinHomologyGroupResolver, BitcoinHomotopyGroupResolver, BitcoinKInvariantResolver,

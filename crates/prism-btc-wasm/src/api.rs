@@ -25,9 +25,9 @@ pub fn mine_block(js_header: &JsBlockHeader, nbits: u32) -> Result<JsMiningResul
     mine(&header, Target::new(nbits))
         .map(|outcome| {
             JsMiningResult::new(
-                outcome.coords.datum,
-                outcome.coords.stratum,
-                outcome.coords.spectrum,
+                outcome.observables.coords.datum,
+                outcome.observables.coords.stratum,
+                outcome.observables.coords.spectrum,
             )
         })
         .map_err(|e| JsValue::from_str(&format!("{:?}", e)))

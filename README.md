@@ -231,17 +231,22 @@ traditional cryptanalysis, and ADR-style framework proposals.
 [ARCHITECTURE.md §14](ARCHITECTURE.md) — **UOR-optimal mining**.
 The cryptanalysis identifies the Pareto frontier
 `cost(B) = 2^B × α^-1`; prism-btc realizes it via
-`mine_with_commitment(header, target, commitment)`, the typed
-boundary surface that Conjunctions typed predicates from the UOR
-observable library (`Predicate::Parity` / `StratumEq` / `PAdicEq` /
-`UltrametricCloseTo`) onto admission. The `MiningCommitment`
-builder enforces support-disjointness at construction time, making
-`bandwidth_bits()` a tight cost contract by construction (the U6
-invariant is preserved by `add_predicate` / `try_add_predicate`,
-not just stated). Every mined block is wire-format-valid for
-`submitblock` *and* commits to `B` bits of application-declared
-structural information at proportional PRF cost. Reproducible via
-`cargo run --release --example optimal_mining`.
+`mine_with<C: TypedCommitment>(header, target, commitment)` — prism's
+**zero-cost typed commitment surface**. Every commitment is a
+compile-time-known typed structure (`EmptyCommitment`,
+`PayloadCommitment<K>`, or any user-defined `TypedCommitment` impl):
+no `Vec`, no dynamic dispatch, no runtime allocation, no runtime
+disjointness check. `wellFormed` is discharged at the type level by
+the commitment's invariants; the Lean theorem
+`Commitment.prf_prob_tight_wellFormed` applies at equality
+(declared bandwidth = operational PRF cost, not an upper bound).
+Every mined block is wire-format-valid for `submitblock` *and*
+commits to `B` bits of application-declared structural information
+at proportional PRF cost. The receiver-side typed lens is
+`KappaObservables` (carried on every `MiningOutcome`) and
+`ExtendedObservables<N_PAR, N_REF>` for application-specific
+parities and reference points. Reproducible via `cargo run --release
+--example optimal_mining`.
 
 ## Real-network mining (`prism-btc-node`)
 

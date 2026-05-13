@@ -1,55 +1,38 @@
-//! UOR-optimal mining via the typed Conjunction commitment surface.
+//! UOR-optimal mining via prism's zero-cost typed commitment surface.
 //!
-//! Exercises [`prism_btc::mine_with_commitment`] across the typed
-//! predicate library (`Predicate::Parity`, `Predicate::StratumEq`,
-//! `Predicate::PAdicEq`, `Predicate::UltrametricCloseTo`) at
-//! regtest-target admission. Two demonstrations:
+//! Exercises [`prism_btc::mine_with`] across two typed-commitment
+//! demonstrations:
 //!
-//! 1. **K-bit parity sweep** — K ∈ [0, MAX_K] parity predicates
-//!    Conjunction'd onto admission. Each parity is 1 bit; total
-//!    bandwidth = K bits; PRF cost = `2 × 2^K` template variations.
+//! 1. **K-bit `PayloadCommitment<K>` sweep** — K ∈ [0, MAX_K] parity
+//!    constraints on K disjoint single-bit ω-frequencies. Each
+//!    commitment is a separate monomorphization; the K-sweep is a
+//!    compile-time macro expansion (no `Vec`, no dynamic dispatch).
+//!    Bandwidth = K bits; PRF cost = `α^-1 × 2^K`.
 //!
-//! 2. **Mixed-predicate commitment** — one parity + one stratum-
-//!    equality + one ultrametric-closeness, total bandwidth =
-//!    `1 + (k+1) + k'`. Shows that the richer predicate library
-//!    gives the same `2^B` cost scaling for total bandwidth `B`.
-//!
-//! Reported cost is the empirical mean of `N_TRIALS` independent
-//! template searches per commitment; expected = `α^-1 × 2^B`.
+//! 2. **User-defined typed commitment** — a custom `StratumWithParity`
+//!    type implementing [`prism_btc::TypedCommitment`] directly. Shows
+//!    the extension pattern: applications that need a commitment
+//!    shape outside the substrate-provided typed forms implement the
+//!    trait themselves. Bandwidth is type-level; no `Vec`.
 //!
 //! Run: `cargo run --release --example optimal_mining`.
+//!
+//! Every typed commitment is monomorphized per use site — there is
+//! no runtime allocation or dynamic dispatch anywhere in this example.
 
 use std::time::Instant;
 
 use prism_btc::{
-    mine_with_commitment, Bits, BlockHeader, MerkleRoot, MiningCommitment, Target, Timestamp,
-    Version,
+    mine_with, walsh_hadamard_parity_at, Bits, BlockHeader, MerkleRoot, PayloadCommitment, Target,
+    Timestamp, TriadicCoords, TypedCommitment, Version,
 };
 
 /// Regtest nBits — the bare-admission baseline (α ≈ 1/2).
 const REGTEST_NBITS: u32 = 0x207fffff;
-/// Maximum K (number of parity predicates) for §1 sweep.
-const MAX_K: usize = 6;
 /// Independent trials per K — averaged for the empirical estimate.
 const N_TRIALS: usize = 50;
 /// Per-trial cap on template variations.
 const MAX_VARIATIONS: u32 = 1_000_000;
-
-/// Construct the ω-mask for the i-th parity predicate.
-fn omega_for_predicate(i: usize) -> [u8; 32] {
-    let mut omega = [0u8; 32];
-    let byte_idx = 8 + (i % 24);
-    let bit_idx = (i / 24) % 8;
-    omega[byte_idx] = 1u8 << bit_idx;
-    omega
-}
-
-/// Build a K-bit parity-only MiningCommitment.
-fn build_parity_commitment(k: usize) -> MiningCommitment {
-    (0..k).fold(MiningCommitment::empty(), |c, i| {
-        c.add_parity(omega_for_predicate(i), 1)
-    })
-}
 
 /// Build a permissive regtest-style header parameterized by a seed.
 fn build_header(trial_seed: u32) -> BlockHeader {
@@ -70,15 +53,15 @@ fn build_header(trial_seed: u32) -> BlockHeader {
     }
 }
 
-/// Roll the timestamp until [`mine_with_commitment`] returns `Ok`,
-/// up to [`MAX_VARIATIONS`].
-fn find_committed_block(trial_seed: u32, commitment: &MiningCommitment) -> Option<u32> {
+/// Roll the timestamp until [`mine_with`] returns `Ok`, up to
+/// [`MAX_VARIATIONS`]. Monomorphized per `C: TypedCommitment`.
+fn find_committed_block<C: TypedCommitment>(trial_seed: u32, commitment: C) -> Option<u32> {
     let target = Target::new(REGTEST_NBITS);
     let base = build_header(trial_seed);
     for variation in 0..MAX_VARIATIONS {
         let mut header = base.clone();
         header.timestamp = Timestamp(base.timestamp.0.wrapping_add(variation));
-        if let Ok(outcome) = mine_with_commitment(&header, target, commitment) {
+        if let Ok(outcome) = mine_with(&header, target, commitment) {
             assert!(target.is_satisfied_by_bytes(&outcome.digest));
             assert!(commitment.evaluate(&outcome.digest));
             return Some(variation + 1);
@@ -87,124 +70,161 @@ fn find_committed_block(trial_seed: u32, commitment: &MiningCommitment) -> Optio
     None
 }
 
+/// Run one row of the K-sweep at compile-time-known `K`. Monomorphized
+/// per K; the loop bound `K` is part of the type, not runtime data.
+fn sweep_row<const K: usize>() -> (f64, f64, f64) {
+    let bits = [true; K];
+    let commitment = PayloadCommitment::<K>::from_bits(bits);
+    let bandwidth = commitment.bandwidth_bits();
+    let pred = 2.0_f64.powf(bandwidth + 1.0); // baseline 2 × 2^K at α ≈ 1/2
+
+    let mut variations = [0.0_f64; N_TRIALS];
+    for (trial, slot) in variations.iter_mut().enumerate() {
+        match find_committed_block::<PayloadCommitment<K>>(trial as u32, commitment) {
+            Some(v) => *slot = v as f64,
+            None => panic!("Failed at K={K}, trial={trial}"),
+        }
+    }
+    let mean: f64 = variations.iter().sum::<f64>() / (N_TRIALS as f64);
+    (bandwidth, pred, mean)
+}
+
 fn main() {
-    println!("=== UOR-optimal mining: typed Conjunction commitment ===");
+    println!("=== UOR-optimal mining: zero-cost typed commitment ===");
     println!();
     println!(
         "σ-projection: SHA-256d. Admission: regtest target 0x{:08x} (α ≈ 1/2).",
         REGTEST_NBITS
     );
-    println!("PRF prediction (U6 Bandwidth-Additivity): variations = α^-1 × 2^B");
-    println!("where B = commitment.bandwidth_bits() (sum of per-predicate contributions).");
+    println!("PRF prediction (U6, tight): variations = α^-1 × 2^B");
+    println!("where B = commitment.bandwidth_bits(). Every commitment below");
+    println!("is monomorphized — no Vec, no dynamic dispatch.");
     println!();
 
-    sweep_parity_only();
-    demo_mixed_predicates();
+    sweep_payload();
+    demo_user_defined_typed_commitment();
 
     println!();
-    println!("Each mined block is a wire-format-valid Bitcoin κ-label that ALSO commits");
-    println!("to B bits of application-declared structural information. Bitcoin Core sees");
-    println!("a normal block; an application-layer verifier reads the typed predicates off");
-    println!("the published digest.");
+    println!("Each mined block is a wire-format-valid Bitcoin κ-label that ALSO");
+    println!("commits to B bits of application-declared structural information.");
+    println!("Bitcoin Core sees a normal block; an application-layer verifier");
+    println!("reads the typed predicates off the published digest.");
 }
 
-fn sweep_parity_only() {
-    println!("── §1. Parity-only sweep ───────────────────────────────");
+fn sweep_payload() {
+    println!("── §1. PayloadCommitment<K> sweep (zero-cost) ──────────");
     println!();
-    println!("K parity predicates Conjunction'd onto admission; bandwidth = K bits.");
+    println!("K-bit payload as K disjoint single-bit parities. Each K is a");
+    println!("separate monomorphization; the table below is compile-time");
+    println!("expanded via macro.");
     println!();
     println!("  K   bandwidth      PRF pred       observed       ratio");
     println!("  --  ----------     ----------     ----------     -------");
 
     let started = Instant::now();
-    for k in 0..=MAX_K {
-        let commitment = build_parity_commitment(k);
-        let bandwidth_bits = commitment.bandwidth_bits();
-        // Normalize ±0.0 → 0.0 for cosmetic table alignment.
-        let bandwidth_display = if bandwidth_bits == 0.0 {
-            0.0_f64
-        } else {
-            bandwidth_bits
-        };
-        let pred = 2.0_f64.powf(bandwidth_bits + 1.0); // 2 × 2^B baseline at α ≈ 1/2
 
-        let mut variations = Vec::with_capacity(N_TRIALS);
-        for trial in 0..N_TRIALS {
-            match find_committed_block(trial as u32, &commitment) {
-                Some(v) => variations.push(v as f64),
-                None => panic!("Failed at K={k}, trial={trial}"),
-            }
-        }
-        let mean: f64 = variations.iter().sum::<f64>() / (N_TRIALS as f64);
-        println!(
-            "  {:2}  {:>4.1} bits      {:>10.0}     {:>10.1}     {:>4.2}x",
-            k,
-            bandwidth_display,
-            pred,
-            mean,
-            mean / pred,
-        );
+    // Compile-time macro expansion of the K-sweep. Each row is a
+    // distinct monomorphization of `sweep_row::<K>()` — no runtime
+    // dispatch on K.
+    macro_rules! sweep {
+        ($($k:literal),*) => {
+            $({
+                let (bandwidth, pred, mean) = sweep_row::<$k>();
+                let bandwidth_display = if bandwidth == 0.0 { 0.0_f64 } else { bandwidth };
+                println!(
+                    "  {:2}  {:>4.1} bits      {:>10.0}     {:>10.1}     {:>4.2}x",
+                    $k,
+                    bandwidth_display,
+                    pred,
+                    mean,
+                    mean / pred,
+                );
+            })*
+        };
     }
+    sweep!(0, 1, 2, 3, 4, 5, 6);
+
     println!();
     println!(
-        "Parity sweep wall-clock: {:.2}s",
+        "Payload sweep wall-clock: {:.2}s",
         started.elapsed().as_secs_f64()
     );
 }
 
-fn demo_mixed_predicates() {
+/// **§2 user-defined typed commitment.** A custom `TypedCommitment`
+/// composing a 1-bit parity (at a high-byte ω) and a stratum-equality
+/// constraint (at the low bytes). The two predicates have disjoint
+/// algebraic supports by *type-level* construction — the parity reads
+/// byte 8, the stratum reads byte 31's low bits — so `wellFormed` is
+/// discharged at the type level (the Lean theorem's hypothesis is
+/// dispatched by the user-side type invariant, not by a runtime
+/// check). Bandwidth = 1 + (k + 1) = `k + 2` bits.
+#[derive(Debug, Clone, Copy)]
+struct StratumWithParity<const K: u32> {
+    parity_omega_byte8: u8, // single bit set in byte 8 — disjoint from byte-31 low bits
+    parity_expected: u32,
+}
+
+impl<const K: u32> TypedCommitment for StratumWithParity<K> {
+    fn bandwidth_bits(&self) -> f64 {
+        1.0 + (K as f64 + 1.0)
+    }
+
+    fn accept_prob(&self) -> f64 {
+        0.5_f64 * (2.0_f64).powi(-(K as i32 + 1))
+    }
+
+    fn evaluate(&self, digest: &[u8; 32]) -> bool {
+        // Parity at byte-8 single bit.
+        let mut omega = [0u8; 32];
+        omega[8] = self.parity_omega_byte8;
+        if walsh_hadamard_parity_at(digest, &omega) != self.parity_expected {
+            return false;
+        }
+        // StratumEq{K} = digest's 2-adic valuation equals K.
+        TriadicCoords::from_hash(digest).stratum == K
+    }
+
+    fn predicate_count(&self) -> usize {
+        2
+    }
+}
+
+fn demo_user_defined_typed_commitment() {
     println!();
-    println!("── §2. Mixed-predicate Conjunction ─────────────────────");
+    println!("── §2. User-defined typed commitment ───────────────────");
     println!();
-    println!("A single commitment composing predicates from different");
-    println!("families on the manifold. The total bandwidth is the");
-    println!("sum of per-predicate contributions (U6 Bandwidth-Additivity).");
+    println!("Applications outside the substrate-provided typed forms");
+    println!("implement `TypedCommitment` directly. `wellFormed` is the");
+    println!("implementor's invariant (typically at the type level) —");
+    println!("no runtime disjointness check, zero allocation.");
     println!();
 
-    // Predicates must be **independent** for U6 bandwidth-additivity
-    // to hold. Both `StratumEq{k}` and `UltrametricCloseTo` read
-    // low-bit content; pairing them would double-count constraints.
-    // Here we pair predicates from different algebraic strata:
-    //
-    //   - `Parity` at byte 8 bit 0:   reads bit 64 (BE) → independent
-    //                                 from byte-31 observables.
-    //   - `StratumEq{k=2}`:           reads bits 0..2 of byte 31
-    //                                 (the 2-adic stratification).
-    //   - `PAdicEq{p=3, k=0}`:        digest's 3-adic valuation = 0
-    //                                 ⇔ digest as 256-bit integer
-    //                                 not divisible by 3. Modular
-    //                                 constraint approximately
-    //                                 independent of any specific bit
-    //                                 pattern (mod-2 vs mod-3 are
-    //                                 jointly independent over
-    //                                 uniform random integers).
+    // K = 2 stratum: bit 2 of byte 31 set, bits 0..1 = 0 → 3 bits.
+    let commitment = StratumWithParity::<2> {
+        parity_omega_byte8: 0b0000_0001,
+        parity_expected: 1,
+    };
+    let bandwidth = commitment.bandwidth_bits();
+    let pred = 2.0_f64.powf(bandwidth + 1.0);
 
-    let mixed = MiningCommitment::empty()
-        .add_parity(omega_for_predicate(0), 1) // 1 bit
-        .add_stratum_eq(2) // bit 2 of byte 31 = 1, bits 0..1 = 0 → 3 bits
-        .add_p_adic_eq(3, 0); // P = 2/3 → bandwidth ≈ 0.585 bits
-
-    let bandwidth_bits = mixed.bandwidth_bits();
-    let count = mixed.predicate_count();
-    let pred = 2.0_f64.powf(bandwidth_bits + 1.0); // baseline ≈ 2 at α ≈ 1/2
-
-    println!("  Commitment: {} predicates", count);
-    println!("    1× Parity                (1.000 bits)");
-    println!("    1× StratumEq{{k=2}}        (3.000 bits)");
-    println!("    1× PAdicEq{{p=3, k=0}}     (≈0.585 bits)");
-    println!("  Total bandwidth: {:.3} bits", bandwidth_bits);
+    println!(
+        "  Commitment: StratumWithParity<K=2> ({} predicates, bandwidth = {:.3} bits)",
+        commitment.predicate_count(),
+        bandwidth
+    );
     println!(
         "  PRF prediction: {:.0} variations (= 2 × 2^{:.3})",
-        pred, bandwidth_bits
+        pred, bandwidth
     );
     println!();
 
     let started = Instant::now();
-    let mut variations = Vec::with_capacity(N_TRIALS);
-    for trial in 0..N_TRIALS {
-        match find_committed_block(trial as u32, &mixed) {
-            Some(v) => variations.push(v as f64),
-            None => panic!("Mixed-predicate trial {} failed", trial),
+    let mut variations = [0.0_f64; N_TRIALS];
+    for (trial, slot) in variations.iter_mut().enumerate() {
+        match find_committed_block::<StratumWithParity<2>>(trial as u32, commitment) {
+            Some(v) => *slot = v as f64,
+            None => panic!("StratumWithParity trial {trial} failed"),
         }
     }
     let mean: f64 = variations.iter().sum::<f64>() / (N_TRIALS as f64);
@@ -214,7 +234,7 @@ fn demo_mixed_predicates() {
         mean / pred,
     );
     println!(
-        "  Mixed-predicate wall-clock: {:.2}s",
+        "  StratumWithParity wall-clock: {:.2}s",
         started.elapsed().as_secs_f64()
     );
 }

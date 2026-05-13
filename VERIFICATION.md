@@ -12,7 +12,7 @@ artifact in the repo.
 ## §1 Architectural conformance — `cargo test --release`
 
 The verb arena, model declarations, and substrate-bindings carry
-compile-time invariants the test surface re-asserts at runtime. 55
+compile-time invariants the test surface re-asserts at runtime. 63
 unit tests across the prism-btc crate's modules:
 
 - **`crates/prism-btc/src/verbs.rs::tests`** (6 tests) — the verb
@@ -53,28 +53,59 @@ unit tests across the prism-btc crate's modules:
   against rust-bitcoin reference; canonical 80-byte header
   serialization round-trip.
 
-- **`crates/prism-btc/src/pipeline.rs::tests`** (16 tests) — the
+- **`crates/prism-btc/src/pipeline.rs::tests`** (14 tests) — the
   UOR-optimal mining surface (architecture §14):
-  - Predicate semantics: empty commitment ≡ bare `mine()`;
-    `Predicate::Parity` reads a single bit (bandwidth 1);
-    `Predicate::StratumEq{k}` matches the 2-adic stratum
-    (bandwidth `k+1`); `Predicate::PAdicEq{p, k}` matches the
-    p-adic valuation (bandwidth `(k+1)·log₂p − log₂(p−1)`);
+  - `mine_with(EmptyCommitment)` ≡ bare `mine` (zero-cost identity
+    on the typed surface).
+  - `mine_with(PayloadCommitment::<K>)` finds an admitting κ-label
+    whose decoded bits round-trip the encoded payload.
+  - Predicate primitives: `Predicate::Parity` reads a single bit
+    (bandwidth 1); `Predicate::StratumEq{k}` matches the 2-adic
+    stratum (bandwidth `k+1`); `Predicate::PAdicEq{p, k}` matches
+    the p-adic valuation (bandwidth `(k+1)·log₂p − log₂(p−1)`);
     `Predicate::UltrametricCloseTo{r, k}` matches the 2-adic
     distance (bandwidth `k`).
-  - Bandwidth-additivity (U6) over **disjoint** supports;
-    Conjunction'd evaluation = AND of per-predicate evaluations
-    across mixed types; `mine_with_commitment` admits at a
-    permissive target with the empty commitment.
+  - Acceptance-probability surface (the Lean correspondence):
+    `Predicate::accept_prob_rational` returns the exact rational
+    Pr per variant — `Parity`→`(1,2)`, `StratumEq{k}`→`(1, 2^(k+1))`,
+    `PAdicEq{p,k}`→`(p-1, p^(k+1))`, `UltrametricCloseTo{k}`→`(1, 2^k)`;
+    `accept_prob` (f64) matches `2^(-bandwidth_bits)` to relative
+    1e-12.
   - Support algebra (§14.2): `PAdicEq{p=2}` canonicalizes to
     `BitSet`; `BitSet ⊥ BitSet` iff bit-disjoint; same-byte
     overlap is detected as dependent; distinct-byte `BitSet`s are
     independent; `Modular{p₁} ⊥ Modular{p₂}` iff `p₁ ≠ p₂`;
-    `Modular{p≥3} ⊥ BitSet(_)` always.
-  - Enforcement: `try_add_predicate` returns
-    `Err(OverlappingSupport{ existing_index })` on overlap and
-    succeeds on disjoint supports; `add_predicate` panics with
-    "overlapping support" on overlap.
+    `Modular{p≥3} ⊥ BitSet(_)` always. (Retained as the
+    diagnostic / cryptanalysis surface — typed commitments
+    discharge `wellFormed` at the type level, not via this check.)
+
+- **`crates/prism-btc/src/commitment.rs::tests`** (7 tests) — prism's
+  zero-cost typed commitment surface:
+  - `EmptyCommitment` admits every digest; bandwidth 0;
+    `accept_prob` 1.
+  - `PayloadCommitment<K>::from_bits` + `::decode` round-trip on a
+    matching digest; mismatched bits are rejected.
+  - Bandwidth scales as `K`; acceptance probability scales as
+    `2^-K`.
+  - Decomposition into `[Predicate; K]` agrees with the
+    monomorphized `evaluate` (sender ↔ predicate-primitive
+    consistency).
+  - `PayloadCommitment<K>` predicates have pairwise-disjoint
+    supports by *construction* — `wellFormed` discharged at the
+    type level.
+
+- **`crates/prism-btc/src/observables.rs::tests`** (3 tests) — the
+  receiver-side typed lens:
+  - `KappaObservables::from_digest` decodes the canonical landscape
+    (stratum, spectrum, p-adic valuations at `CANONICAL_PRIMES =
+    {2, 3, 5, 7}`); `p_adic_at(2)` agrees with `coords.stratum`.
+  - **Round-trip identity**: for every `Predicate` variant,
+    `pred.evaluate(d) == ExtendedObservables::from_digest(d, ωs,
+    refs).satisfies(&pred, d)` — the sender ↔ receiver consistency
+    pinned algebraically.
+  - `ExtendedObservables::<0, 0>` is a valid instantiation
+    (canonical-only lens; the const-generic shape covers
+    the zero-extension case).
 
 The [`crate::diagnostics`](crates/prism-btc/src/diagnostics.rs)
 module exposes ψ_9's structural κ-derivation state
@@ -121,29 +152,61 @@ Lean 4 proofs of foundational algebraic identities prism-btc depends on:
 | `ShapeConstraint.lean` | Target satisfaction monotonicity; leading-zeros → stratum bound | proved |
 | `FreeRankProtocol.lean` | FreeRank decreases monotonically under refinement | proved |
 | `ConvergenceProtocol.lean` | σ-projection identity + ψ-vs-σ distinction (load-bearing for ADR-035) | proved |
-| `CommitmentChannel.lean` | U6 Bandwidth-Additivity: Conjunction is monoidal over commitment concatenation; bandwidth and evaluation distribute over append; `Support.disjoint` symmetry; `Commitment.wellFormed` invariant of the Rust typed-iso surface (architecture §14) | proved |
+| `CommitmentChannel.lean` §1 | U6 Joint-Probability Multiplicativity: Conjunction is monoidal over commitment concatenation; `acceptProb` (multiplicative) and `evaluate` (Boolean AND) distribute over append; `Support.disjoint` symmetry; `Commitment.wellFormed` invariant of the Rust typed-iso surface (architecture §14). The `Predicate.acceptProb : Rat` field faithfully covers all four Rust variants (including `PAdicEq{p≥3}` whose log-space bandwidth is irrational). | proved |
+| `CommitmentChannel.lean` §2 | **PRF tight-acceptance theorem** (`prf_prob_tight_wellFormed`): under U1 (marginal-uniformity) + U2 (joint-independence under disjoint supports), a `wellFormed` commitment's PRF acceptance probability equals its declared `acceptProb` at equality, not as an upper bound — the operational form of U6 (ANALYSIS.md §5.5, architecture §14.1). U1 + U2 axioms are empirically witnessed by `examples/uor_cryptanalysis.rs` §I + §J at α=0.001. | proved |
 
 Run: `just verify` (= `cd prism-btc-lean && lake update && lake build`).
 Build is green against `leanprover/lean4:v4.16.0`.
 
-## §4 Regtest end-to-end — `crates/prism-btc-node/tests/regtest.rs`
+## §4 Production host loop — `crates/prism-btc-node/`
 
-`mines_a_block_and_advances_the_chain` (gated `#[ignore]`) runs the
-complete client against a real bitcoind:
+**Host-loop unit tests** (`crates/prism-btc-node/src/lib.rs::tests`, 4
+tests) — pin the extranonce-roll invariants without requiring
+bitcoind:
 
-1. `getblocktemplate` for a fresh regtest template.
-2. `PrismMiner::mine_one_block` drives the host-boundary template-
-   variation loop: build `MiningTask` from current extranonce, call
-   `prism_btc::mine`, on `DidNotAdmit` (κ-derivation didn't satisfy
-   target at the boundary admission check) roll the extranonce,
-   on `Ok` submit.
-3. `submitblock` accepts the prism-btc-produced block.
-4. The observer client confirms the chain height advanced by exactly 1
-   and the new tip equals the prism-btc-mined block hash.
-5. The mined `MiningWitness` carries a non-zero `unit_address`,
-   `witt_level_bits == 32`, and an `output_bytes` of 80 bytes whose
-   nonce-field bytes (76..80, LE) decode to the same `u32` the
-   submitted block's header carries.
+- `extranonce_roll_produces_distinct_merkle_roots` — distinct
+  extranonce values produce distinct merkle roots (and hence distinct
+  `MiningTask` prefixes, distinct κ-derivations). Same-extranonce
+  rebuilds are byte-identical (deterministic host loop).
+- `extranonce_roll_holds_non_merkle_header_fields_constant` — only
+  the merkle root varies under extranonce roll; version, prev_hash,
+  timestamp, bits are template-fixed.
+- `assemble_produces_valid_bitcoin_block_with_supplied_nonce` — the
+  κ-derived nonce is spliced into a wire-format `Block` with all
+  header fields preserved; coinbase carries BIP141 witness and BIP34
+  height push.
+- `from_components_accepts_witness_commitment` — when SegWit is
+  active and bitcoind supplies a witness commitment, the coinbase
+  output[1] carries the OP_RETURN commitment correctly.
+
+**Regtest E2E** (gated `#[ignore]`, runs against a real bitcoind):
+
+- `mines_a_block_and_advances_the_chain` — single-block end-to-end:
+  1. `getblocktemplate` for a fresh regtest template.
+  2. `PrismMiner::mine_one_block` drives the host-boundary
+     template-variation loop: build `MiningTask` from current
+     extranonce, call `prism_btc::mine`, on `DidNotAdmit` roll the
+     extranonce, on `Ok` submit.
+  3. `submitblock` accepts the prism-btc-produced block.
+  4. The observer client confirms the chain height advanced by
+     exactly 1 and the new tip equals the prism-btc-mined block hash.
+  5. The mined `MiningWitness` carries a non-zero `unit_address`,
+     `witt_level_bits == 32`, and an `output_bytes` of 80 bytes whose
+     nonce-field bytes (76..80, LE) decode to the same `u32` the
+     submitted block's header carries.
+
+- `mines_a_chain_of_blocks_without_fail` — multi-block end-to-end (10
+  consecutive `mine_one_block` calls). Pins the "valid input → valid
+  output without fail" claim across repeated invocations: each block
+  is `submitblock`-accepted, every per-block wire-format invariant
+  holds, every mined block hash is distinct, and the chain advances
+  by exactly 10.
+
+**Signet validity gate**: on `Network::Signet`, if `getblocktemplate`
+returns a non-empty `signet_challenge` (the default public signet),
+`mine_one_block` returns a clear error rather than submitting an
+unsigned (invalid) block. BIP325 block signing is not implemented in
+prism-btc-node; private no-challenge signets are supported.
 
 To reproduce:
 

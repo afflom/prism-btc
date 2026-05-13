@@ -2,30 +2,69 @@
 # Commitment Channel Protocol
 
 prism-btc's UOR-optimal mining surface (architecture §14, ANALYSIS.md
-§5) lifts the substrate's `type:Conjunction` primitive into the
-runtime `MiningCommitment` type. This file formalizes the algebraic
-core of the typed channel:
+§5) lifts the substrate's `type:Conjunction` primitive into a
+zero-cost, monomorphized typed commitment in Rust
+(`prism_btc::TypedCommitment` and its implementors
+`EmptyCommitment`, `PayloadCommitment<K>`, plus user-defined impls).
+This file formalizes the algebraic core of the typed channel:
 
-* A `Predicate` is a Boolean function over digests, plus a
-  non-negative bandwidth contribution in bits, plus an algebraic
-  `Support` naming the manifold region it reads.
+* A `Predicate` is a Boolean function over digests, plus its
+  **acceptance probability** under the PRF baseline (as an exact
+  rational), plus an algebraic `Support` naming the manifold region
+  it reads.
 * A `Commitment` is a `List Predicate` — their Conjunction.
 * `evaluate` is the AND of per-predicate evaluations.
-* `bandwidthBits` is the sum of per-predicate bandwidth contributions.
+* `acceptProb` is the **product** of per-predicate acceptance
+  probabilities (multiplicative under list concatenation).
 * `Support.disjoint` names when two supports are jointly independent
   under the random-oracle baseline.
 * `Commitment.wellFormed` asserts pairwise-disjoint supports — the
-  invariant that the Rust typed-iso surface enforces at
-  `MiningCommitment::add_predicate` time (architecture §14.2).
-* **U6 Bandwidth-Additivity** is the algebraic identity that
-  bandwidth is preserved under commitment concatenation.
+  invariant that every Rust `TypedCommitment` implementor discharges
+  at the *type level* by construction (architecture §14.2).
+* **U6 Joint-Probability Multiplicativity** is the algebraic identity
+  that acceptance probability is preserved under commitment
+  concatenation as a product. Its log-space form is the **U6
+  Bandwidth-Additivity** in informal architecture text:
+  `bandwidth_bits = -log₂ acceptProb`.
+
+**Probability-space, not log-space.** The earlier model carried
+bandwidth as a `Nat`; that representation faithfully covered three
+of the four Rust `Predicate` variants but **mis-modelled**
+`PAdicEq { p, k }` for primes `p ≥ 3`, whose bandwidth
+`(k+1)·log₂(p) − log₂(p−1)` is irrational. Switching to acceptance
+probability as a rational closes this gap: every Predicate variant's
+acceptance probability is an exact rational —
+
+* `Parity` → `1/2`
+* `StratumEq { k }` → `1 / 2^(k+1)`
+* `PAdicEq { p, k }` → `(p−1) / p^(k+1)`
+* `UltrametricCloseTo { k }` → `1 / 2^k`
+
+— and the U6 identity becomes a clean product over a `Rat`-valued
+monoid, faithful to all four variants.
 
 These match the Rust types in `prism_btc::Predicate`,
-`prism_btc::Support`, and `prism_btc::MiningCommitment`
-(`crates/prism-btc/src/pipeline.rs`). The probabilistic PRF
-interpretation of `bandwidthBits` is informal; the additivity proved
-here is purely algebraic. The `wellFormed` invariant is what makes
-the PRF interpretation a tight bound rather than an upper bound.
+`prism_btc::Support` (`crates/prism-btc/src/pipeline.rs`), and the
+substrate-level zero-cost commitment surface
+`prism_btc::TypedCommitment` (`crates/prism-btc/src/commitment.rs`).
+The Rust runtime carries no `Vec<Predicate>` — every typed
+commitment is a monomorphized compile unit (`EmptyCommitment`,
+`PayloadCommitment<K>`, or any user-defined `TypedCommitment` impl).
+The `Commitment := List Predicate` in this file is the *algebraic
+specification* of the typed surface — every Rust monomorphization
+corresponds to a particular Lean list, and the tight-bound theorem
+covers all of them via the quantifier over the structure.
+
+The receiver-side typed lens is `prism_btc::KappaObservables` /
+`ExtendedObservables<N_PAR, N_REF>` (`crates/prism-btc/src/observables.rs`),
+together with the sender-side `TypedCommitment` realizing the
+sender ↔ receiver duality (ANALYSIS.md §5.4).
+
+The exact rational acceptance probability is
+`Predicate::accept_prob_rational() -> (u128, u128)`, the direct
+correspondence point to `Predicate.acceptProb : Rat` in this file;
+`bandwidth_bits() -> f64` is the engineering surface (related by
+`2^(-bandwidth_bits) = num/den`).
 -/
 
 namespace PrismBtc.CommitmentChannel
@@ -64,15 +103,21 @@ theorem disjoint_symm (a b : Support) : disjoint a b = disjoint b a := by
 
 end Support
 
-/-- A typed predicate: Boolean function on digests, plus a bandwidth
-    contribution in bits, plus its algebraic support. Mirrors
-    `prism_btc::Predicate`. -/
+/-- A typed predicate: Boolean function on digests, plus its **PRF
+    acceptance probability** as an exact rational, plus its
+    algebraic support. Mirrors `prism_btc::Predicate`.
+
+    The Rust user-facing surface exposes `bandwidth_bits() -> f64`
+    (the engineering view) and `accept_prob_rational() -> (u128, u128)`
+    (the exact rational, the direct correspondence point to this field).
+    `acceptProb` is the formal counterpart of the rational pair. -/
 structure Predicate where
   /-- Boolean evaluation. -/
   evaluate : Digest → Bool
-  /-- PRF bandwidth contribution (bits encoded per κ-label when this
-      predicate is included in a Conjunction). -/
-  bandwidthBits : Nat
+  /-- PRF acceptance probability:
+      `Pr[evaluate (uniform digest) = true] = acceptProb`. The exact
+      rational covers all four Rust `Predicate` variants. -/
+  acceptProb : Rat
   /-- Algebraic support — the manifold region the predicate reads. -/
   support : Support
 
@@ -88,45 +133,49 @@ def empty : Commitment := []
 def evaluate (c : Commitment) (d : Digest) : Bool :=
   c.all (·.evaluate d)
 
-/-- Total bandwidth (sum of per-predicate contributions in bits). -/
-def bandwidthBits (c : Commitment) : Nat :=
-  c.foldr (fun p acc => p.bandwidthBits + acc) 0
+/-- Joint PRF acceptance probability of a commitment: the **product**
+    of per-predicate acceptance probabilities. Empty commitment ↦ 1
+    (matches the Rust convention `mine_with(_, _, EmptyCommitment) ≡ mine()`). -/
+def acceptProb (c : Commitment) : Rat :=
+  c.foldr (fun p acc => p.acceptProb * acc) 1
 
 /-- The empty commitment evaluates to `true` on every digest. -/
 theorem evaluate_empty (d : Digest) : evaluate empty d = true := by
   simp [empty, evaluate]
 
-/-- The empty commitment has zero bandwidth. -/
-theorem bandwidth_empty : bandwidthBits empty = 0 := by
-  simp [empty, bandwidthBits]
+/-- The empty commitment has acceptance probability 1. -/
+theorem acceptProb_empty : acceptProb empty = 1 := by
+  simp [empty, acceptProb]
 
-/-- Bandwidth of a `cons` decomposes additively: head + tail. -/
-theorem bandwidth_cons (p : Predicate) (c : Commitment) :
-    bandwidthBits (p :: c) = p.bandwidthBits + bandwidthBits c := by
-  simp [bandwidthBits]
+/-- Acceptance probability of a `cons` decomposes multiplicatively:
+    head · tail. -/
+theorem acceptProb_cons (p : Predicate) (c : Commitment) :
+    acceptProb (p :: c) = p.acceptProb * acceptProb c := by
+  simp [acceptProb]
 
 /-- Evaluation of a `cons` decomposes as: head AND tail. -/
 theorem evaluate_cons (p : Predicate) (c : Commitment) (d : Digest) :
     evaluate (p :: c) d = (p.evaluate d && evaluate c d) := by
   simp [evaluate]
 
-/-- **U6 Bandwidth-Additivity** (ANALYSIS.md §4.1, §5.5). Bandwidth is
-    additive over commitment concatenation:
-    `bw(c₁ ++ c₂) = bw(c₁) + bw(c₂)`.
+/-- **U6 Joint-Probability Multiplicativity** (ANALYSIS.md §4.1, §5.5).
+    Acceptance probability is multiplicative over commitment
+    concatenation:
+    `acceptProb (c₁ ++ c₂) = acceptProb c₁ * acceptProb c₂`.
 
     This is the formal counterpart of the σ-Projection Hardening
     Principle's sixth condition: composing K typed predicates under
-    Conjunction yields a commitment whose bandwidth is the sum of
-    per-predicate contributions. The substrate's `type:Conjunction`
-    primitive realizes this composition at the typed-iso surface;
-    the σ-projection enforces the proportional `2^bw` PRF cost. -/
-theorem bandwidth_append (c₁ c₂ : Commitment) :
-    bandwidthBits (c₁ ++ c₂) = bandwidthBits c₁ + bandwidthBits c₂ := by
+    Conjunction yields a commitment whose joint acceptance equals the
+    product of per-predicate acceptances under the PRF baseline. The
+    equivalent log-space statement (the historical "Bandwidth-
+    Additivity" framing) is `bandwidth = Σ -log₂ acceptProb_i`. -/
+theorem acceptProb_append (c₁ c₂ : Commitment) :
+    acceptProb (c₁ ++ c₂) = acceptProb c₁ * acceptProb c₂ := by
   induction c₁ with
   | nil =>
-    simp [bandwidth_empty, empty]
+    simp [acceptProb_empty, empty]
   | cons p ps ih =>
-    simp [bandwidthBits, ih, Nat.add_assoc]
+    simp [acceptProb, ih, mul_assoc]
 
 /-- Evaluation distributes over concatenation as Boolean AND. -/
 theorem evaluate_append (c₁ c₂ : Commitment) (d : Digest) :
@@ -144,21 +193,27 @@ theorem evaluate_append_empty (c : Commitment) (d : Digest) :
   simp [empty, evaluate]
 
 /-- The empty commitment is the right identity of concatenation under
-    bandwidth. -/
-theorem bandwidth_append_empty (c : Commitment) :
-    bandwidthBits (c ++ empty) = bandwidthBits c := by
-  rw [bandwidth_append, bandwidth_empty]
+    acceptance probability. -/
+theorem acceptProb_append_empty (c : Commitment) :
+    acceptProb (c ++ empty) = acceptProb c := by
+  rw [acceptProb_append, acceptProb_empty, mul_one]
 
 /-- `wellFormed c` holds iff every pair of predicates in `c` has
     disjoint supports. This is the invariant the Rust typed-iso
-    surface enforces via `MiningCommitment::add_predicate`
-    (architecture §14.2): a commitment that builds successfully via
-    `add_predicate` automatically satisfies `wellFormed`.
+    surface discharges *at the type level* via the structural
+    invariants of each `TypedCommitment` implementor (architecture
+    §14.2): `EmptyCommitment` is vacuously well-formed;
+    `PayloadCommitment<K>` uses K parities at K *distinct*
+    single-bit ω-frequencies, so its supports are pairwise-disjoint
+    by indexing; user-defined `TypedCommitment` impls discharge
+    `wellFormed` via their own type-level invariants. The runtime
+    does not check.
 
-    When `wellFormed` holds, U6 Bandwidth-Additivity is a **tight**
-    bound on PRF mining cost (`α⁻¹ · 2^bandwidthBits`); when it
-    fails, the algebraic identity still holds but the probabilistic
-    interpretation is only an upper bound. -/
+    When `wellFormed` holds, the multiplicative U6 identity is a
+    **tight** PRF acceptance probability (§2 `prf_prob_tight_wellFormed`);
+    when it fails, the algebraic identity still holds but the
+    probabilistic interpretation is only an upper bound on declared
+    bandwidth. -/
 def wellFormed (c : Commitment) : Prop :=
   ∀ i j, i < c.length → j < c.length → i ≠ j →
     Support.disjoint (c.get ⟨i, by assumption⟩).support
@@ -174,6 +229,167 @@ theorem wellFormed_singleton (p : Predicate) : wellFormed [p] := by
   intro i j hi hj hij
   -- i, j < 1 means both are 0, contradicting i ≠ j.
   interval_cases i <;> interval_cases j <;> contradiction
+
+/-- Destructuring a `wellFormed (p :: ps)` hypothesis: the head `p` is
+    support-disjoint from every predicate in the tail `ps`. Every
+    Rust `TypedCommitment` implementor's type-level invariant
+    (architecture §14.2) is precisely this property: each predicate
+    in the typed decomposition is support-disjoint from the others
+    by construction. -/
+theorem wellFormed.head_disjoint
+    {p : Predicate} {ps : Commitment} (h : wellFormed (p :: ps)) :
+    ∀ i (hi : i < ps.length),
+        Support.disjoint p.support (ps.get ⟨i, hi⟩).support = true := by
+  intro i hi
+  have h0 : 0 < (p :: ps).length := by simp
+  have hi1 : i + 1 < (p :: ps).length := by simp; omega
+  have hne : (0 : Nat) ≠ i + 1 := by omega
+  have key := h 0 (i + 1) h0 hi1 hne
+  simpa using key
+
+/-- Destructuring a `wellFormed (p :: ps)` hypothesis: the tail `ps` is
+    itself well-formed. -/
+theorem wellFormed.tail
+    {p : Predicate} {ps : Commitment} (h : wellFormed (p :: ps)) :
+    wellFormed ps := by
+  intro i j hi hj hij
+  have hi1 : i + 1 < (p :: ps).length := by simp; omega
+  have hj1 : j + 1 < (p :: ps).length := by simp; omega
+  have hne : i + 1 ≠ j + 1 := by omega
+  have key := h (i + 1) (j + 1) hi1 hj1 hne
+  simpa using key
+
+end Commitment
+
+/-! ## §2 PRF baseline — random-oracle interpretation of acceptance probability
+
+The §1 identity `acceptProb_append` is purely algebraic (a fold over
+`List.append`). To upgrade it to a **tight bound on PRF mining cost** —
+the operational claim that appears in ANALYSIS.md §5.5 and
+architecture §14.1 — we axiomatize the two assumptions the operational
+claim rests on:
+
+* **U1 (marginal uniformity)** — each typed Predicate's `acceptProb`
+  exactly matches its PRF acceptance rate: under uniform-random
+  digests, `Pr[p.evaluate d = true] = p.acceptProb`.
+* **U2 (joint independence)** — when a Predicate's algebraic support
+  is disjoint from every Predicate in a commitment, its evaluation
+  is *probabilistically independent* of the commitment's joint
+  evaluation under the PRF baseline (joint probability factors).
+
+U1 + U2 are calibration assumptions on the σ-projection (SHA-256d).
+The 10-section cryptanalysis battery in
+`examples/uor_cryptanalysis.rs` (ANALYSIS.md §3) provides the
+empirical witness:
+
+* §I (`section_i_u1_marginal_calibration`) tests U1 at each Predicate
+  variant — Parity, StratumEq, PAdicEq{p=3}, UltrametricCloseTo —
+  comparing observed acceptance against the variant's claimed
+  `accept_prob_rational()` under the random-oracle baseline.
+* §J (`section_j_u2_joint_independence`) tests U2 on disjoint-support
+  Predicate pairs across the BitSet × BitSet, BitSet × Modular, and
+  Modular × Modular regimes; also reports a non-disjoint negative
+  control to show the independence claim is non-vacuous.
+
+We treat U1 + U2 as axioms here and prove the structural consequence.
+
+Once U1 + U2 are axioms, the main theorem `prf_prob_tight_wellFormed`
+follows by structural induction on the commitment list. **Without
+`wellFormed`**, the U2 axiom does not fire at the inductive step —
+exactly the failure mode every `TypedCommitment` implementor forecloses
+at the type level (architecture §14.2). -/
+
+namespace PRF
+
+/-- PRF acceptance probability for a Boolean digest function. The
+    probability that a uniform-random digest `d` satisfies `f` is,
+    by convention, `prob f`. Carried as `Rat` so all four Rust
+    `Predicate` variants are covered exactly (including
+    `PAdicEq { p, k }` whose probability `(p−1)/p^(k+1)` is rational
+    but whose log₂ is irrational for `p ≥ 3`). -/
+axiom prob : (Digest → Bool) → Rat
+
+/-- (Trivial-predicate calibration) The always-true predicate has
+    acceptance probability 1: every digest satisfies it. -/
+axiom prob_true : prob (fun _ : Digest => true) = 1
+
+/-- **U1 (marginal uniformity)** — each typed Predicate's `acceptProb`
+    calibrates its PRF acceptance: under uniform-random digests,
+    `Pr[p.evaluate d = true] = p.acceptProb`.
+
+    This is the calibration claim on the σ-projection (SHA-256d):
+    every Predicate the runtime admits — `Parity`, `StratumEq`,
+    `PAdicEq`, `UltrametricCloseTo` — produces a Boolean accepter
+    whose PRF rate equals the rational its
+    `Predicate::accept_prob_rational()` declares. Empirically
+    witnessed by `examples/uor_cryptanalysis.rs` §I. -/
+axiom prob_predicate (p : Predicate) :
+    prob p.evaluate = p.acceptProb
+
+/-- **U2 (joint independence)** — when a Predicate's algebraic support
+    is disjoint from every Predicate in a commitment, its PRF
+    acceptance is independent of the commitment's joint acceptance:
+    joint probability factors.
+
+    Equivalent factored statement:
+    `Pr[p.evaluate d ∧ c.evaluate d] = Pr[p.evaluate d] · Pr[c.evaluate d]`
+    whenever `p.support` is disjoint from every predicate-support in `c`.
+    Empirically witnessed by `examples/uor_cryptanalysis.rs` §J. -/
+axiom prob_cons_independent (p : Predicate) (c : Commitment) :
+    (∀ i (hi : i < c.length),
+        Support.disjoint p.support (c.get ⟨i, hi⟩).support = true) →
+    prob (fun d => p.evaluate d && Commitment.evaluate c d) =
+      prob p.evaluate * prob (Commitment.evaluate c)
+
+end PRF
+
+namespace Commitment
+
+/-- `evaluate (p :: ps)` is functionally
+    `fun d => p.evaluate d && evaluate ps d`. The fn-level form of
+    `evaluate_cons` — useful when rewriting under `PRF.prob`. -/
+theorem evaluate_cons_fn (p : Predicate) (ps : Commitment) :
+    evaluate (p :: ps) = fun d => p.evaluate d && evaluate ps d := by
+  funext d
+  exact evaluate_cons p ps d
+
+/-- **U6, tight form** — the PRF-acceptance identity for well-formed
+    commitments. Algebraic multiplicativity (`acceptProb_append`)
+    lifts from a purely structural identity to an operational claim:
+    under U1 + U2, a `wellFormed` commitment's PRF acceptance
+    probability is exactly its declared `acceptProb`.
+
+    Statement: `Pr[c.evaluate d = true] = acceptProb c` — the
+    expected-trial cost claim of architecture §14.1 (`1 / acceptProb c`
+    = `2^bandwidth_bits c`) is realized **at equality**, not as an
+    upper bound.
+
+    **Why `wellFormed` is load-bearing.** The U2 axiom (joint
+    independence under disjoint supports) fires at the inductive step
+    only when the head predicate is support-disjoint from the tail.
+    For a not-well-formed commitment, predicate evaluations can
+    correlate and `acceptProb c` no longer matches the actual PRF
+    acceptance rate — the Rust typed-iso surface forecloses this
+    regime at the type level: every `TypedCommitment` implementor's
+    invariant (built-in or user-defined) discharges `wellFormed`
+    by construction (architecture §14.2). -/
+theorem prf_prob_tight_wellFormed (c : Commitment) (h : wellFormed c) :
+    PRF.prob (evaluate c) = acceptProb c := by
+  induction c with
+  | nil =>
+    show PRF.prob (evaluate empty) = acceptProb empty
+    rw [show evaluate empty = (fun _ : Digest => true) from rfl,
+        PRF.prob_true, acceptProb_empty]
+  | cons p ps ih =>
+    have disj : ∀ i (hi : i < ps.length),
+        Support.disjoint p.support (ps.get ⟨i, hi⟩).support = true :=
+      wellFormed.head_disjoint h
+    have wf_ps : wellFormed ps := wellFormed.tail h
+    rw [evaluate_cons_fn,
+        PRF.prob_cons_independent p ps disj,
+        PRF.prob_predicate,
+        ih wf_ps,
+        acceptProb_cons]
 
 end Commitment
 
