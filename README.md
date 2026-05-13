@@ -230,12 +230,17 @@ traditional cryptanalysis, and ADR-style framework proposals.
 
 [ARCHITECTURE.md §14](ARCHITECTURE.md) — **UOR-optimal mining**.
 The cryptanalysis identifies the Pareto frontier
-`cost(K) = 2^K × α^-1`; prism-btc realizes it via
+`cost(B) = 2^B × α^-1`; prism-btc realizes it via
 `mine_with_commitment(header, target, commitment)`, the typed
-boundary surface that Conjunction's K parity predicates onto
-admission. Every mined block is wire-format-valid for `submitblock`
-*and* commits to K bits of application-declared structural
-information at proportional PRF cost. Reproducible via
+boundary surface that Conjunctions typed predicates from the UOR
+observable library (`Predicate::Parity` / `StratumEq` / `PAdicEq` /
+`UltrametricCloseTo`) onto admission. The `MiningCommitment`
+builder enforces support-disjointness at construction time, making
+`bandwidth_bits()` a tight cost contract by construction (the U6
+invariant is preserved by `add_predicate` / `try_add_predicate`,
+not just stated). Every mined block is wire-format-valid for
+`submitblock` *and* commits to `B` bits of application-declared
+structural information at proportional PRF cost. Reproducible via
 `cargo run --release --example optimal_mining`.
 
 ## Real-network mining (`prism-btc-node`)

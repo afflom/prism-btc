@@ -30,6 +30,12 @@
 //!   [`Predicate`] enum covers Walsh-Hadamard parity, stratum
 //!   equality, p-adic equality, and ultrametric closeness — each a
 //!   typed observable on the content-addressed manifold.
+//! - [`Support`] / [`CommitmentError`] — the algebraic-support
+//!   type and the error returned by [`MiningCommitment::try_add_predicate`]
+//!   when a new predicate's support overlaps an existing one. The
+//!   typed builders enforce support-disjointness, making
+//!   [`MiningCommitment::bandwidth_bits`] a tight cost contract by
+//!   construction (U6 Bandwidth-Additivity, architecture §14.2).
 //! - [`ultrametric_valuation`] / [`walsh_hadamard_parity_at`] /
 //!   [`p_adic_valuation`] — UOR observable surface on the content-
 //!   addressed manifold (ANALYSIS.md §1.3).
