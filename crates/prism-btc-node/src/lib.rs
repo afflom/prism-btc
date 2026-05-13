@@ -130,6 +130,8 @@ impl PrismMiner {
                         nonce: outcome.nonce,
                         witness: outcome.witness,
                         tx_count: block.txdata.len(),
+                        resolution: outcome.resolution,
+                        extranonce_attempts: extranonce,
                     });
                 }
                 Err(MiningFailure::PipelineFailure) => {
@@ -161,6 +163,15 @@ pub struct MinedBlock {
     pub nonce: u32,
     pub witness: MiningWitness,
     pub tx_count: usize,
+    /// Diagnostic state from the ψ_9 iterative-resolution loop that
+    /// landed the admitting κ-derivation for the submitted block.
+    /// See [`prism_btc::diagnostics`].
+    pub resolution: prism_btc::ResolutionState,
+    /// Number of host-boundary extranonce variations the template
+    /// loop walked before ψ_9 admitted. `0` means the first attempt
+    /// converged; higher values count the
+    /// `InhabitanceImpossibilityWitness` retries (architecture §7).
+    pub extranonce_attempts: u64,
 }
 
 /// All the per-template state a mining attempt needs.

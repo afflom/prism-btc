@@ -79,8 +79,16 @@ fn main() -> Result<()> {
         let mined = miner.mine_one_block().context("mine_one_block")?;
         let dt = started.elapsed();
         println!(
-            "[{i}/{}] mined block #{} hash={} nonce={} txs={} ({:?})",
-            args.blocks, mined.height, mined.hash, mined.nonce, mined.tx_count, dt
+            "[{i}/{}] mined block #{} hash={} nonce={} txs={} \
+             extranonce_attempts={} ψ_9_iterations={} ({:?})",
+            args.blocks,
+            mined.height,
+            mined.hash,
+            mined.nonce,
+            mined.tx_count,
+            mined.extranonce_attempts,
+            mined.resolution.iterations,
+            dt
         );
     }
     Ok(())

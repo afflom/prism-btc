@@ -102,6 +102,7 @@ use uor_foundation::pipeline::{
 use uor_foundation::{HostBounds, ViolationKind};
 use uor_foundation_sdk::resolver;
 
+use crate::diagnostics::{record as record_resolution, ResolutionState, ResolutionVerdict};
 use crate::model::MiningResult;
 use crate::shapes::bounds::PrismBtcBounds;
 
@@ -118,12 +119,22 @@ const VERTEX_DATA_BYTES: usize = NERVE_VERTEX_COUNT as usize;
 const CARRIER_BYTES: usize = TASK_BYTES + STAGE_HEADER_BYTES + VERTEX_DATA_BYTES;
 /// Wire-format Bitcoin header byte width — the ψ_9 output width.
 const WIRE_FORMAT_HEADER_BYTES: usize = 80;
+/// Number of `MiningResult` sites pinned jointly by the W32 nonce
+/// field (positions 76..80). These are the sites whose `FreeRank`
+/// drops from 1 → 0 simultaneously when ψ_9 converges on an
+/// admitting candidate; they remain free if the resolver exhausts
+/// the W32 ring without admission.
+const NONCE_FIELD_SITE_COUNT: u32 = 4;
+
+/// Length of the constant tail of every non-terminal ψ-stage's
+/// carrier: vertex_count (4) + highest_dim (4) + reserved (4) +
+/// per-vertex Site positions (`NERVE_VERTEX_COUNT`).
+const CARRIER_GEOMETRY_TAIL_BYTES: usize = 12 + VERTEX_DATA_BYTES;
 
 const OFFSET_STAGE_TAG: usize = TASK_BYTES;
 const OFFSET_VERTEX_COUNT: usize = TASK_BYTES + 8;
 const OFFSET_HIGHEST_DIM: usize = TASK_BYTES + 12;
 const OFFSET_RESERVED: usize = TASK_BYTES + 16;
-const OFFSET_POSITIONS: usize = TASK_BYTES + 20;
 
 /// Expected nerve-vertex count for the `MiningResult` constraint
 /// geometry (architecture §2.3, IT_7d).
@@ -212,19 +223,6 @@ const GEOMETRY_VIOLATION: ShapeViolation = ShapeViolation {
     kind: ViolationKind::ValueCheck,
 };
 
-/// `MiningResult::CONSTRAINTS` does not declare the expected
-/// 80-disjoint-Site algebraic-closure geometry. ψ_1 cannot build the
-/// nerve N(C) when the constraint set is malformed.
-const NERVE_GEOMETRY_VIOLATION: ShapeViolation = ShapeViolation {
-    shape_iri: "https://prism.btc/resolver/NerveGeometry",
-    constraint_iri: "https://prism.btc/resolver/NerveGeometry/eightyDisjointSites",
-    property_iri: "https://prism.btc/resolver/NerveGeometry/constraintCount",
-    expected_range: "http://www.w3.org/2001/XMLSchema#unsignedInt",
-    min_count: NERVE_VERTEX_COUNT,
-    max_count: NERVE_VERTEX_COUNT,
-    kind: ViolationKind::ValueCheck,
-};
-
 /// `InhabitanceImpossibilityWitness` for the κ-derivation — signalled
 /// when the W32 nonce ring is walked end-to-end without the
 /// structural admission relation being satisfied for the host-supplied
@@ -245,6 +243,60 @@ const NONCE_FIBER_EXHAUSTED: ShapeViolation = ShapeViolation {
     kind: ViolationKind::ValueCheck,
 };
 
+// ─── Compile-time validation of MiningResult::CONSTRAINTS ──────────────
+
+// The 80-disjoint-Site algebraic-closure shape (IT_7d, architecture
+// §2.3) is a compile-time invariant of `MiningResult`. We assert it
+// here so the runtime carrier emit never re-validates: any malformed
+// CONSTRAINTS declaration fails the build before reaching ψ_1.
+const _: () = {
+    let cs = <MiningResult as ConstrainedTypeShape>::CONSTRAINTS;
+    assert!(
+        cs.len() == NERVE_VERTEX_COUNT as usize,
+        "MiningResult::CONSTRAINTS must declare exactly 80 Site instances (IT_7d algebraic-closure)"
+    );
+    let mut i = 0;
+    while i < cs.len() {
+        match cs[i] {
+            ConstraintRef::Site { position } => {
+                assert!(
+                    position as usize == i,
+                    "MiningResult::CONSTRAINTS: Site_i must pin position i for i ∈ [0, 80)"
+                );
+            }
+            _ => panic!(
+                "MiningResult::CONSTRAINTS may only contain ConstraintRef::Site instances under the IT_7d algebraic-closure encoding"
+            ),
+        }
+        i += 1;
+    }
+};
+
+// ─── Const carrier-tail template ───────────────────────────────────────
+
+/// The constant geometry tail of every non-terminal ψ-stage's carrier.
+/// Layout: `vertex_count (4) ‖ highest_dim (4) ‖ reserved (4) ‖
+/// vertex_positions (80)`. Computed once at compile time; emitted
+/// byte-identically by every stage's `emit_carrier` call (only the
+/// task bytes and the 8-byte stage tag vary per stage). Lifting these
+/// bytes to a const eliminates per-emit field-write arithmetic and a
+/// runtime `for i in 0..80` loop.
+const CARRIER_GEOMETRY_TAIL: [u8; CARRIER_GEOMETRY_TAIL_BYTES] = {
+    let mut t = [0u8; CARRIER_GEOMETRY_TAIL_BYTES];
+    let vc = NERVE_VERTEX_COUNT.to_be_bytes();
+    t[0] = vc[0];
+    t[1] = vc[1];
+    t[2] = vc[2];
+    t[3] = vc[3];
+    // highest_dim @ [4..8) and reserved @ [8..12) are zero-init.
+    let mut i = 0;
+    while i < VERTEX_DATA_BYTES {
+        t[12 + i] = i as u8;
+        i += 1;
+    }
+    t
+};
+
 // ─── Carrier encode/decode ─────────────────────────────────────────────
 
 /// Decoded view of a structural ψ-stage carrier.
@@ -262,6 +314,7 @@ struct DecodedCarrier<'a> {
     highest_dim: u32,
 }
 
+#[inline]
 fn decode_carrier(bytes: &[u8]) -> Result<DecodedCarrier<'_>, ShapeViolation> {
     if bytes.len() != CARRIER_BYTES {
         return Err(CARRIER_INPUT_VIOLATION);
@@ -294,6 +347,7 @@ fn decode_carrier(bytes: &[u8]) -> Result<DecodedCarrier<'_>, ShapeViolation> {
 /// downstream ψ-functor expects; structural geometry is the 80-isolated-
 /// vertices algebraic-closure shape `MiningResult::CONSTRAINTS`
 /// declares.
+#[inline]
 fn validate_upstream(
     carrier: &DecodedCarrier<'_>,
     expected_upstream_tag: u64,
@@ -312,8 +366,12 @@ fn validate_upstream(
 
 /// Emit a structural carrier with the given stage tag. The threaded
 /// task bytes preserve the typed `MiningTask` data; the geometry data
-/// describes this ψ-stage's mathematical content for the 80-isolated-
-/// vertices case (vertex_count=80, highest_dim=0, positions=[0..80)).
+/// (vertex_count = 80, highest_dim = 0, positions = [0..80)) lives in
+/// [`CARRIER_GEOMETRY_TAIL`] as a compile-time constant and is bit-
+/// copied into the carrier as-is. The runtime cost per emit is three
+/// `copy_from_slice` calls — two bounds-checks plus the moves — no
+/// per-byte loop and no per-field arithmetic.
+#[inline]
 fn emit_carrier(task: &[u8], stage_tag: u64, out: &mut [u8]) -> Result<usize, ShapeViolation> {
     if out.len() < CARRIER_BYTES {
         return Err(CARRIER_BUFFER_VIOLATION);
@@ -324,14 +382,7 @@ fn emit_carrier(task: &[u8], stage_tag: u64, out: &mut [u8]) -> Result<usize, Sh
 
     out[..TASK_BYTES].copy_from_slice(task);
     out[OFFSET_STAGE_TAG..OFFSET_VERTEX_COUNT].copy_from_slice(&stage_tag.to_be_bytes());
-    out[OFFSET_VERTEX_COUNT..OFFSET_HIGHEST_DIM].copy_from_slice(&NERVE_VERTEX_COUNT.to_be_bytes());
-    out[OFFSET_HIGHEST_DIM..OFFSET_RESERVED].copy_from_slice(&NERVE_HIGHEST_DIM.to_be_bytes());
-    out[OFFSET_RESERVED..OFFSET_POSITIONS].copy_from_slice(&0u32.to_be_bytes());
-
-    // The 80 vertex/generator positions: Site_i pins position i.
-    for i in 0..NERVE_VERTEX_COUNT as usize {
-        out[OFFSET_POSITIONS + i] = i as u8;
-    }
+    out[OFFSET_VERTEX_COUNT..CARRIER_BYTES].copy_from_slice(&CARRIER_GEOMETRY_TAIL);
 
     Ok(CARRIER_BYTES)
 }
@@ -340,49 +391,30 @@ fn emit_carrier(task: &[u8], stage_tag: u64, out: &mut [u8]) -> Result<usize, Sh
 
 /// ψ_1 `Nerve` resolver — `Constraints → SimplicialComplex`.
 ///
-/// Reads `MiningResult::CONSTRAINTS` and builds the nerve N(C). For
-/// prism-btc's 80 disjoint `ConstraintRef::Site` declarations
-/// (architecture §2.3), N(C) is 80 isolated vertices with no higher
-/// simplices: vertices = constraints, k-simplices = sets of (k+1)
-/// constraints whose site supports share a common site. With
-/// pairwise-disjoint site supports, no two constraints share a site,
-/// so there are no 1-simplices and no higher.
+/// Builds N(C) for `MiningResult::CONSTRAINTS`. For prism-btc's 80
+/// disjoint `ConstraintRef::Site` declarations (architecture §2.3),
+/// N(C) is 80 isolated vertices with no higher simplices: vertices =
+/// constraints, k-simplices = sets of (k+1) constraints whose site
+/// supports share a common site; pairwise-disjoint site supports
+/// produce no 1-simplices and no higher.
 ///
-/// The resolver validates that `MiningResult::CONSTRAINTS` exhibits the
-/// algebraic-closure encoding (IT_7d: 80 disjoint Site constraints,
-/// Site_i pinning position i) before emitting the ψ_1 carrier.
+/// The 80-disjoint-Site algebraic-closure shape is a compile-time
+/// invariant of `MiningResult` — asserted at module load by the
+/// `const _: () = { … }` block above. The runtime resolver body
+/// emits the ψ_1 carrier directly without re-validating; any
+/// malformed CONSTRAINTS declaration fails the build before the
+/// resolver ever runs.
 #[derive(Debug)]
 pub struct BitcoinNerveResolver<H>(PhantomData<H>);
 
 impl<H: Hasher> uor_foundation::pipeline::__sdk_seal::Sealed for BitcoinNerveResolver<H> {}
 
 impl<H: Hasher> NerveResolver<H> for BitcoinNerveResolver<H> {
+    #[inline]
     fn resolve(&self, input: &[u8], out: &mut [u8]) -> Result<usize, ShapeViolation> {
         if input.len() != TASK_BYTES {
             return Err(TASK_INPUT_VIOLATION);
         }
-        if out.len() < CARRIER_BYTES {
-            return Err(CARRIER_BUFFER_VIOLATION);
-        }
-
-        // Build N(C) from `MiningResult::CONSTRAINTS`. The IT_7d
-        // algebraic-closure declaration is 80 disjoint Site_i
-        // constraints with Site_i pinning position i.
-        let constraints = <MiningResult as ConstrainedTypeShape>::CONSTRAINTS;
-        if constraints.len() != NERVE_VERTEX_COUNT as usize {
-            return Err(NERVE_GEOMETRY_VIOLATION);
-        }
-        for (i, c) in constraints.iter().enumerate() {
-            match c {
-                ConstraintRef::Site { position } => {
-                    if *position as usize != i {
-                        return Err(NERVE_GEOMETRY_VIOLATION);
-                    }
-                }
-                _ => return Err(NERVE_GEOMETRY_VIOLATION),
-            }
-        }
-
         emit_carrier(input, PSI_1_NERVE_TAG, out)
     }
 }
@@ -407,6 +439,7 @@ pub struct BitcoinChainComplexResolver<H>(PhantomData<H>);
 impl<H: Hasher> uor_foundation::pipeline::__sdk_seal::Sealed for BitcoinChainComplexResolver<H> {}
 
 impl<H: Hasher> ChainComplexResolver<H> for BitcoinChainComplexResolver<H> {
+    #[inline]
     fn resolve(
         &self,
         input: SimplicialComplexBytes<'_>,
@@ -432,6 +465,7 @@ pub struct BitcoinHomologyGroupResolver<H>(PhantomData<H>);
 impl<H: Hasher> uor_foundation::pipeline::__sdk_seal::Sealed for BitcoinHomologyGroupResolver<H> {}
 
 impl<H: Hasher> HomologyGroupResolver<H> for BitcoinHomologyGroupResolver<H> {
+    #[inline]
     fn resolve(
         &self,
         input: ChainComplexBytes<'_>,
@@ -458,6 +492,7 @@ pub struct BitcoinCochainComplexResolver<H>(PhantomData<H>);
 impl<H: Hasher> uor_foundation::pipeline::__sdk_seal::Sealed for BitcoinCochainComplexResolver<H> {}
 
 impl<H: Hasher> CochainComplexResolver<H> for BitcoinCochainComplexResolver<H> {
+    #[inline]
     fn resolve(
         &self,
         input: ChainComplexBytes<'_>,
@@ -483,6 +518,7 @@ pub struct BitcoinCohomologyGroupResolver<H>(PhantomData<H>);
 impl<H: Hasher> uor_foundation::pipeline::__sdk_seal::Sealed for BitcoinCohomologyGroupResolver<H> {}
 
 impl<H: Hasher> CohomologyGroupResolver<H> for BitcoinCohomologyGroupResolver<H> {
+    #[inline]
     fn resolve(
         &self,
         input: CochainComplexBytes<'_>,
@@ -511,6 +547,7 @@ pub struct BitcoinPostnikovResolver<H>(PhantomData<H>);
 impl<H: Hasher> uor_foundation::pipeline::__sdk_seal::Sealed for BitcoinPostnikovResolver<H> {}
 
 impl<H: Hasher> PostnikovResolver<H> for BitcoinPostnikovResolver<H> {
+    #[inline]
     fn resolve(
         &self,
         input: SimplicialComplexBytes<'_>,
@@ -537,6 +574,7 @@ pub struct BitcoinHomotopyGroupResolver<H>(PhantomData<H>);
 impl<H: Hasher> uor_foundation::pipeline::__sdk_seal::Sealed for BitcoinHomotopyGroupResolver<H> {}
 
 impl<H: Hasher> HomotopyGroupResolver<H> for BitcoinHomotopyGroupResolver<H> {
+    #[inline]
     fn resolve(
         &self,
         input: PostnikovTowerBytes<'_>,
@@ -608,7 +646,9 @@ impl<H: Hasher> KInvariantResolver<H> for BitcoinKInvariantResolver<H> {
         // Iterative-resolution loop over witt_domain::W32. Each
         // iteration evaluates the structural admission relation
         // H(header) ≤ target (lex on 32-byte display-order bytes);
-        // convergence is the first satisfying nonce.
+        // convergence is the first satisfying nonce. The diagnostic
+        // surface (crate::diagnostics) records the terminal state
+        // before either return path.
         let mut nonce: u32 = 0;
         loop {
             header[76..80].copy_from_slice(&nonce.to_le_bytes());
@@ -625,10 +665,22 @@ impl<H: Hasher> KInvariantResolver<H> for BitcoinKInvariantResolver<H> {
 
             if lex_le(&digest_display, target) {
                 out[..WIRE_FORMAT_HEADER_BYTES].copy_from_slice(&header);
+                record_resolution(ResolutionState {
+                    free_rank: 0,
+                    iterations: (nonce as u64) + 1,
+                    verdict: ResolutionVerdict::Converged {
+                        admitting_nonce: nonce,
+                    },
+                });
                 return Ok(WIRE_FORMAT_HEADER_BYTES);
             }
 
             if nonce == u32::MAX {
+                record_resolution(ResolutionState {
+                    free_rank: NONCE_FIELD_SITE_COUNT,
+                    iterations: 1u64 << 32,
+                    verdict: ResolutionVerdict::Exhausted,
+                });
                 return Err(NONCE_FIBER_EXHAUSTED);
             }
             nonce += 1;

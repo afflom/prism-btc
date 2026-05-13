@@ -29,6 +29,7 @@
 use uor_foundation::pipeline::PrismModel;
 use uor_foundation::DefaultHostTypes;
 
+use crate::diagnostics::{take_resolution_state, ResolutionState, ResolutionVerdict};
 use crate::domain::{BlockHeader, MiningTag, MiningWitness, Target, TriadicCoords};
 use crate::model::{BitcoinMiningModel, MiningTask};
 use crate::ops::sha256::sha256d_display;
@@ -51,6 +52,14 @@ pub struct MiningOutcome {
     pub digest: [u8; 32],
     /// Digest's triadic coordinates.
     pub coords: TriadicCoords,
+    /// Diagnostic state from the ψ_9 iterative-resolution loop
+    /// (wiki `iterative-resolution.md`). On the `Ok` path
+    /// `resolution.verdict` is always
+    /// [`ResolutionVerdict::Converged`] (the resolver pinned the
+    /// four nonce-byte sites); use `resolution.iterations` to
+    /// inspect how many W32 candidates were evaluated before
+    /// convergence. See [`crate::diagnostics`].
+    pub resolution: ResolutionState,
 }
 
 /// Failure modes from [`mine`].
@@ -115,10 +124,23 @@ pub fn mine(header: &BlockHeader, target: Target) -> Result<MiningOutcome, Minin
     header_array.copy_from_slice(header_bytes);
     let digest = sha256d_display(&header_array);
 
+    // Drain the diagnostic channel ψ_9 wrote on its way out. On the
+    // Ok path we expect a Converged state matching the resolved
+    // nonce; under `no_std` the channel does not exist and we
+    // reconstruct equivalent state from the outcome.
+    let resolution = take_resolution_state().unwrap_or(ResolutionState {
+        free_rank: 0,
+        iterations: (nonce as u64) + 1,
+        verdict: ResolutionVerdict::Converged {
+            admitting_nonce: nonce,
+        },
+    });
+
     Ok(MiningOutcome {
         witness: grounded.tag::<MiningTag>(),
         nonce,
         digest,
         coords: TriadicCoords::from_hash(&digest),
+        resolution,
     })
 }

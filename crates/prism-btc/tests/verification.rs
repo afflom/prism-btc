@@ -24,9 +24,9 @@
 //!   the typed-iso path, not bytewise input identity).
 
 use prism_btc::{
-    mine, serialize_header, sha256d_display, BitcoinMiningModel, BitcoinResolverTuple, Bits,
-    BlockHeader, MerkleRoot, MiningResult, MiningTask, PrismBtcBounds, Sha256dHasher, Target,
-    Timestamp, Version, VERB_TERMS_MINING_INFERENCE,
+    mine, serialize_header, sha256d_display, take_resolution_state, BitcoinMiningModel,
+    BitcoinResolverTuple, Bits, BlockHeader, MerkleRoot, MiningResult, MiningTask, PrismBtcBounds,
+    ResolutionVerdict, Sha256dHasher, Target, Timestamp, Version, VERB_TERMS_MINING_INFERENCE,
 };
 use uor_foundation::enforcement::Term;
 use uor_foundation::pipeline::{ConstrainedTypeShape, ConstraintRef, PrismModel};
@@ -430,4 +430,78 @@ fn v_prism_btc_bounds_declare_algebraic_closure_target() {
         assert!(<PrismBtcBounds as HostBounds>::BETTI_DIMENSION_MAX >= 80);
         assert!(<PrismBtcBounds as HostBounds>::AFFINE_COEFFS_MAX >= 80);
     };
+}
+
+// ─── §8. Iterative-resolution diagnostic surface ───────────────────────
+
+#[test]
+fn v_mine_outcome_carries_converged_resolution_state() {
+    // Architecture §4 + crate::diagnostics: on the Ok path of mine(),
+    // outcome.resolution carries the Converged verdict with the
+    // admitting nonce, free_rank=0 (all 80 MiningResult sites pinned),
+    // and iterations=admitting_nonce+1 (the count of W32 candidates
+    // ψ_9 evaluated before convergence).
+    let header = canonical_header(1, 1_700_000_000, 0x207fffff);
+    let outcome = mine(&header, Target::new(0x207fffff)).expect("permissive target admits");
+
+    assert!(outcome.resolution.converged(), "Converged on Ok path");
+    assert_eq!(
+        outcome.resolution.free_rank, 0,
+        "free_rank = 0 when all 80 sites pinned"
+    );
+    match outcome.resolution.verdict {
+        ResolutionVerdict::Converged { admitting_nonce } => {
+            assert_eq!(
+                admitting_nonce, outcome.nonce,
+                "resolver's admitting_nonce matches the host-perspective u32"
+            );
+            assert_eq!(
+                outcome.resolution.iterations,
+                (admitting_nonce as u64) + 1,
+                "iterations = admitting_nonce + 1 (resolver visits 0..=admitting_nonce)"
+            );
+        }
+        ResolutionVerdict::Exhausted => panic!("permissive target must not Exhaust"),
+    }
+}
+
+#[test]
+fn v_mine_drains_thread_local_diagnostic_channel() {
+    // crate::diagnostics: mine() drains the thread-local channel as
+    // part of constructing MiningOutcome; a subsequent
+    // take_resolution_state() returns None.
+    let header = canonical_header(1, 1_700_000_001, 0x207fffff);
+    let _ = mine(&header, Target::new(0x207fffff)).expect("admits");
+
+    assert!(
+        take_resolution_state().is_none(),
+        "mine()'s Ok path drains the channel; subsequent take() returns None"
+    );
+}
+
+#[test]
+fn v_forward_records_resolution_state_for_inspection() {
+    // Direct forward() callers (not going through mine()) inspect
+    // the diagnostic channel via take_resolution_state(). ψ_9
+    // records state on its way out regardless of which entry-point
+    // invoked the catamorphism.
+    let _ = take_resolution_state(); // drain any leftover state
+    let mut prefix = [0u8; 76];
+    prefix[0] = 0x55;
+    let target = [0xffu8; 32];
+    let task = MiningTask::new(prefix, target);
+
+    let _grounded = <BitcoinMiningModel as PrismModel<
+        DefaultHostTypes,
+        PrismBtcBounds,
+        Sha256dHasher,
+        BitcoinResolverTuple<Sha256dHasher>,
+    >>::forward(task)
+    .expect("ψ-pipeline runs");
+
+    let state =
+        take_resolution_state().expect("ψ_9 must have recorded resolution state for forward()");
+    assert!(state.converged(), "permissive target Converged");
+    assert_eq!(state.free_rank, 0);
+    assert!(state.admitting_nonce().is_some());
 }

@@ -21,6 +21,9 @@
 //! - [`Sha256dHasher`] — the canonical hash axis (content-addressing
 //!   primitive).
 //! - [`PrismBtcBounds`] — the `HostBounds` profile (`WITT_LEVEL_MAX_BITS = 32`).
+//! - [`ResolutionState`] / [`take_resolution_state`] — diagnostic
+//!   surface for the ψ_9 iterative-resolution loop
+//!   ([`diagnostics`] module).
 //!
 //! [`ARCHITECTURE.md`]: https://github.com/afflom/prism-btc/blob/main/ARCHITECTURE.md
 
@@ -29,6 +32,7 @@
 #[cfg(not(feature = "std"))]
 extern crate alloc;
 
+pub mod diagnostics;
 pub mod domain;
 pub mod model;
 pub mod ops;
@@ -38,6 +42,7 @@ pub mod shapes;
 pub mod verbs;
 
 // Public façade — typed surface.
+pub use diagnostics::{take_resolution_state, ResolutionState, ResolutionVerdict};
 pub use domain::{
     Bits, BlockHash, BlockHeader, MerkleRoot, MiningTag, MiningWitness, Target, Timestamp,
     TriadicCoords, Version,

@@ -151,6 +151,21 @@ prefix bytes); sites 76..80 are κ-pinned (ψ_9 resolver's W32 walk
 materializes the admitting nonce bytes). Both mechanisms terminate at
 the same fixed point: 80 sites pinned ⇒ `FreeRank = 0` ⇒ convergence.
 
+## Iterative-resolution diagnostic surface
+
+The wiki's iterative-resolution discipline names a per-resolver
+observability channel: `FreeRank` (unpinned sites at exit),
+`iterations` (W32 candidates evaluated), and the terminal verdict
+(`Converged { admitting_nonce }` or `Exhausted`, the canonical
+`proof:InhabitanceImpossibilityWitness`). prism-btc exposes this via
+[`ResolutionState`](crates/prism-btc/src/diagnostics.rs) on
+`MiningOutcome.resolution` (the `Ok` path) and via the public
+`take_resolution_state()` function (the `Err` path and direct
+`forward()` callers). `prism-btc-node`'s `MinedBlock` summary
+includes the resolution state plus the host-boundary
+`extranonce_attempts` counter for end-to-end observability across
+the typed-iso surface + the template-variation loop.
+
 ## Quick start
 
 ```bash
