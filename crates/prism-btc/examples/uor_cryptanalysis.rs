@@ -707,8 +707,8 @@ fn section_i_u1_marginal_calibration(samples: usize) {
     ];
 
     println!(
-        "  {:<33} {:>11} {:>12} {:>11}  {}",
-        "predicate", "claimed pr", "observed pr", "chi-square", "verdict"
+        "  {:<33} {:>11} {:>12} {:>11}  verdict",
+        "predicate", "claimed pr", "observed pr", "chi-square"
     );
     println!(
         "  {:-<33} {:->11} {:->12} {:->11}  {:-<7}",
@@ -797,8 +797,8 @@ fn section_j_u2_joint_independence(samples: usize) {
     ];
 
     println!(
-        "  {:<52} {:>10} {:>12} {:>10}  {}",
-        "pair", "Pr[A]·Pr[B]", "obs Pr[A∧B]", "chi-square", "verdict"
+        "  {:<52} {:>10} {:>12} {:>10}  verdict",
+        "pair", "Pr[A]·Pr[B]", "obs Pr[A∧B]", "chi-square"
     );
     println!(
         "  {:-<52} {:->10} {:->12} {:->10}  {:-<7}",

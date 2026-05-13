@@ -12,7 +12,7 @@
 //!   nonce-splicing.
 //! - [`merkle`] — pairwise-SHA-256d merkle root reduction over
 //!   transaction txids.
-//! - [`sha256`] — pure-Rust SHA-256 / SHA-256d (the algorithm body
+//! - [`mod@sha256`] — pure-Rust SHA-256 / SHA-256d (the algorithm body
 //!   [`crate::shapes::hasher::Sha256dHasher`] uses internally for the
 //!   canonical hash axis).
 

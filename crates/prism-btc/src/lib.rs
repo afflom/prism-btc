@@ -11,7 +11,7 @@
 //! ## Quick reference
 //!
 //! - [`mine`] — the public entry point: builds a [`MiningTask`] and
-//!   invokes [`BitcoinMiningModel::forward`].
+//!   invokes [`BitcoinMiningModel`]'s `PrismModel::forward` impl.
 //! - [`BitcoinMiningModel`] — `PrismModel<HostTypes, HostBounds, Hasher,
 //!   ResolverTuple>` whose route is `mining_inference(input)`.
 //! - [`MiningTask`] — `partition_product(TemplatePrefix, Target)`,

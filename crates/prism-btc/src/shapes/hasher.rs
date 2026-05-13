@@ -5,7 +5,7 @@
 //! under truncation. The trait permits arbitrary Rust in the body —
 //! foundation does not mandate that the body be a `PrimitiveOp`
 //! composition. prism-btc, as the prism implementor, provides the body
-//! as pure-Rust SHA-256d (see [`crate::ops::sha256`] for the one-shot
+//! as pure-Rust SHA-256d (see [`mod@crate::ops::sha256`] for the one-shot
 //! algorithm; this hasher streams bytes through it).
 //!
 //! Used by foundation's pipeline at certificate-emission time to

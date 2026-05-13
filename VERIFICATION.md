@@ -1,12 +1,12 @@
 # prism-btc — Verification & Validation
 
 > **Scope.** This document records what prism-btc verifies and how.
-> The V&V suite is reproducible via `just vv` across four axes:
-> architecture (fmt + clippy + unit + integration tests), the
-> dedicated V&V test module, Lean proofs, and a regtest end-to-end
-> run.
+> The V&V suite is reproducible via `just vv` across five axes:
+> architecture (fmt + clippy --all-targets + unit + integration
+> tests), the dedicated V&V test module, rustdoc (broken intra-doc
+> links denied), Lean proofs, and a regtest end-to-end run.
 
-prism-btc's V&V covers four axes. Each axis has a concrete reproducible
+prism-btc's V&V covers five axes. Each axis has a concrete reproducible
 artifact in the repo.
 
 ## §1 Architectural conformance — `cargo test --release`

@@ -20,7 +20,7 @@ check:
     cargo check --workspace
 
 lint:
-    cargo clippy --workspace -- -D warnings
+    cargo clippy --workspace --all-targets -- -D warnings
 
 fmt:
     cargo fmt --all
@@ -50,9 +50,11 @@ vv:
     just lint
     echo "── §2 prism-btc unit + integration + V&V tests (release) ────"
     cargo test --workspace --release
-    echo "── §3 Lean proofs ──────────────────────────────────────────"
+    echo "── §3 rustdoc (broken-intra-doc-links = deny) ───────────────"
+    just doc-check
+    echo "── §4 Lean proofs ──────────────────────────────────────────"
     just verify
-    echo "── §4 regtest end-to-end (skipped if PRISM_RPC_URL unset) ──"
+    echo "── §5 regtest end-to-end (skipped if PRISM_RPC_URL unset) ──"
     if [ -n "${PRISM_RPC_URL:-}" ] && [ -n "${PRISM_PAYOUT:-}" ]; then
         cargo test -p prism-btc-node --release -- --ignored --nocapture
     else
@@ -73,6 +75,10 @@ bench:
 
 doc:
     cargo doc --workspace --no-deps --open
+
+# Lint-strict rustdoc — broken intra-doc links are denied. Wired into `vv`.
+doc-check:
+    RUSTDOCFLAGS="-D rustdoc::broken-intra-doc-links" cargo doc --workspace --no-deps --release
 
 # End-to-end regtest demo: spin up bitcoind, mine 10 blocks via prism-btc, show chain state.
 # Requires: bitcoind + bitcoin-cli on PATH (e.g. installed under ~/bin/).
