@@ -12,7 +12,7 @@ artifact in the repo.
 ## §1 Architectural conformance — `cargo test --release`
 
 The verb arena, model declarations, and substrate-bindings carry
-compile-time invariants the test surface re-asserts at runtime. 47
+compile-time invariants the test surface re-asserts at runtime. 55
 unit tests across the prism-btc crate's modules:
 
 - **`crates/prism-btc/src/verbs.rs::tests`** (6 tests) — the verb
@@ -53,18 +53,28 @@ unit tests across the prism-btc crate's modules:
   against rust-bitcoin reference; canonical 80-byte header
   serialization round-trip.
 
-- **`crates/prism-btc/src/pipeline.rs::tests`** (8 tests) — the
-  UOR-optimal mining surface (architecture §14): empty commitment
-  agrees with bare `mine()`; `Predicate::Parity` reads a single bit
-  with bandwidth 1; `Predicate::StratumEq{k}` matches the 2-adic
-  stratum with bandwidth `k+1`; `Predicate::PAdicEq{p, k}` matches
-  the p-adic valuation with bandwidth `(k+1)·log₂(p) − log₂(p−1)`;
-  `Predicate::UltrametricCloseTo{r, k}` matches the 2-adic distance
-  with bandwidth `k`; `MiningCommitment::bandwidth_bits` is
-  additive over mixed predicates (U6); Conjunction'd evaluation is
-  the AND of per-predicate evaluations across mixed types;
-  `mine_with_commitment` admits at a permissive target with the
-  empty commitment.
+- **`crates/prism-btc/src/pipeline.rs::tests`** (16 tests) — the
+  UOR-optimal mining surface (architecture §14):
+  - Predicate semantics: empty commitment ≡ bare `mine()`;
+    `Predicate::Parity` reads a single bit (bandwidth 1);
+    `Predicate::StratumEq{k}` matches the 2-adic stratum
+    (bandwidth `k+1`); `Predicate::PAdicEq{p, k}` matches the
+    p-adic valuation (bandwidth `(k+1)·log₂p − log₂(p−1)`);
+    `Predicate::UltrametricCloseTo{r, k}` matches the 2-adic
+    distance (bandwidth `k`).
+  - Bandwidth-additivity (U6) over **disjoint** supports;
+    Conjunction'd evaluation = AND of per-predicate evaluations
+    across mixed types; `mine_with_commitment` admits at a
+    permissive target with the empty commitment.
+  - Support algebra (§14.2): `PAdicEq{p=2}` canonicalizes to
+    `BitSet`; `BitSet ⊥ BitSet` iff bit-disjoint; same-byte
+    overlap is detected as dependent; distinct-byte `BitSet`s are
+    independent; `Modular{p₁} ⊥ Modular{p₂}` iff `p₁ ≠ p₂`;
+    `Modular{p≥3} ⊥ BitSet(_)` always.
+  - Enforcement: `try_add_predicate` returns
+    `Err(OverlappingSupport{ existing_index })` on overlap and
+    succeeds on disjoint supports; `add_predicate` panics with
+    "overlapping support" on overlap.
 
 The [`crate::diagnostics`](crates/prism-btc/src/diagnostics.rs)
 module exposes ψ_9's structural κ-derivation state
@@ -111,7 +121,7 @@ Lean 4 proofs of foundational algebraic identities prism-btc depends on:
 | `ShapeConstraint.lean` | Target satisfaction monotonicity; leading-zeros → stratum bound | proved |
 | `FreeRankProtocol.lean` | FreeRank decreases monotonically under refinement | proved |
 | `ConvergenceProtocol.lean` | σ-projection identity + ψ-vs-σ distinction (load-bearing for ADR-035) | proved |
-| `CommitmentChannel.lean` | U6 Bandwidth-Additivity: Conjunction is monoidal over commitment concatenation; bandwidth and evaluation distribute over append (architecture §14) | proved |
+| `CommitmentChannel.lean` | U6 Bandwidth-Additivity: Conjunction is monoidal over commitment concatenation; bandwidth and evaluation distribute over append; `Support.disjoint` symmetry; `Commitment.wellFormed` invariant of the Rust typed-iso surface (architecture §14) | proved |
 
 Run: `just verify` (= `cd prism-btc-lean && lake update && lake build`).
 Build is green against `leanprover/lean4:v4.16.0`.

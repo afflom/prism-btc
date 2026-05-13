@@ -58,7 +58,8 @@ pub use domain::{
 };
 pub use model::{BitcoinMiningModel, BitcoinMiningRoute, MiningResult, MiningTask, TemplatePrefix};
 pub use pipeline::{
-    mine, mine_with_commitment, MiningCommitment, MiningFailure, MiningOutcome, Predicate,
+    mine, mine_with_commitment, CommitmentError, MiningCommitment, MiningFailure, MiningOutcome,
+    Predicate, Support,
 };
 pub use resolvers::{
     BitcoinChainComplexResolver, BitcoinCochainComplexResolver, BitcoinCohomologyGroupResolver,

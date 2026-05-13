@@ -6,38 +6,75 @@ prism-btc's UOR-optimal mining surface (architecture §14, ANALYSIS.md
 runtime `MiningCommitment` type. This file formalizes the algebraic
 core of the typed channel:
 
-* A `Predicate` is a Boolean function over digests plus a non-negative
-  bandwidth contribution in bits.
+* A `Predicate` is a Boolean function over digests, plus a
+  non-negative bandwidth contribution in bits, plus an algebraic
+  `Support` naming the manifold region it reads.
 * A `Commitment` is a `List Predicate` — their Conjunction.
 * `evaluate` is the AND of per-predicate evaluations.
 * `bandwidthBits` is the sum of per-predicate bandwidth contributions.
-* **U6 Bandwidth-Additivity** is the algebraic identity that bandwidth
-  is preserved under commitment concatenation.
+* `Support.disjoint` names when two supports are jointly independent
+  under the random-oracle baseline.
+* `Commitment.wellFormed` asserts pairwise-disjoint supports — the
+  invariant that the Rust typed-iso surface enforces at
+  `MiningCommitment::add_predicate` time (architecture §14.2).
+* **U6 Bandwidth-Additivity** is the algebraic identity that
+  bandwidth is preserved under commitment concatenation.
 
-These match the Rust types in `prism_btc::Predicate` and
-`prism_btc::MiningCommitment` (`crates/prism-btc/src/pipeline.rs`).
-The probabilistic PRF interpretation of `bandwidthBits` is informal;
-the additivity proved here is purely algebraic and applies to any
-non-negative bandwidth function. (For the Rust `PAdicEq` variant the
-bandwidth is a real number; the integer model here suffices for the
-discrete additivity claim — the proof generalizes verbatim to `Real`.)
+These match the Rust types in `prism_btc::Predicate`,
+`prism_btc::Support`, and `prism_btc::MiningCommitment`
+(`crates/prism-btc/src/pipeline.rs`). The probabilistic PRF
+interpretation of `bandwidthBits` is informal; the additivity proved
+here is purely algebraic. The `wellFormed` invariant is what makes
+the PRF interpretation a tight bound rather than an upper bound.
 -/
 
 namespace PrismBtc.CommitmentChannel
 
-/-- Abstract digest type. In the Rust implementation this is `[u8; 32]`;
-    here we model it as an arbitrary type because the Conjunction
-    algebra is parametric over what predicates read. -/
+/-- Abstract digest type. In the Rust implementation this is `[u8; 32]`. -/
 abbrev Digest := List Bool
 
-/-- A typed predicate: a Boolean function on digests plus a bandwidth
-    contribution in bits. Mirrors `prism_btc::Predicate`. -/
+/-- Algebraic support of a predicate — the manifold region it reads.
+
+    Two supports are **disjoint** iff predicates with these supports
+    are jointly independent under the PRF baseline:
+
+    * `bitSet a` ⊥ `bitSet b` iff the bit-masks are bit-disjoint.
+    * `modular p` ⊥ `bitSet _` iff `p ≠ 2` (a prime ≥ 3 is coprime
+      with any bit-pattern read from a uniform digest).
+    * `modular p₁` ⊥ `modular p₂` iff `p₁ ≠ p₂` (distinct primes are
+      coprime moduli). -/
+inductive Support where
+  | bitSet (mask : Nat) : Support
+  | modular (p : Nat) : Support
+  deriving DecidableEq
+
+namespace Support
+
+/-- Disjointness check for two supports. Models the Rust function
+    `prism_btc::Support::is_disjoint_from`. -/
+def disjoint : Support → Support → Bool
+  | .bitSet a, .bitSet b => Nat.land a b = 0
+  | .bitSet _, .modular p => decide (p ≠ 2)
+  | .modular p, .bitSet _ => decide (p ≠ 2)
+  | .modular p₁, .modular p₂ => decide (p₁ ≠ p₂)
+
+/-- Disjointness is symmetric: `a ⊥ b ↔ b ⊥ a`. -/
+theorem disjoint_symm (a b : Support) : disjoint a b = disjoint b a := by
+  cases a <;> cases b <;> simp [disjoint, Nat.land_comm]
+
+end Support
+
+/-- A typed predicate: Boolean function on digests, plus a bandwidth
+    contribution in bits, plus its algebraic support. Mirrors
+    `prism_btc::Predicate`. -/
 structure Predicate where
   /-- Boolean evaluation. -/
   evaluate : Digest → Bool
   /-- PRF bandwidth contribution (bits encoded per κ-label when this
       predicate is included in a Conjunction). -/
   bandwidthBits : Nat
+  /-- Algebraic support — the manifold region the predicate reads. -/
+  support : Support
 
 /-- A commitment is a list of predicates — their Conjunction. -/
 abbrev Commitment := List Predicate
@@ -91,13 +128,7 @@ theorem bandwidth_append (c₁ c₂ : Commitment) :
   | cons p ps ih =>
     simp [bandwidthBits, ih, Nat.add_assoc]
 
-/-- Evaluation distributes over concatenation as Boolean AND:
-    `evaluate (c₁ ++ c₂) d = evaluate c₁ d && evaluate c₂ d`.
-
-    The Conjunction of two commitments evaluates to the AND of their
-    individual evaluations — the algebraic statement that
-    `type:Conjunction` is a monoid under list-concatenation with the
-    empty commitment as identity. -/
+/-- Evaluation distributes over concatenation as Boolean AND. -/
 theorem evaluate_append (c₁ c₂ : Commitment) (d : Digest) :
     evaluate (c₁ ++ c₂) d = (evaluate c₁ d && evaluate c₂ d) := by
   induction c₁ with
@@ -107,16 +138,42 @@ theorem evaluate_append (c₁ c₂ : Commitment) (d : Digest) :
     simp [evaluate, ih, Bool.and_assoc]
 
 /-- The empty commitment is the right identity of concatenation under
-    evaluation: `evaluate (c ++ []) d = evaluate c d`. -/
+    evaluation. -/
 theorem evaluate_append_empty (c : Commitment) (d : Digest) :
     evaluate (c ++ empty) d = evaluate c d := by
   simp [empty, evaluate]
 
 /-- The empty commitment is the right identity of concatenation under
-    bandwidth: `bandwidthBits (c ++ []) = bandwidthBits c`. -/
+    bandwidth. -/
 theorem bandwidth_append_empty (c : Commitment) :
     bandwidthBits (c ++ empty) = bandwidthBits c := by
   rw [bandwidth_append, bandwidth_empty]
+
+/-- `wellFormed c` holds iff every pair of predicates in `c` has
+    disjoint supports. This is the invariant the Rust typed-iso
+    surface enforces via `MiningCommitment::add_predicate`
+    (architecture §14.2): a commitment that builds successfully via
+    `add_predicate` automatically satisfies `wellFormed`.
+
+    When `wellFormed` holds, U6 Bandwidth-Additivity is a **tight**
+    bound on PRF mining cost (`α⁻¹ · 2^bandwidthBits`); when it
+    fails, the algebraic identity still holds but the probabilistic
+    interpretation is only an upper bound. -/
+def wellFormed (c : Commitment) : Prop :=
+  ∀ i j, i < c.length → j < c.length → i ≠ j →
+    Support.disjoint (c.get ⟨i, by assumption⟩).support
+                     (c.get ⟨j, by assumption⟩).support = true
+
+/-- The empty commitment is trivially well-formed (no pairs to check). -/
+theorem wellFormed_empty : wellFormed empty := by
+  intro i j hi _ _
+  simp [empty] at hi
+
+/-- A singleton commitment is well-formed (no pairs to check). -/
+theorem wellFormed_singleton (p : Predicate) : wellFormed [p] := by
+  intro i j hi hj hij
+  -- i, j < 1 means both are 0, contradicting i ≠ j.
+  interval_cases i <;> interval_cases j <;> contradiction
 
 end Commitment
 

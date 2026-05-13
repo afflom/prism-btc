@@ -799,18 +799,46 @@ The fail-closed contract holds across both axes:
 `Ok(MiningOutcome)` is returned only when both admission AND every
 commitment predicate hold.
 
-**Bandwidth-additivity (U6).** `MiningCommitment::bandwidth_bits()`
-returns the sum of per-predicate contributions. Per
+**Bandwidth-additivity (U6) — enforced at the typed-iso surface.**
+`MiningCommitment::bandwidth_bits()` returns the sum of per-predicate
+contributions. Per
 [`PrismBtc.CommitmentChannel.bandwidth_append`](../prism-btc-lean/PrismBtc/CommitmentChannel.lean),
 the Conjunction is monoidal under list-concatenation: bandwidth and
-evaluation distribute over commitment concatenation. The
-probabilistic content of U6 (PRF cost = `α⁻¹ · 2^bandwidth_bits`)
-holds when the predicates are **jointly independent** in the
-random-oracle sense; pairing predicates that touch the same
-manifold region (e.g. `StratumEq{k=2}` ∧ `UltrametricCloseTo{·, 2}`)
-double-counts constraints and the additivity is only an upper bound.
-The Lean theorem covers the algebraic-additivity claim regardless
-of independence.
+evaluation distribute over commitment concatenation algebraically.
+
+The probabilistic content of U6 (PRF cost = `α⁻¹ · 2^bandwidth_bits`)
+holds when the predicates are **jointly independent**. prism-btc
+turns this from an honor-system upper bound into a typed-iso
+invariant via the [`Support`] type:
+
+```rust
+pub enum Support {
+    BitSet([u8; 32]),     // bit-position support
+    Modular { p: u64 },   // mod-p^* support (p ≥ 3)
+}
+```
+
+Each `Predicate` exposes `support() -> Support`. Two supports are
+**disjoint** iff predicates with these supports are jointly
+independent under PRF:
+
+- `BitSet(a)` ⊥ `BitSet(b)` ⇔ `a & b == 0` (bit-disjoint masks).
+- `Modular { p }` ⊥ `BitSet(_)` ⇔ `p ≠ 2`.
+- `Modular { p₁ }` ⊥ `Modular { p₂ }` ⇔ `p₁ ≠ p₂` (coprime primes).
+
+`PAdicEq { p: 2, k }` is canonicalized to `BitSet(low_bits_mask(k+1))`
+at `Predicate::support()` so its independence with bit-set
+predicates is checked correctly.
+
+[`MiningCommitment::add_predicate`] panics on overlap;
+[`MiningCommitment::try_add_predicate`] returns
+[`CommitmentError::OverlappingSupport { existing_index }`]. A
+commitment built only via the typed builders is **well-formed by
+construction** (all pairwise supports disjoint), so
+`bandwidth_bits()` is a tight bound on the PRF mining cost — not an
+upper bound. The Lean theorem
+[`Commitment.wellFormed`](../prism-btc-lean/PrismBtc/CommitmentChannel.lean)
+formalizes the invariant.
 
 ### 14.3 Empirical scaling
 

@@ -254,6 +254,126 @@ impl Predicate {
             Self::UltrametricCloseTo { k, .. } => *k as f64,
         }
     }
+
+    /// The predicate's algebraic **support** — which manifold region
+    /// it reads. Two predicates with disjoint supports are jointly
+    /// independent under the random-oracle baseline (ANALYSIS.md §4.1
+    /// U2 joint-independence); composing them under a [`MiningCommitment`]
+    /// produces a Conjunction whose [`MiningCommitment::bandwidth_bits`]
+    /// is **tight** rather than an upper bound (U6).
+    ///
+    /// Per-variant supports:
+    ///
+    /// - `Parity { ω, .. }`: `Support::BitSet(ω)` — the parity reads
+    ///   the digest bits at the positions set in `ω`.
+    /// - `StratumEq { k }`: `Support::BitSet(low_bits_mask(k + 1))` —
+    ///   the predicate constrains bits 0..k of the 256-bit BE integer
+    ///   (bits 0..k−1 must be zero AND bit k must be set).
+    /// - `UltrametricCloseTo { k, .. }`: `Support::BitSet(low_bits_mask(k))`
+    ///   — the predicate constrains the low `k` bits of the digest.
+    /// - `PAdicEq { p: 2, k }`: same as `StratumEq { k }` (the 2-adic
+    ///   valuation is the stratum); canonicalized to `BitSet`.
+    /// - `PAdicEq { p, .. }` for `p ≥ 3`: `Support::Modular { p }`
+    ///   — the predicate reads the digest's residue class mod `p^*`;
+    ///   independent from any `BitSet` support and from any other
+    ///   `Modular { q }` with `q ≠ p`.
+    #[must_use]
+    pub fn support(&self) -> Support {
+        match self {
+            Self::Parity { omega, .. } => Support::BitSet(*omega),
+            Self::StratumEq { k } => Support::BitSet(low_bits_mask(*k + 1)),
+            Self::UltrametricCloseTo { k, .. } => Support::BitSet(low_bits_mask(*k)),
+            // PAdicEq{p=2} ≡ StratumEq{k}: canonicalize to BitSet so
+            // mixed compositions check correctly.
+            Self::PAdicEq { p: 2, k } => Support::BitSet(low_bits_mask(*k + 1)),
+            Self::PAdicEq { p, .. } => Support::Modular { p: *p },
+        }
+    }
+}
+
+/// Algebraic support of a [`Predicate`] — the manifold region it
+/// reads. Two supports are **disjoint** iff predicates with these
+/// supports are jointly independent under the PRF baseline.
+///
+/// - `BitSet(a)` ⊥ `BitSet(b)` iff `a & b == 0` (bit-disjoint masks).
+/// - `Modular { p }` ⊥ `BitSet(_)` iff `p ≠ 2` (a prime ≥ 3 is
+///   coprime with any bit-pattern read from the digest).
+/// - `Modular { p₁ }` ⊥ `Modular { p₂ }` iff `p₁ ≠ p₂` (distinct
+///   primes are coprime moduli).
+///
+/// `PAdicEq { p: 2, k }` is canonicalized to `BitSet(low_bits_mask(k+1))`
+/// at [`Predicate::support`] so its independence with bit-set
+/// predicates is checked correctly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Support {
+    /// Bit-position support: the predicate reads bits at positions
+    /// where `mask` has bits set (in LSB-numbered integer view of
+    /// the 256-bit digest).
+    BitSet([u8; 32]),
+    /// Modular support: the predicate reads the digest's residue
+    /// mod `p` (and higher powers). For two `Modular` supports to
+    /// be disjoint, their `p` values must be distinct primes.
+    Modular {
+        /// Prime modulus base. Must be `≥ 3` (the `p = 2` case is
+        /// canonicalized to [`Support::BitSet`] by [`Predicate::support`]).
+        p: u64,
+    },
+}
+
+impl Support {
+    /// Returns `true` iff `self` and `other` are algebraically
+    /// disjoint — i.e. predicates with these supports are jointly
+    /// independent under the random-oracle baseline (ANALYSIS.md
+    /// §4.1 U2). When all pairs of supports in a [`MiningCommitment`]
+    /// are disjoint, [`MiningCommitment::bandwidth_bits`] is a tight
+    /// bound on the PRF mining cost; non-disjoint supports make it
+    /// an upper bound.
+    #[must_use]
+    pub fn is_disjoint_from(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::BitSet(a), Self::BitSet(b)) => a.iter().zip(b.iter()).all(|(x, y)| x & y == 0),
+            (Self::BitSet(_), Self::Modular { p }) | (Self::Modular { p }, Self::BitSet(_)) => {
+                *p != 2
+            }
+            (Self::Modular { p: p1 }, Self::Modular { p: p2 }) => *p1 != *p2,
+        }
+    }
+}
+
+/// Construct a `[u8; 32]` bit-mask with the `n` lowest-position bits
+/// set. Bit `i` (LSB-numbered, `i = 0` is bit 0 of byte 31) is set
+/// iff `i < n`. Saturates at `n = 256`.
+#[inline]
+#[must_use]
+fn low_bits_mask(n: u32) -> [u8; 32] {
+    let mut mask = [0u8; 32];
+    let n = (n as usize).min(256);
+    let full_bytes = n / 8;
+    let extra_bits = n % 8;
+    let mut i = 0;
+    while i < full_bytes {
+        mask[31 - i] = 0xff;
+        i += 1;
+    }
+    if extra_bits > 0 && full_bytes < 32 {
+        mask[31 - full_bytes] = (1u8 << extra_bits) - 1;
+    }
+    mask
+}
+
+/// Errors from [`MiningCommitment::try_add_predicate`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommitmentError {
+    /// The new predicate's support overlaps the existing predicate at
+    /// `existing_index`. U6 Bandwidth-Additivity (ANALYSIS.md §4.1,
+    /// §5.5) requires pairwise-disjoint supports for
+    /// [`MiningCommitment::bandwidth_bits`] to be a tight bound on
+    /// PRF mining cost rather than an upper bound.
+    OverlappingSupport {
+        /// Index (in the commitment's predicate list) of the existing
+        /// predicate whose support overlaps the new one.
+        existing_index: usize,
+    },
 }
 
 /// A typed boundary commitment — a Conjunction of K independent
@@ -328,12 +448,51 @@ impl MiningCommitment {
         self.add_predicate(Predicate::UltrametricCloseTo { reference, k })
     }
 
-    /// Append an arbitrary [`Predicate`]. The typed builders
-    /// ([`Self::add_parity`], etc.) are usually more ergonomic.
+    /// Append an arbitrary [`Predicate`], enforcing that its support
+    /// is disjoint from every existing predicate's support.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the new predicate's support overlaps an existing
+    /// predicate's support — that would break U6 Bandwidth-Additivity's
+    /// independence requirement and cause [`Self::bandwidth_bits`] to
+    /// over-state the actual PRF mining cost. Use
+    /// [`Self::try_add_predicate`] to handle overlap dynamically.
     #[must_use]
-    pub fn add_predicate(mut self, predicate: Predicate) -> Self {
+    pub fn add_predicate(self, predicate: Predicate) -> Self {
+        match self.try_add_predicate(predicate) {
+            Ok(c) => c,
+            Err(CommitmentError::OverlappingSupport { existing_index }) => panic!(
+                "MiningCommitment::add_predicate: new predicate has overlapping support \
+                 with existing predicate at index {existing_index}; U6 Bandwidth-Additivity \
+                 requires pairwise-disjoint supports for `bandwidth_bits()` to be a tight \
+                 cost contract. Use try_add_predicate to handle this dynamically."
+            ),
+        }
+    }
+
+    /// Append an arbitrary [`Predicate`], returning `Err` if its
+    /// support overlaps any existing predicate's support.
+    ///
+    /// On success, the returned commitment satisfies the invariant
+    /// that all pairwise supports are disjoint — making
+    /// [`Self::bandwidth_bits`] a **tight** bound on PRF mining cost
+    /// (U6 Bandwidth-Additivity holds with equality under the
+    /// random-oracle baseline).
+    ///
+    /// # Errors
+    ///
+    /// [`CommitmentError::OverlappingSupport`] — names the index of
+    /// the existing predicate whose support overlaps the new one.
+    pub fn try_add_predicate(mut self, predicate: Predicate) -> Result<Self, CommitmentError> {
+        let new_support = predicate.support();
+        for (existing_index, existing) in self.predicates.iter().enumerate() {
+            if !new_support.is_disjoint_from(&existing.support()) {
+                return Err(CommitmentError::OverlappingSupport { existing_index });
+            }
+        }
         self.predicates.push(predicate);
-        self
+        Ok(self)
     }
 
     /// Total PRF bandwidth (in bits) the commitment encodes per
@@ -522,22 +681,111 @@ mod tests {
     }
 
     #[test]
-    fn commitment_bandwidth_is_additive_over_predicates() {
-        // U6 Bandwidth-Additivity (ANALYSIS.md §4.1, §5.5): the
-        // commitment's bandwidth equals the sum of per-predicate
-        // contributions.
+    fn commitment_bandwidth_is_additive_over_disjoint_supports() {
+        // U6 Bandwidth-Additivity (ANALYSIS.md §4.1, §5.5) is a
+        // TIGHT bound when supports are pairwise-disjoint; the
+        // typed-iso surface enforces that invariant via
+        // `add_predicate` / `try_add_predicate` (architecture §14.2).
+        let mut high_omega = [0u8; 32];
+        high_omega[8] = 0b0000_0001; // bit 0 of byte 8 — far from byte-31 low bits
+
         let c = MiningCommitment::empty()
-            .add_parity([1u8; 32], 0) // 1 bit
-            .add_stratum_eq(3) // 4 bits
-            .add_ultrametric_close_to([0u8; 32], 7); // 7 bits
+            .add_parity(high_omega, 1) // 1 bit, BitSet at byte 8
+            .add_stratum_eq(3) // 4 bits, BitSet on low bits of byte 31
+            .add_p_adic_eq(3, 0); // ≈0.585 bits, Modular {p=3}
         assert_eq!(c.predicate_count(), 3);
         assert!(!c.is_empty());
-        assert!((c.bandwidth_bits() - 12.0).abs() < 1e-12);
+        let expected = 1.0 + 4.0 + (3.0_f64 / 2.0).log2();
+        assert!((c.bandwidth_bits() - expected).abs() < 1e-12);
 
         let empty = MiningCommitment::empty();
         assert_eq!(empty.predicate_count(), 0);
         assert!((empty.bandwidth_bits()).abs() < 1e-12);
         assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn predicate_support_canonicalizes_p_adic_2_to_bit_set() {
+        // PAdicEq{p=2, k} ≡ StratumEq{k}: both read the low (k+1)
+        // bits of the digest. Their supports must be equal so mixed
+        // compositions correctly identify them as dependent.
+        let p_adic_2 = Predicate::PAdicEq { p: 2, k: 3 };
+        let stratum = Predicate::StratumEq { k: 3 };
+        assert_eq!(p_adic_2.support(), stratum.support());
+    }
+
+    #[test]
+    fn support_bit_set_overlap_is_dependent() {
+        let mut mask_a = [0u8; 32];
+        mask_a[31] = 0b0000_1100; // bits 2, 3
+        let mut mask_b = [0u8; 32];
+        mask_b[31] = 0b0000_1010; // bits 1, 3 — overlap at bit 3
+        let a = Support::BitSet(mask_a);
+        let b = Support::BitSet(mask_b);
+        assert!(!a.is_disjoint_from(&b));
+        assert!(!b.is_disjoint_from(&a));
+    }
+
+    #[test]
+    fn support_disjoint_bit_sets_are_independent() {
+        let mut mask_a = [0u8; 32];
+        mask_a[5] = 0xff;
+        let mut mask_b = [0u8; 32];
+        mask_b[20] = 0xff;
+        assert!(Support::BitSet(mask_a).is_disjoint_from(&Support::BitSet(mask_b)));
+    }
+
+    #[test]
+    fn support_modular_distinct_primes_are_disjoint() {
+        let a = Support::Modular { p: 3 };
+        let b = Support::Modular { p: 5 };
+        assert!(a.is_disjoint_from(&b));
+        // Same prime → dependent.
+        assert!(!a.is_disjoint_from(&Support::Modular { p: 3 }));
+    }
+
+    #[test]
+    fn support_modular_p3_independent_of_bit_set() {
+        // PAdicEq{p≥3} is independent from any BitSet (cross-family).
+        let mut mask = [0u8; 32];
+        mask[31] = 0x0f;
+        let bit = Support::BitSet(mask);
+        let modular = Support::Modular { p: 3 };
+        assert!(bit.is_disjoint_from(&modular));
+        assert!(modular.is_disjoint_from(&bit));
+    }
+
+    #[test]
+    fn try_add_predicate_rejects_overlapping_support() {
+        // Adding a predicate whose support overlaps an existing one
+        // returns Err with the offending existing index.
+        let c = MiningCommitment::empty().add_stratum_eq(3); // bits 0..3 of byte 31
+        let result = c.try_add_predicate(Predicate::UltrametricCloseTo {
+            reference: [0u8; 32],
+            k: 2,
+        }); // bits 0..1 — overlaps stratum's bits 0,1
+        assert_eq!(
+            result.err(),
+            Some(CommitmentError::OverlappingSupport { existing_index: 0 })
+        );
+    }
+
+    #[test]
+    fn try_add_predicate_accepts_disjoint_support() {
+        let c = MiningCommitment::empty().add_stratum_eq(3);
+        let result = c.try_add_predicate(Predicate::PAdicEq { p: 5, k: 0 });
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().predicate_count(), 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "overlapping support")]
+    fn add_predicate_panics_on_overlapping_support() {
+        // The infallible builder panics on overlap. Match against the
+        // panic message's "overlapping support" substring.
+        let _ = MiningCommitment::empty()
+            .add_stratum_eq(3)
+            .add_ultrametric_close_to([0u8; 32], 2);
     }
 
     #[test]
