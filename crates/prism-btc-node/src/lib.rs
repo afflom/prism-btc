@@ -69,21 +69,19 @@ impl PrismMiner {
         })
     }
 
-    /// Fetch a block template, drive the ψ-pipeline against template-
-    /// derived `MiningTask` variations until an admitting κ-label
-    /// lands, submit via `submitblock`, return the summary.
+    /// Fetch a block template, drive prism-btc's ψ-pipeline against it,
+    /// submit the admitting wire-format block via `submitblock`, return
+    /// the summary.
     ///
-    /// The host boundary owns the template-variation loop
-    /// (architecture §7): it rolls the coinbase extranonce, which
-    /// changes the coinbase txid, which changes the `MerkleRoot`,
-    /// which changes the `TemplatePrefix`, which yields a new
-    /// `MiningTask` whose ψ-pipeline κ-derived header may admit.
-    /// prism-btc owns the per-task ψ-pipeline inference.
-    ///
-    /// This call blocks until an admitting variation is found,
-    /// `submitblock` rejects, or the u64 extranonce space wraps
-    /// (~10¹⁹ variations — typically reached only on adversarial
-    /// targets; for any real network the chain advances first).
+    /// The ψ_9 resolver's iterative-resolution loop (wiki
+    /// `iterative-resolution.md`) walks the W32 nonce ring internally
+    /// to land an admitting κ-derivation — `prism_btc::mine` is
+    /// one-shot per template from the host's perspective. The host
+    /// boundary's only iteration is the outer extranonce roll, used
+    /// when a single template's W32 ring is walked end-to-end without
+    /// admission (architecture §7) — typically unreached for any
+    /// network whose chain advances faster than ~30 seconds × CPU
+    /// speed × `2^32 / admission-probability`.
     pub fn mine_one_block(&self) -> Result<MinedBlock> {
         let rules: &[GetBlockTemplateRules] = match self.network {
             Network::Signet => &[
@@ -108,6 +106,10 @@ impl PrismMiner {
             )
             .context("getblocktemplate RPC")?;
 
+        // Outer template-variation loop: only iterates when the W32
+        // ring is exhausted (the resolver returns
+        // `InhabitanceImpossibilityWitness`). For permissive targets
+        // (regtest), this loop body runs once.
         let mut extranonce: u64 = 0;
         loop {
             let job = MiningJob::from_template_with_extranonce(
@@ -116,10 +118,6 @@ impl PrismMiner {
                 extranonce,
             )?;
 
-            // One ψ-pipeline inference per template variation. The
-            // resolver chain is deterministic; finding admission
-            // means finding the MiningTask variation whose κ-derived
-            // nonce satisfies the target.
             match mine(&job.header, job.target) {
                 Ok(outcome) => {
                     let block = job.assemble(outcome.nonce);
@@ -134,16 +132,18 @@ impl PrismMiner {
                         tx_count: block.txdata.len(),
                     });
                 }
-                Err(MiningFailure::DidNotAdmit) => {
+                Err(MiningFailure::PipelineFailure) => {
+                    // ψ_9 resolver's InhabitanceImpossibilityWitness:
+                    // the W32 ring did not admit for this template's
+                    // (prefix, target). Vary the extranonce → distinct
+                    // MerkleRoot → distinct TemplatePrefix → fresh
+                    // W32 ring.
                     extranonce = extranonce.wrapping_add(1);
                     if extranonce == 0 {
                         anyhow::bail!(
                             "u64 extranonce space exhausted for this template without admission"
                         );
                     }
-                }
-                Err(MiningFailure::PipelineFailure) => {
-                    anyhow::bail!("foundation pipeline rejected the input");
                 }
             }
         }

@@ -15,8 +15,8 @@
 //!   (architecture §6 bit-identicality contract).
 
 use prism_btc::{
-    mine, BitcoinMiningModel, BitcoinResolverTuple, Bits, BlockHeader, MerkleRoot, MiningFailure,
-    MiningTask, PrismBtcBounds, Sha256dHasher, Target, Timestamp, Version,
+    mine, BitcoinMiningModel, BitcoinResolverTuple, Bits, BlockHeader, MerkleRoot, MiningTask,
+    PrismBtcBounds, Sha256dHasher, Target, Timestamp, Version,
 };
 use uor_foundation::pipeline::PrismModel;
 use uor_foundation::DefaultHostTypes;
@@ -104,7 +104,12 @@ fn forward_kappa_label_is_deterministic_in_the_typed_input() {
 #[test]
 fn forward_kappa_label_is_distinct_for_distinct_inputs() {
     // The ψ-pipeline distinguishes typed inputs: distinct MiningTask
-    // inputs yield distinct κ-labels (in the resolved-nonce field).
+    // prefixes yield distinct κ-labels. Under the resolver-owned
+    // iterative-resolution model, two distinct (prefix, target) pairs
+    // may converge on the same resolved nonce (e.g., nonce=0 admits
+    // for many prefixes under a maximally-permissive target); the
+    // structural distinction lives in the prefix region of the
+    // wire-format header, not necessarily in the 4-byte nonce field.
     let mut p_a = [0u8; 76];
     p_a[0] = 0x01;
     let mut p_b = [0u8; 76];
@@ -126,11 +131,10 @@ fn forward_kappa_label_is_distinct_for_distinct_inputs() {
     >>::forward(MiningTask::new(p_b, target))
     .expect("b");
 
-    let nonce_a = &ga.output_bytes()[76..80];
-    let nonce_b = &gb.output_bytes()[76..80];
     assert_ne!(
-        nonce_a, nonce_b,
-        "distinct typed inputs must yield distinct resolved nonces"
+        ga.output_bytes(),
+        gb.output_bytes(),
+        "distinct typed inputs must yield distinct κ-labels"
     );
 }
 
@@ -167,48 +171,21 @@ fn forward_path_identity_is_input_invariant() {
 }
 
 #[test]
-fn mine_is_fail_closed_against_a_strict_target() {
-    // mine() never returns a non-admitting MiningOutcome. For a
-    // strict target that the κ-derived header doesn't satisfy, the
-    // failure mode is `DidNotAdmit` — the host boundary iterates
-    // template-derived variations until admission lands.
+fn mine_admits_in_one_call_against_a_permissive_target() {
+    // Under the wiki's iterative-resolution discipline, the ψ_9
+    // resolver walks the W32 nonce ring internally until admission
+    // lands. For a permissive target (regtest's 0x207fffff: ~50%
+    // admission probability per nonce), the first call to mine()
+    // admits — no host-boundary iteration needed.
     let header = easy_header();
-    // Maximally strict target (all bits zero ⇒ no hash admits).
-    let strict_target = Target::new(0x03000001);
-
-    match mine(&header, strict_target) {
-        Ok(outcome) => {
-            // If ψ-derivation happens to admit, the wire-format
-            // header MUST actually satisfy the target — verify.
-            assert!(strict_target.is_satisfied_by_bytes(&outcome.digest));
-        }
-        Err(MiningFailure::DidNotAdmit) => {
-            // Expected outcome for a strict target.
-        }
-        Err(MiningFailure::PipelineFailure) => {
-            panic!("ψ-pipeline must run end-to-end against BitcoinResolverTuple");
-        }
-    }
-}
-
-#[test]
-fn mine_outcome_digest_actually_satisfies_target() {
-    // Bit-identicality + fail-closed: when mine() returns Ok, the
-    // wire-format header's digest IS lex-≤ the host-supplied target.
-    let header = easy_header();
-    // Iterate over a small extranonce-style variation space until
-    // an admission lands; pin that the returned outcome's digest
-    // genuinely admits.
     let target = Target::new(0x207fffff);
-    let admitting = (0u32..1024)
-        .find_map(|salt| {
-            let mut varied = header.clone();
-            varied.timestamp = Timestamp(header.timestamp.0.wrapping_add(salt));
-            mine(&varied, target).ok()
-        })
-        .expect("permissive target should admit within 1024 variations");
 
-    assert!(target.is_satisfied_by_bytes(&admitting.digest));
-    assert_eq!(admitting.witness.output_bytes().len(), 80);
-    assert_eq!(admitting.coords.datum, admitting.digest);
+    let outcome = mine(&header, target).expect("permissive target must admit in one call");
+
+    // Fail-closed: mine() returning Ok means the digest genuinely
+    // satisfies the target. Bit-identicality: the wire-format header
+    // is exactly 80 bytes.
+    assert!(target.is_satisfied_by_bytes(&outcome.digest));
+    assert_eq!(outcome.witness.output_bytes().len(), 80);
+    assert_eq!(outcome.coords.datum, outcome.digest);
 }

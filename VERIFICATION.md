@@ -42,14 +42,18 @@ module docstring for the per-test rationale.
 |---|---|---|
 | 1 | `v_verb_arena_composes_only_psi_stages_no_sigma_residuals` | Pure-prism commitment: verb body contains only ψ-Terms + Variable/Literal scaffolding |
 | 2 | `v_verb_arena_implements_the_k_invariant_branch` | ψ_1 → ψ_7 → ψ_8 → ψ_9 — the canonical mining transform (architecture §4) |
-| 3 | `v_mine_admitting_outcome_digest_actually_satisfies_target` | Cryptographic re-derivation: `outcome.digest` = SHA-256d(wire-format header) and admits target |
-| 4 | `v_mine_never_returns_admitting_outcome_for_unachievable_target` | Fail-closed: across 256 variations against a strict target, every `Ok` outcome's digest genuinely satisfies |
+| 3 | `v_mine_admits_in_one_call_against_a_permissive_target` | Cryptographic re-derivation: `mine()` is one-shot for permissive targets; `outcome.digest` = SHA-256d(wire-format header) and admits |
+| 4 | `v_mine_outcome_digest_actually_satisfies_target_across_inputs` | Fail-closed across the input space: every `Ok` outcome's digest genuinely satisfies the target |
 | 5 | `v_psi_pipeline_is_pure_function_of_typed_input` | Determinism: 5 repetitions of the same `MiningTask` produce byte-identical κ-labels |
-| 6 | `v_psi_pipeline_is_injective_in_the_resolved_nonce_field` | Distinctness: 64 distinct inputs produce 64 distinct κ-derived nonces (no collisions) |
+| 6 | `v_kappa_label_is_distinct_for_distinct_typed_inputs` | Distinctness: 64 distinct inputs produce 64 distinct κ-labels (collision-free in the wire-format header as a whole) |
 | 7 | `v_kappa_label_is_wire_format_header_byte_for_byte` | Bit-identicality: κ-label = `serialize_header(host_header, resolved_nonce)` byte-for-byte |
 | 8 | `v_kappa_label_preserves_the_host_supplied_prefix` | ψ-pipeline preserves the template prefix; only the nonce field is derived |
-| 9 | `v_psi_pipeline_invariant_across_network_byte_thresholds` | Network-invariance: same model + same layout across regtest/signet/testnet/testnet4/mainnet `bits` values |
+| 9 | `v_model_declarations_invariant_across_network_byte_thresholds` | Network-invariance: same model + same verb arena across regtest/signet/testnet/testnet4/mainnet `bits` values |
 | 10 | `v_compile_unit_fingerprint_identifies_the_typed_iso_path` | TC-03 typed-iso path-singularity: distinct inputs share CompileUnit fingerprint (the path, not the input) |
+| 11 | `v_mining_result_constraints_have_eight_atomic_instances` | Algebraic encoding: 8 atomic `ConstraintRef` instances in `MiningResult::CONSTRAINTS` |
+| 12 | `v_constraint_nerve_has_four_one_simplices_no_higher` | Constraint-nerve geometry: 4 `(Site_i, Carry_i)` 1-simplices, no higher |
+| 13 | `v_constraint_site_supports_lie_in_the_nonce_field` | Constraints' site support ∈ [76, 80) — the nonce-field byte range |
+| 14 | `v_prism_btc_bounds_declare_algebraic_closure_target` | `PrismBtcBounds` declares the algebraic-closure ceilings (compile-time assertion) |
 
 Run: `cargo test --release -p prism-btc --test verification`. All 10 pass.
 

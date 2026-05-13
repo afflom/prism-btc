@@ -280,21 +280,29 @@ foundation-sealed certificate that the typed inference admits; its
 
 ## 6. Bit-identicality and fail-closed contract
 
-**Invariant.** `BitcoinMiningModel::forward(task)` always returns a
+**Invariant.** `BitcoinMiningModel::forward(task)` returns a
 `Grounded<MiningResult>` whose `output_bytes()` are exactly 80 bytes —
 the wire-format Bitcoin header (`prefix(76) ‖ nonce(4 LE)`). The leading
 76 bytes are unchanged from `task.prefix`; the trailing 4 bytes are the
-κ-derived nonce.
+κ-derived nonce. The κ-derivation is the wiki's iterative-resolution
+discipline (`iterative-resolution.md`): the ψ_9 resolver walks the W32
+nonce ring internally until the structural admission relation is
+satisfied — convergence pins the four nonce-byte sites; the resolver
+emits the admitting wire-format header.
 
-**Fail-closed.** The host-boundary `mine(header, target)` entry point
-verifies that the κ-derived header's SHA-256d digest is lexicographically
-≤ `target` and only returns `Ok(MiningOutcome)` when admission holds.
-When the deterministic κ-derivation lands on a non-admitting nonce,
-`mine` returns `Err(MiningFailure::DidNotAdmit)` — the host boundary
-(§7) varies the template-derived `MiningTask` and retries. **Valid
-input either produces a valid mined-block header or surfaces a
-`DidNotAdmit` for the host to handle.** `mine()` never returns a
-`MiningOutcome` whose header does not actually admit.
+**Fail-closed.** When `forward(task)` returns `Ok(grounded)`, the
+κ-derived header *genuinely satisfies* `task.target` — the resolver's
+convergence guarantee is the admission witness. The host-boundary
+`mine(header, target)` entry point translates the typed-iso success
+into a `MiningOutcome` and a host-side SHA-256d sanity-derivation;
+`Err(MiningFailure::PipelineFailure)` corresponds to the ψ_9
+resolver's `InhabitanceImpossibilityWitness` — the W32 ring was
+walked end-to-end without admission, and the host boundary
+(architecture §7) varies the template-derived `MiningTask`
+(extranonce roll → distinct prefix → fresh W32 ring) and retries.
+**Valid input either produces a valid mined-block header or surfaces
+the impossibility witness for the host to handle.** `mine()` never
+returns a `MiningOutcome` whose header does not actually admit.
 
 The bit-identicality guarantee composes from the structural commitments:
 
@@ -342,22 +350,26 @@ lands on an admitting κ-derived header.
    transaction list.
 5. Build a `MiningTask` from `(version, prev_hash, merkle_root,
    timestamp, bits, decoded_target)`.
-6. Call `prism_btc::mine(header, target)`:
+6. Call `prism_btc::mine(header, target)`. The ψ_9 resolver's
+   iterative-resolution loop walks the W32 nonce ring internally
+   until admission lands; `mine()` is one structural inference per
+   `MiningTask` from the host's perspective.
    - `Ok(outcome)` ⇒ assemble the wire-format Block, submit via
      `submitblock`, return summary.
-   - `Err(MiningFailure::DidNotAdmit)` ⇒ increment `extranonce`, goto
-     step 3. The wrapped extranonce (after `~10¹⁹` variations) signals
-     template exhaustion without admission — the chain has typically
-     advanced first, so the caller fetches a new template and retries.
-   - `Err(MiningFailure::PipelineFailure)` ⇒ propagate; the ψ-pipeline
-     rejected the typed input (should not happen for well-formed
-     templates).
+   - `Err(MiningFailure::PipelineFailure)` ⇒ ψ_9 returned the
+     `InhabitanceImpossibilityWitness` (W32 ring walked without
+     admission). Increment `extranonce`, goto step 3. The wrapped
+     extranonce (after `~10¹⁹` variations) signals exhaustion — the
+     chain has typically advanced first, so the caller fetches a
+     new template.
 
-The boundary's loop is the wire-format adaptation; the typed-iso
-surface inside is pure-prism. The ψ-pipeline runs **once per
-`MiningTask` variation**, not per nonce — there is no
-nonce-enumeration anywhere; the resolved nonce is the deterministic
-κ-derived projection of the task's typed bytes.
+The boundary's outer loop is the wire-format adaptation — coinbase
+construction, merkle derivation, RPC plumbing. The inner ψ-pipeline
+inference handles its own iteration per the wiki's iterative-
+resolution discipline (`iterative-resolution.md`); the resolver
+walks the W32 ring with `FreeRank` decreasing per iteration, and
+convergence (FreeRank = 0) is admission. From outside, `forward()`
+is one structural inference per `MiningTask`.
 
 The pure-Rust SHA-256 helpers in `crates/prism-btc/src/ops/sha256.rs`,
 `ops/merkle.rs`, and `ops/header.rs` exist **only** to serialize bytes for

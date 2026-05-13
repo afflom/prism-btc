@@ -108,6 +108,27 @@ const KAPPA_OUTPUT_VIOLATION: ShapeViolation = ShapeViolation {
     kind: ViolationKind::ValueCheck,
 };
 
+/// `InhabitanceImpossibilityWitness` for the κ-derivation —
+/// signalled when the W32 nonce ring is walked end-to-end without the
+/// structural admission relation being satisfied for the host-supplied
+/// `(prefix, target)`. Foundation 0.4.5 carries the canonical
+/// impossibility-witness vocabulary in
+/// [`proof:InhabitanceImpossibilityWitness`](
+/// https://uor.foundation/proof/InhabitanceImpossibilityWitness);
+/// prism-btc surfaces it through the resolver-bound
+/// [`uor_foundation::enforcement::ShapeViolation`] channel until the
+/// substrate exposes the impossibility witness as a first-class
+/// resolver return type.
+const NONCE_FIBER_EXHAUSTED: ShapeViolation = ShapeViolation {
+    shape_iri: "https://prism.btc/resolver/InhabitanceImpossibility",
+    constraint_iri: "https://prism.btc/resolver/InhabitanceImpossibility/nonceFiberExhausted",
+    property_iri: "https://prism.btc/resolver/InhabitanceImpossibility/byteCount",
+    expected_range: "http://www.w3.org/2001/XMLSchema#nonNegativeInteger",
+    min_count: 0,
+    max_count: 0,
+    kind: ViolationKind::ValueCheck,
+};
+
 /// Emit a stage-k carrier into `out`: `[task(108) || stage_tag(8) ||
 /// upstream_padding(24) || H(stage_tag ‖ upstream)(32)]`.
 #[inline]
@@ -295,7 +316,7 @@ impl<H: Hasher> HomotopyGroupResolver<H> for BitcoinHomotopyGroupResolver<H> {
     }
 }
 
-// ─── ψ_9 KInvariants — the terminal label ──────────────────────────────
+// ─── ψ_9 KInvariants — the terminal label, constructive κ-derivation ───
 
 /// ψ_9 `KInvariant` resolver — `HomotopyGroups → KInvariants`.
 ///
@@ -303,18 +324,38 @@ impl<H: Hasher> HomotopyGroupResolver<H> for BitcoinHomotopyGroupResolver<H> {
 /// the original `MiningTask` plus the threaded ψ-chain fingerprint) and
 /// emits exactly 80 bytes — the wire-format Bitcoin header.
 ///
-/// The 76 leading bytes are `MiningTask.prefix`
-/// (`version‖prev_hash‖merkle_root‖timestamp‖bits` — the host-supplied
-/// template). The 4 trailing bytes are the κ-derived nonce: the
-/// leading 4 bytes of `H(MiningTask ‖ stage_fingerprint)` under the
-/// canonical hash axis, in canonical little-endian order matching
-/// Bitcoin's `Nonce` field layout.
+/// **Constructive κ-derivation per the wiki's iterative-resolution
+/// discipline.** The framework's
+/// [`iterative-resolution.md`](https://github.com/UOR-Foundation/UOR-Framework/blob/main/docs/content/concepts/iterative-resolution.md)
+/// specifies that a resolver "iteratively pins sites with `FreeRank`
+/// decreasing per iteration; the process converges when all sites are
+/// pinned." For prism-btc's `MiningResult`, the four nonce-byte sites
+/// (positions 76..80) carry initial `FreeRank = 1` (the value at each
+/// site is free); the constraint set's structural admission relation
+/// (architecture §2.3) demands that the σ-projection of the assembled
+/// header is lex-≤ `target`. The resolver walks the W32 nonce ring
+/// (`witt_domain::W32`, `CYCLE_SIZE = 2^32`) — each iteration evaluates
+/// one candidate, the candidate's σ-projection is computed via the
+/// canonical hash axis (`H: Hasher`), and the structural admission
+/// relation is checked. Convergence is the first nonce whose digest
+/// satisfies the relation; the resolver pins the four sites to the
+/// admitting nonce's bytes and emits the wire-format header.
 ///
-/// The nonce derivation is a single content-addressed projection — one
-/// `H::initial().fold_bytes(...).finalize()` invocation. No enumeration,
-/// no admission check, no search. The κ-label IS the wire-format
-/// header by construction; whether the wire-format header satisfies the
-/// template's target is a property of the typed input.
+/// On W32 ring exhaustion without admission, the resolver returns
+/// [`NONCE_FIBER_EXHAUSTED`] — the canonical
+/// `proof:InhabitanceImpossibilityWitness` for this constraint
+/// geometry (the framework's residual-fragment pattern per
+/// `inhabitance-verdict.md`). The host boundary varies the template
+/// (extranonce roll → distinct `MiningTask`) and retries.
+///
+/// **Architectural commitment.** The walk lives inside the resolver
+/// body — per the wiki, this IS the iterative-resolution discipline.
+/// The verb body composes only ψ-Term variants
+/// (`Term::Nerve / PostnikovTower / HomotopyGroups / KInvariants`); no
+/// σ-enumeration leaks into the typed-iso surface. From outside,
+/// `forward()` is one structural inference per `MiningTask`; the
+/// resolver chain's internal iteration is the structural transform
+/// the framework names.
 #[derive(Debug)]
 pub struct BitcoinKInvariantResolver<H>(PhantomData<H>);
 
@@ -329,30 +370,68 @@ impl<H: Hasher> KInvariantResolver<H> for BitcoinKInvariantResolver<H> {
         if out.len() < WIRE_FORMAT_HEADER_BYTES {
             return Err(KAPPA_OUTPUT_VIOLATION);
         }
-        let (task, upstream_fp) = decode_stage_carrier(input.as_bytes())?;
+        let (task, _upstream_fp) = decode_stage_carrier(input.as_bytes())?;
 
         // Layout: task bytes[0..76] = prefix; bytes[76..108] = target.
         let prefix = &task[..76];
+        let target = &task[76..108];
 
-        // κ-derived nonce: content-addressed projection of
-        // (MiningTask || upstream_fingerprint).
-        let mut hasher = H::initial();
-        hasher = hasher.fold_bytes(task);
-        hasher = hasher.fold_bytes(upstream_fp);
-        let kappa_digest = hasher.finalize();
-        let nonce_bytes: [u8; 4] = [
-            kappa_digest[0],
-            kappa_digest[1],
-            kappa_digest[2],
-            kappa_digest[3],
-        ];
+        // Assemble the candidate header in place; the nonce-field
+        // bytes [76..80) are pinned per iteration.
+        let mut header = [0u8; WIRE_FORMAT_HEADER_BYTES];
+        header[..76].copy_from_slice(prefix);
 
-        // Emit the 80-byte wire-format header: prefix || nonce (LE).
-        out[..76].copy_from_slice(prefix);
-        out[76..80].copy_from_slice(&nonce_bytes);
+        // Iterative-resolution loop over `witt_domain::W32`. Each
+        // iteration evaluates the structural admission relation
+        // `H(header) ≤ target` (lex on 32-byte display-order bytes);
+        // convergence is the first satisfying nonce.
+        let mut nonce: u32 = 0;
+        loop {
+            header[76..80].copy_from_slice(&nonce.to_le_bytes());
 
-        Ok(WIRE_FORMAT_HEADER_BYTES)
+            // σ-projection of the assembled header via the canonical
+            // hash axis — `H::initial().fold_bytes(...).finalize()`
+            // returns SHA-256d in internal byte order (Sha256dHasher's
+            // body double-hashes). Bitcoin's admission rule compares
+            // in display order (internal-reversed).
+            let digest_internal = H::initial().fold_bytes(&header).finalize();
+            let mut digest_display = [0u8; 32];
+            let copy_len = digest_internal.len().min(32);
+            digest_display[..copy_len].copy_from_slice(&digest_internal[..copy_len]);
+            digest_display.reverse();
+
+            // Lex comparison: digest_display ≤ target (both BE).
+            if lex_le(&digest_display, target) {
+                out[..WIRE_FORMAT_HEADER_BYTES].copy_from_slice(&header);
+                return Ok(WIRE_FORMAT_HEADER_BYTES);
+            }
+
+            if nonce == u32::MAX {
+                // W32 ring walked end-to-end; the constraint geometry
+                // is uninhabited for this `(prefix, target)` pair.
+                return Err(NONCE_FIBER_EXHAUSTED);
+            }
+            nonce += 1;
+        }
     }
+}
+
+/// Lex-≤ over two 32-byte big-endian byte sequences (Bitcoin display
+/// order). Returns `true` iff `lhs` is lexicographically ≤ `rhs`.
+#[inline]
+fn lex_le(lhs: &[u8; 32], rhs: &[u8]) -> bool {
+    let mut i = 0;
+    while i < 32 && i < rhs.len() {
+        if lhs[i] < rhs[i] {
+            return true;
+        }
+        if lhs[i] > rhs[i] {
+            return false;
+        }
+        i += 1;
+    }
+    // Equal up to min length.
+    lhs.len() <= rhs.len()
 }
 
 // ─── Default impls + ResolverTuple ─────────────────────────────────────
