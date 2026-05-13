@@ -3,12 +3,14 @@
 //! Each invocation evaluates the `mining_inference` verb (wiki
 //! ADR-024) — the ψ-pipeline's k-invariant branch
 //! (ψ_1 → ψ_7 → ψ_8 → ψ_9) — over a `(template prefix, target)` pair
-//! via foundation's catamorphism. On admission, ψ_9's
-//! iterative-resolution loop pins the four nonce-byte sites and emits
-//! the wire-format Bitcoin header; `BitcoinMiningModel::forward`
-//! returns the foundation-sealed `Grounded<MiningResult, MiningTag>`
-//! whose `output_bytes` are the 80-byte wire-format header. This
-//! binary assembles the wire-format block from that header + the
+//! via foundation's catamorphism. ψ_9 performs the structural
+//! κ-derivation (one σ-projection over the threaded `MiningTask`),
+//! pins the four nonce-byte sites to the leading bytes of the
+//! content-address, and emits an 80-byte wire-format header. The
+//! host boundary (`prism_btc::mine`) checks the admission relation
+//! `σ(header) ≤ target` on the returned κ-label and varies the
+//! template (rolling extranonce) until admission lands; this binary
+//! then assembles the wire-format block from that header + the
 //! template's transactions and submits via `submitblock`.
 
 use anyhow::{bail, Context, Result};

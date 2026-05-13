@@ -14,10 +14,11 @@
 //!
 //! Verifies the full pipeline: get template → mine via prism-btc
 //! (foundation's catamorphism evaluates the `mining_inference` verb's
-//! ψ-chain term arena, ψ_1 → ψ_7 → ψ_8 → ψ_9; ψ_9's
-//! iterative-resolution loop lands the admitting wire-format header)
-//! → assemble block → submit → chain height advances → block we
-//! minted appears at the new tip.
+//! ψ-chain term arena, ψ_1 → ψ_7 → ψ_8 → ψ_9; ψ_9's structural
+//! κ-derivation produces one wire-format candidate per template, and
+//! the host loop rolls extranonces until one admits) → assemble block
+//! → submit → chain height advances → block we minted appears at the
+//! new tip.
 
 use bitcoin::hashes::Hash;
 use bitcoin::Network;

@@ -12,7 +12,7 @@ artifact in the repo.
 ## §1 Architectural conformance — `cargo test --release`
 
 The verb arena, model declarations, and substrate-bindings carry
-compile-time invariants the test surface re-asserts at runtime. 30
+compile-time invariants the test surface re-asserts at runtime. 44
 unit tests across the prism-btc crate's modules:
 
 - **`crates/prism-btc/src/verbs.rs::tests`** (6 tests) — the verb
@@ -40,14 +40,26 @@ unit tests across the prism-btc crate's modules:
   `Sha256dHasher` streaming-vs-one-shot equivalence and FIPS-180-4
   vector matching.
 
-- **`crates/prism-btc/src/domain.rs::tests`** (4 tests) —
+- **`crates/prism-btc/src/domain.rs::tests`** (13 tests) —
   `Bits ↔ Target` round-trip, `Target::is_satisfied_by_bytes`
-  monotonicity, `TriadicCoords` projection.
+  monotonicity, `TriadicCoords` projection; UOR manifold
+  observables: `ultrametric_valuation` semantics (low/high bit
+  positions, equal-address case), `walsh_hadamard_parity_at`
+  (all-ones = spectrum, disjoint mask = zero), `p_adic_valuation`
+  for primes 2, 3, 5 plus the zero-digest u128-cap edge case.
 
 - **`crates/prism-btc/src/ops/*::tests`** (9 tests) — pure-Rust
   SHA-256 / SHA-256d against FIPS-180-4 vectors; merkle reduction
   against rust-bitcoin reference; canonical 80-byte header
   serialization round-trip.
+
+- **`crates/prism-btc/src/pipeline.rs::tests`** (5 tests) — the
+  UOR-optimal mining surface (architecture §14): empty commitment
+  agrees with bare `mine()`; `ParityCommitment` reads single-bit
+  values correctly; `MiningCommitment::bandwidth` counts predicates;
+  Conjunction'd evaluation is the AND of per-predicate evaluations;
+  `mine_with_commitment` admits at a permissive target with the
+  empty commitment.
 
 The [`crate::diagnostics`](crates/prism-btc/src/diagnostics.rs)
 module exposes ψ_9's structural κ-derivation state

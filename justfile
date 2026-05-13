@@ -151,12 +151,11 @@ testnet4-status:
 # branch ψ_1 → ψ_7 → ψ_8 → ψ_9), same `BitcoinResolverTuple`. The
 # network-dependent value is the runtime byte threshold decoded from
 # `getblocktemplate.bits` and carried in `MiningTask.target`. Each
-# call to `mine()` is one structural inference per `MiningTask`; the
-# ψ_9 resolver's iterative-resolution loop (wiki
-# `iterative-resolution.md`) walks the W32 nonce ring internally and
-# pins the four nonce-byte sites on admission. On W32 exhaustion
-# without admission (`InhabitanceImpossibilityWitness`), the
-# bitcoind boundary rolls the extranonce and re-invokes.
+# call to `mine()` is one structural inference per `MiningTask`:
+# ψ_9 deterministically κ-derives a wire-format header candidate
+# from the typed input (one σ-projection, no enumeration); the host
+# boundary checks σ(header) ≤ target. On `DidNotAdmit`, the bitcoind
+# boundary rolls the extranonce and re-invokes.
 testnet4-mine BLOCKS="1" DURATION_SEC="300":
     #!/usr/bin/env bash
     set -euo pipefail

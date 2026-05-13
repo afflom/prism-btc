@@ -24,6 +24,12 @@
 //! - [`ResolutionState`] / [`take_resolution_state`] — diagnostic
 //!   surface for ψ_9's structural κ-derivation
 //!   ([`diagnostics`] module).
+//! - [`mine_with_commitment`] / [`MiningCommitment`] /
+//!   [`ParityCommitment`] — UOR-optimal mining: typed Conjunction
+//!   commitment on the κ-label (architecture §14).
+//! - [`ultrametric_valuation`] / [`walsh_hadamard_parity_at`] /
+//!   [`p_adic_valuation`] — UOR observable surface on the content-
+//!   addressed manifold (ANALYSIS.md §1.3).
 //!
 //! [`ARCHITECTURE.md`]: https://github.com/afflom/prism-btc/blob/main/ARCHITECTURE.md
 

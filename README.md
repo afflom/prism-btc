@@ -152,9 +152,11 @@ instances — one per wire-format-header byte. The constraint nerve has
 k ≥ 1, χ = 80 = SITE_COUNT — the UOR Index Theorem IT_7d
 algebraic-closure criterion is satisfied at the declaration level
 (architecture §2.3). Sites 0..76 are template-pinned (host-supplied
-prefix bytes); sites 76..80 are κ-pinned (ψ_9 resolver's W32 walk
-materializes the admitting nonce bytes). Both mechanisms terminate at
-the same fixed point: 80 sites pinned ⇒ `FreeRank = 0` ⇒ convergence.
+prefix bytes); sites 76..80 are κ-pinned (ψ_9 resolver's structural
+κ-derivation via the canonical hash axis fixes the four nonce bytes
+to the leading bytes of `H(MiningTask)`). Both mechanisms terminate
+at the same fixed point: 80 sites pinned ⇒ `FreeRank = 0` ⇒
+convergence at the terminal ψ-stage.
 
 ## Diagnostic surface
 
