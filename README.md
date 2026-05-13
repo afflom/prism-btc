@@ -201,13 +201,17 @@ end-to-end. `just vv` reproduces it.
 
 ## Analyses
 
-[ANALYSIS.md](ANALYSIS.md) — does the UOR triadic coordinate
-decomposition expose any non-uniform-random structure in SHA-256d
-that could be exploited for Bitcoin-style mining? Theoretical
-derivation + 10⁷-sample empirical verification. (Short answer: no —
-`(stratum, spectrum)` is admission-orthogonal both under the
-random-oracle model and empirically.) Reproducible via
-`cargo run --release --example triadic_uniformity_analysis`.
+[ANALYSIS.md](ANALYSIS.md) — **UOR-specific cryptanalysis of
+SHA-256d on the prism-btc semantic manifold**. Frames UOR as an
+ultrametric framework and Prism as a causal-semantic transport
+field on a content-addressed manifold, then tests five families of
+UOR-structural observables (triadic coordinates, ultrametric
+avalanche, Walsh–Hadamard spectrum at 32 non-trivial frequencies,
+stratum autocorrelation, κ-derivation autocorrelation) for
+exploitable non-uniform-random structure. Empirical results at 10⁷
+samples per test: every observable passes its α=0.001 test;
+nothing exposes admission-relevant structure. Reproducible via
+`cargo run --release --example uor_cryptanalysis`.
 
 ## Real-network mining (`prism-btc-node`)
 

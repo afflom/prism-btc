@@ -155,6 +155,47 @@ pub struct TriadicCoords {
     pub spectrum: u32,
 }
 
+/// 2-adic ultrametric valuation on 256-bit content-addresses.
+///
+/// Returns the number of trailing zero bits in `a XOR b` viewed as a
+/// 256-bit big-endian integer; equivalently, the 2-adic valuation of
+/// the XOR-difference. Returns 256 iff `a == b`.
+///
+/// The induced ultrametric on the address space is
+/// `d(a, b) = 2^-{ultrametric_valuation(a, b)}`. Two digests with
+/// `ultrametric_valuation(a, b) ≥ k` share the lowest `k+1` bits (in
+/// 256-bit BE order); the equivalence classes for each `k` are the
+/// ultrametric balls of radius `2^-k`. This is the canonical
+/// distance the UOR addressing space inherits — see [ANALYSIS.md]
+/// for the cryptanalysis of its uniformity under SHA-256d.
+///
+/// [ANALYSIS.md]: https://github.com/afflom/prism-btc/blob/main/ANALYSIS.md
+#[must_use]
+pub fn ultrametric_valuation(a: &[u8; 32], b: &[u8; 32]) -> u32 {
+    let mut xor = [0u8; 32];
+    for i in 0..32 {
+        xor[i] = a[i] ^ b[i];
+    }
+    TriadicCoords::from_hash(&xor).stratum
+}
+
+/// Walsh–Hadamard parity at the bit-mask frequency `omega`.
+///
+/// Computes `popcount(d AND omega) mod 2` — the inner product of `d`
+/// and `omega` over GF(2). When `omega` is the all-ones mask this
+/// reduces to [`TriadicCoords::spectrum`]; for other `omega` it is
+/// the spectral observable at the corresponding non-trivial
+/// frequency. The full Walsh–Hadamard image of the 256-bit address
+/// space is `2^256` entries; this function reads one entry on demand.
+#[must_use]
+pub fn walsh_hadamard_parity_at(d: &[u8; 32], omega: &[u8; 32]) -> u32 {
+    let mut p: u32 = 0;
+    for i in 0..32 {
+        p += (d[i] & omega[i]).count_ones();
+    }
+    p & 1
+}
+
 impl TriadicCoords {
     /// Project a 32-byte block-hash digest (display order) to its
     /// `(stratum, spectrum)` content observables.
@@ -221,5 +262,60 @@ mod tests {
         let coords = TriadicCoords::from_hash(&h);
         assert_eq!(coords.stratum, 0);
         assert_eq!(coords.spectrum, 1);
+    }
+
+    #[test]
+    fn ultrametric_valuation_zero_on_equal_addresses() {
+        let a = [0xa5u8; 32];
+        // ultrametric_valuation(a, a) = stratum(a XOR a) = stratum(0) = 256.
+        assert_eq!(ultrametric_valuation(&a, &a), 256);
+    }
+
+    #[test]
+    fn ultrametric_valuation_low_bit_differs() {
+        let mut a = [0u8; 32];
+        let mut b = [0u8; 32];
+        // Differ in the lowest bit (bit 0 of byte 31).
+        a[31] = 0x00;
+        b[31] = 0x01;
+        // XOR has lowest set bit at position 0 ⇒ valuation = 0.
+        assert_eq!(ultrametric_valuation(&a, &b), 0);
+    }
+
+    #[test]
+    fn ultrametric_valuation_high_bit_differs() {
+        let mut a = [0u8; 32];
+        let mut b = [0u8; 32];
+        // Differ in the highest bit (bit 7 of byte 0 = bit 255 of the
+        // 256-bit BE integer). XOR has only bit 255 set ⇒ lowest set
+        // bit is at position 255 ⇒ valuation = 255.
+        a[0] = 0x00;
+        b[0] = 0x80;
+        assert_eq!(ultrametric_valuation(&a, &b), 255);
+    }
+
+    #[test]
+    fn walsh_hadamard_at_all_ones_matches_spectrum() {
+        // At ω = all-ones, walsh_hadamard_parity_at(d, ω) coincides
+        // with TriadicCoords::spectrum(d).
+        let mut d = [0u8; 32];
+        d[0] = 0xa5; // popcount = 4 (even) → spectrum = 0
+        d[15] = 0x07; // popcount = 3 (odd)
+                      // Total popcount = 4 + 3 = 7 → parity 1.
+        let omega = [0xffu8; 32];
+        let p = walsh_hadamard_parity_at(&d, &omega);
+        let s = TriadicCoords::from_hash(&d).spectrum;
+        assert_eq!(p, s);
+        assert_eq!(p, 1);
+    }
+
+    #[test]
+    fn walsh_hadamard_at_disjoint_mask_is_zero() {
+        let mut d = [0u8; 32];
+        d[0] = 0xff;
+        let mut omega = [0u8; 32];
+        omega[31] = 0xff;
+        // d AND omega is all zero ⇒ parity = 0.
+        assert_eq!(walsh_hadamard_parity_at(&d, &omega), 0);
     }
 }

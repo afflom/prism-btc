@@ -29,6 +29,58 @@
 
 ## 1. The Prism conceptual model applied to Bitcoin
 
+### 1.0 Framing: ultrametric framework, causal-semantic transport
+
+UOR provides an **ultrametric framework**: the canonical addressing
+space is the set of 256-bit content-addresses produced by the σ-
+projection (the canonical hash axis), equipped with the 2-adic
+ultrametric `d(a, b) = 2^-{ν(a XOR b)}` where ν is the 2-adic
+valuation of the XOR-difference. The address space stratifies into
+nested ultrametric balls indexed by ν; the balls partition `2^256`
+addresses into a hierarchy that the UOR observables read.
+
+Prism generalizes UOR's addressing, latent embeddings, and
+ultrametric hierarchies into a single **causal-semantic transport
+field on a content-addressed semantic manifold**:
+
+- **Content-addressed semantic manifold** — the space of typed
+  objects, with addresses given by the σ-projection. For prism-btc,
+  this is the space of typed `MiningTask` / intermediate ψ-stage /
+  `MiningResult` instances, each carrying its own σ-projection
+  identity.
+- **Latent embeddings** — each typed object embeds into the
+  manifold via foundation's `IntoBindingValue` projection plus the
+  canonical hash axis. The triadic coordinates
+  [`crate::TriadicCoords`](crates/prism-btc/src/domain.rs)
+  (`{datum, stratum, spectrum}`) read structural observables at
+  the embedding point.
+- **Ultrametric hierarchy** — `stratum` is the 2-adic valuation
+  observable; the 256-bit address space stratifies by `stratum`
+  into ultrametric balls. The helpers
+  [`crate::ultrametric_valuation`](crates/prism-btc/src/domain.rs)
+  and [`crate::walsh_hadamard_parity_at`](crates/prism-btc/src/domain.rs)
+  expose the ultrametric distance and the Walsh–Hadamard spectral
+  observable at arbitrary bit-mask frequencies.
+- **Causal-semantic transport field** — the ψ-pipeline is a
+  directed field of structure-preserving morphisms over the
+  manifold: ψ_k+1 ∘ ψ_k transports an embedded object from one
+  ψ-stage's typed-coordinate carrier to the next, in causal
+  order (ψ_1 → ψ_7 → ψ_8 → ψ_9 on the mining-transform path).
+  Each ψ-stage is "semantic" — it preserves the typed structural
+  invariants the downstream stage expects — and "causal" — the
+  ψ-DAG is acyclic, transport flows in one direction.
+
+[`ANALYSIS.md`](ANALYSIS.md) extends this framing into a broader
+**UOR-specific cryptanalysis**: does any of the UOR-named structural
+observability on the manifold (triadic, ultrametric, Walsh–Hadamard,
+avalanche, autocorrelation, κ-derivation autocorrelation) expose
+non-uniform-random structure in SHA-256d that could be exploited for
+Bitcoin-style mining? The empirical answer, at 10⁷ samples per test,
+is uniformly no — the σ-projection is hardened against the
+cryptanalysis the framework can pose.
+
+### 1.1 Vocabulary
+
 prism declares the universal vocabulary for typed structural inference:
 
 - **Typed primitives** — `ConstrainedTypeShape` instances. Each is a finite
