@@ -22,7 +22,7 @@
 //!   primitive).
 //! - [`PrismBtcBounds`] — the `HostBounds` profile (`WITT_LEVEL_MAX_BITS = 32`).
 //! - [`ResolutionState`] / [`take_resolution_state`] — diagnostic
-//!   surface for the ψ_9 iterative-resolution loop
+//!   surface for ψ_9's structural κ-derivation
 //!   ([`diagnostics`] module).
 //!
 //! [`ARCHITECTURE.md`]: https://github.com/afflom/prism-btc/blob/main/ARCHITECTURE.md
@@ -42,7 +42,7 @@ pub mod shapes;
 pub mod verbs;
 
 // Public façade — typed surface.
-pub use diagnostics::{take_resolution_state, ResolutionState, ResolutionVerdict};
+pub use diagnostics::{take_resolution_state, ResolutionState};
 pub use domain::{
     Bits, BlockHash, BlockHeader, MerkleRoot, MiningTag, MiningWitness, Target, Timestamp,
     TriadicCoords, Version,

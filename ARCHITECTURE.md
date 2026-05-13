@@ -130,10 +130,12 @@ The 80 sites partition into two pinning mechanisms:
 | Sites | Mechanism | Source |
 |---|---|---|
 | `0..76` | template-pinned | host-supplied template bytes (`Version‖PrevHash‖MerkleRoot‖Timestamp‖Bits`) carried through `MiningTask::prefix` |
-| `76..80` | κ-pinned | ψ_9 resolver's iterative-resolution loop walks the W32 ring and pins the four nonce bytes to the admitting nonce's bytes (architecture §4 + §6) |
+| `76..80` | κ-pinned | ψ_9 resolver's structural κ-derivation projects the typed `MiningTask` via the canonical hash axis and pins the four nonce bytes simultaneously to the derivation's leading 4 bytes (architecture §4) |
 
 Both mechanisms terminate at the same fixed point: 80 sites pinned ⇒
-`FreeRank = 0` ⇒ convergence ⇒ admission witness.
+`FreeRank = 0` ⇒ convergence at the terminal ψ-stage. Whether the
+resulting κ-label admits at the host boundary (`σ(header) ≤ target`)
+is a separate question, enforced by [`crate::pipeline::mine`].
 
 The encoding is pinned by V&V tests in
 [`crates/prism-btc/tests/verification.rs`](crates/prism-btc/tests/verification.rs):
@@ -243,40 +245,39 @@ emits the ψ_1 carrier. Pairwise-disjoint site supports ⇒ no
 1-simplices ⇒ `highest_dim = 0`. The nerve is built from declared
 data, not threaded from a hash chain.
 
-**ψ_9 KInvariant — the terminal label, iterative-resolution.**
+**ψ_9 KInvariant — the terminal label, structural κ-derivation.**
 Consumes the ψ_8 HomotopyGroups carrier and emits exactly **80 bytes
-— the wire-format Bitcoin header**. k-invariants `κ_n ∈
-H^{n+2}(π_1; π_{n+1})` classify the Postnikov tower's
+— the wire-format Bitcoin header**. k-invariants
+`κ_n ∈ H^{n+2}(π_1; π_{n+1})` classify the Postnikov tower's
 twisted-fibration data; for the 80-isolated-vertices case
 (`π_0 = 80-set`, `π_k = 0` for k ≥ 1) the k-invariant signature
-itself is trivial (no obstruction classes). The load-bearing
-computation is the framework's iterative-resolution discipline
-(`iterative-resolution.md`): ψ_9 validates the upstream carrier
-(80 π_0 generators, no higher homotopy), extracts the prefix
-(76 bytes) and target (32 bytes) from the threaded `MiningTask`
-data, and walks the W32 nonce ring (`witt_domain::W32`,
-`CYCLE_SIZE = 2^32`). Each iteration evaluates one candidate against
-the structural admission relation `H(header) ≤ target` via the
-canonical hash axis; the resolver short-circuits on the first
-satisfying nonce. Convergence pins the four nonce-byte sites
-(positions 76..80) simultaneously — `FreeRank` over `MiningResult`
-drops from 4 (sites 76..80 free) to 0 (all 80 sites pinned) — and
-the resolver emits the admitting wire-format header. W32 ring
-exhaustion without admission surfaces the canonical
-`proof:InhabitanceImpossibilityWitness`. **From outside, `forward()`
-is one structural inference per `MiningTask`** — the resolver's
-internal iteration IS the iterative-resolution discipline the
-framework names.
+itself is trivial (no obstruction classes). The terminal ψ-stage's
+load-bearing computation is the **structural κ-derivation**: the
+canonical hash axis projects the typed `MiningTask` to a 32-byte
+content-address; the leading four bytes — in canonical Bitcoin
+little-endian — are the κ-nonce that pins the four free nonce-byte
+sites (positions 76..80) simultaneously. **One σ-projection per
+`forward()`** — deterministic in the typed input, no enumeration,
+no search. The wiki's iterative-resolution discipline converges
+here: `FreeRank` over `MiningResult` drops from 4 (the four free
+nonce-byte sites) to 0 (all 80 sites pinned) in this single ψ-
+stage. ψ_9 always succeeds for well-formed `MiningTask` inputs.
 
-**Diagnostic surface.** The wiki's iterative-resolution discipline
-names two per-resolver observables — `FreeRank` (the count of
-unpinned sites at resolver exit) and `iterations` (the number of
-candidates evaluated) — plus the terminal verdict
-(`Converged { admitting_nonce }` or `Exhausted`). prism-btc exposes
-all three via [`crate::diagnostics::ResolutionState`]; ψ_9 records
-the state on both return paths, and the host reads it via
-[`crate::pipeline::MiningOutcome::resolution`] on the `Ok` path
-or [`crate::diagnostics::take_resolution_state`] on the `Err` path.
+The admission relation `σ(header) ≤ target` is **not enforced
+inside the ψ-pipeline**; it is the host boundary's responsibility
+(architecture §6 + §7). [`crate::pipeline::mine`] recomputes the
+σ-projection on the emitted wire-format header and returns
+`Ok(MiningOutcome)` when admission holds or
+`Err(MiningFailure::DidNotAdmit)` when it does not. The host
+boundary varies the template-derived `MiningTask` (extranonce roll
+→ distinct prefix → distinct κ-derivation) until a κ-candidate
+admits.
+
+**Diagnostic surface.** ψ_9 records a [`ResolutionState`] for every
+`forward()` call: `free_rank` (always 0 — convergence) plus
+`derived_nonce` (the κ-derivation). The host reads it via
+[`crate::pipeline::MiningOutcome::resolution`] on the `Ok` path or
+[`crate::diagnostics::take_resolution_state`] on the `Err` path.
 The channel is thread-local; concurrent miners on separate threads
 are independent.
 
@@ -312,25 +313,28 @@ foundation-sealed certificate that the typed inference admits; its
 
 ## 6. Bit-identicality and fail-closed contract
 
-**Invariant.** `BitcoinMiningModel::forward(task)` returns a
+**Bit-identicality.** `BitcoinMiningModel::forward(task)` returns a
 `Grounded<MiningResult>` whose `output_bytes()` are exactly 80 bytes —
-the wire-format Bitcoin header (`prefix(76) ‖ nonce(4 LE)`). The leading
-76 bytes are unchanged from `task.prefix`; the trailing 4 bytes are the
-κ-derived nonce.
+the wire-format Bitcoin header (`prefix(76) ‖ nonce(4 LE)`). The
+leading 76 bytes are unchanged from `task.prefix`; the trailing 4
+bytes are ψ_9's κ-derivation. `forward()` always succeeds for well-
+formed inputs — the ψ-pipeline is total over the typed input
+surface.
 
-**Fail-closed.** When `forward(task)` returns `Ok(grounded)`, the
-κ-derived header *genuinely satisfies* `task.target` — the resolver's
-convergence guarantee is the admission witness. The host-boundary
-`mine(header, target)` entry point translates the typed-iso success
-into a `MiningOutcome` and a host-side SHA-256d sanity-derivation;
-`Err(MiningFailure::PipelineFailure)` corresponds to the ψ_9
-resolver's `InhabitanceImpossibilityWitness` — the W32 ring was
-walked end-to-end without admission, and the host boundary
-(architecture §7) varies the template-derived `MiningTask`
-(extranonce roll → distinct prefix → fresh W32 ring) and retries.
-**Valid input either produces a valid mined-block header or surfaces
-the impossibility witness for the host to handle.** `mine()` never
-returns a `MiningOutcome` whose header does not actually admit.
+**Fail-closed admission, enforced at the host boundary.** The host
+entry point `mine(header, target)` recomputes the σ-projection on
+the κ-derived wire-format header and checks `σ(header) ≤ target`.
+It returns:
+
+- `Ok(MiningOutcome)` — admission holds; the wire-format header is
+  a valid mined block.
+- `Err(MiningFailure::DidNotAdmit)` — the κ-candidate's σ-projection
+  did not satisfy `target`. The host (architecture §7) varies the
+  template-derived `MiningTask` (extranonce roll → distinct prefix
+  → distinct κ-derivation) and retries.
+
+**`mine()` never returns a `MiningOutcome` whose header does not
+admit** — the boundary check is the fail-closed gate.
 
 The bit-identicality guarantee composes from the structural commitments:
 
@@ -342,70 +346,71 @@ The bit-identicality guarantee composes from the structural commitments:
    closure) in wire-format terms.
 3. The label's bytes are produced by the ψ-pipeline's parametric
    transformations operating on the typed feature hierarchy — the
-   structural witness's `IntoBindingValue::into_binding_bytes` projection
-   *is* the wire-format Header (and, at the host boundary, the wire-format
-   Block).
+   structural witness's `IntoBindingValue::into_binding_bytes`
+   projection *is* the wire-format Header (and, at the host boundary,
+   the wire-format Block).
 4. The boundary's submitblock assembly (§7) is byte-for-byte the same
-   serialization a traditional miner uses.
+   serialization Bitcoin Core itself uses.
 
 **Network-invariant.** The mining inference is identical across
 regtest, signet, testnet, testnet4, and mainnet: same
 `BitcoinMiningModel`, same ψ-pipeline verb body, same
-`BitcoinResolverTuple`. The network-dependent value is the runtime
-byte threshold encoded in the template's `Bits` field. For permissive
-regtest targets, the κ-derived header typically admits on the first
-template variation; for restrictive mainnet targets, the host boundary
-iterates extranonces (each producing a distinct `MiningTask` → distinct
-κ-derived header) until admission lands. In every regime, a returned
-`MiningOutcome`'s wire-format header genuinely satisfies the target —
-no compromises, no invalid output.
+`BitcoinResolverTuple`, same κ-derivation. The network-dependent
+value is the byte threshold encoded in the template's `Bits` field;
+that threshold is carried into the typed `MiningTask` and threaded
+to ψ_9, but ψ_9 does not consult it (the κ-derivation is over the
+threaded task content as a whole). For each `MiningTask`, `mine()`
+produces one structural candidate; whether it admits is the
+boundary's check. Across networks the **per-`forward()` cost is
+constant**; the network-dependent quantity is the number of
+template variations the host has to attempt, not the cost per
+attempt.
 
 ## 7. Host boundary
 
-`crates/prism-btc-node/` is the bitcoind boundary. It is **not** part of
-the transform; it adapts between prism's typed-iso surface and Bitcoin
-Core's JSON-RPC surface, and it owns the **template-variation loop**
-that iterates `MiningTask` inputs until the deterministic ψ-pipeline
-lands on an admitting κ-derived header.
+`crates/prism-btc-node/` is the bitcoind boundary. It is **not** part
+of the typed-iso transform; it adapts between prism's typed-iso
+surface and Bitcoin Core's JSON-RPC surface, owns the **template-
+variation loop** that iterates `MiningTask` inputs across distinct
+κ-derivations, and enforces the admission relation
+`σ(header) ≤ target` that gates `MiningOutcome`.
 
 `PrismMiner::mine_one_block`'s loop:
 
 1. Call `getblocktemplate` once per block attempt.
 2. Initialize `extranonce = 0`.
-3. Compose the coinbase transaction with the user's payout address and
-   the current extranonce (which lands in the coinbase's `scriptSig`).
-4. Derive the `MerkleRoot` from the modified coinbase + the template's
-   transaction list.
+3. Compose the coinbase transaction with the user's payout address
+   and the current extranonce (which lands in the coinbase's
+   `scriptSig`).
+4. Derive the `MerkleRoot` from the modified coinbase + the
+   template's transaction list.
 5. Build a `MiningTask` from `(version, prev_hash, merkle_root,
    timestamp, bits, decoded_target)`.
-6. Call `prism_btc::mine(header, target)`. The ψ_9 resolver's
-   iterative-resolution loop walks the W32 nonce ring internally
-   until admission lands; `mine()` is one structural inference per
-   `MiningTask` from the host's perspective.
+6. Call `prism_btc::mine(header, target)`. One structural inference:
+   ψ_9 κ-derives a candidate; the boundary admission check decides.
    - `Ok(outcome)` ⇒ assemble the wire-format Block, submit via
      `submitblock`, return summary.
-   - `Err(MiningFailure::PipelineFailure)` ⇒ ψ_9 returned the
-     `InhabitanceImpossibilityWitness` (W32 ring walked without
-     admission). Increment `extranonce`, goto step 3. The wrapped
-     extranonce (after `~10¹⁹` variations) signals exhaustion — the
-     chain has typically advanced first, so the caller fetches a
-     new template.
+   - `Err(MiningFailure::DidNotAdmit)` ⇒ the κ-derivation for this
+     `(prefix, target)` did not satisfy `target`. Increment
+     `extranonce`, goto step 3. The wrapped extranonce (after
+     `~10¹⁹` variations) signals exhaustion — the chain has
+     typically advanced first, so the caller fetches a new template.
 
 The boundary's outer loop is the wire-format adaptation — coinbase
-construction, merkle derivation, RPC plumbing. The inner ψ-pipeline
-inference handles its own iteration per the wiki's iterative-
-resolution discipline (`iterative-resolution.md`); the resolver
-walks the W32 ring with `FreeRank` decreasing per iteration, and
-convergence (FreeRank = 0) is admission. From outside, `forward()`
-is one structural inference per `MiningTask`.
+construction, merkle derivation, RPC plumbing — plus the per-
+template admission gate. From `forward()`'s perspective every call
+is one structural inference at constant cost; the boundary loop is
+where target-restrictiveness shows up as more template variations
+(more `MiningTask`s tried), never as more work per `forward()`.
 
 The pure-Rust SHA-256 helpers in `crates/prism-btc/src/ops/sha256.rs`,
-`ops/merkle.rs`, and `ops/header.rs` exist **only** to serialize bytes for
-the bitcoind RPC boundary — they are not invoked inside the ψ-pipeline
-transform. The σ-projection (SHA-256d) inside the transform is a
-content-addressing primitive realized via the canonical hash axis
-(`Sha256dHasher`) consumed by resolvers, not via direct invocation
-from the verb body.
+`ops/merkle.rs`, and `ops/header.rs` exist **only** to serialize
+bytes for the bitcoind RPC boundary and the host-side σ-projection
+recomputation in `mine()`. They are not invoked inside the ψ-pipeline
+transform. The σ-projection inside the transform is the canonical
+hash axis (`Sha256dHasher`) consumed by resolvers — once per
+`forward()`, by ψ_9, for the κ-derivation — and never from the verb
+body.
 
 ## 8. Public API surface
 
@@ -435,15 +440,16 @@ pub use domain::{MiningTag, MiningWitness, TriadicCoords};
 ```
 
 `mine(header: &BlockHeader, target: Target) → Result<MiningOutcome, MiningFailure>`
-builds a `MiningTask` from the host-side `BlockHeader` + `Target`, invokes
-`BitcoinMiningModel::forward`, and returns a `MiningOutcome` whose
-`witness: MiningWitness` carries the foundation-sealed `Grounded<MiningResult>`,
-whose `digest: [u8; 32]` is the block hash in display order, and whose
-`resolution: ResolutionState` is the diagnostic state from ψ_9's
-iterative-resolution loop (architecture §4 ψ_9 paragraph). On the
-`Err` path, [`take_resolution_state`] returns the resolver's
-`Exhausted` verdict captured before the impossibility witness was
-surfaced.
+builds a `MiningTask` from the host-side `BlockHeader` + `Target`,
+invokes `BitcoinMiningModel::forward` (which always produces a
+κ-label candidate for well-formed inputs), and enforces the boundary
+admission relation `σ(header) ≤ target`. On `Ok`, `MiningOutcome`
+carries the foundation-sealed `Grounded<MiningResult>`, the
+display-order digest, and `resolution: ResolutionState` (the κ-
+derived nonce + the `free_rank = 0` convergence observable). On
+`Err(MiningFailure::DidNotAdmit)`, [`take_resolution_state`] returns
+ψ_9's `ResolutionState` so the host can inspect the κ-derivation
+that didn't admit.
 
 ## 9. Substrate surface
 
@@ -485,14 +491,14 @@ vertices constraint geometry: ψ_1 builds the nerve N(C) from
 `MiningResult::CONSTRAINTS`; ψ_2/ψ_3/ψ_5/ψ_6 produce the chain
 complex, homology, cochain, and cohomology data; ψ_7 truncates the
 Postnikov tower; ψ_8 extracts the homotopy groups; ψ_9 validates the
-upstream π_0-only geometry, then runs the iterative-resolution loop
-on the four nonce-byte sites and emits the wire-format Bitcoin
-header. Each non-terminal stage emits a 208-byte structural carrier
-(architecture §4); each downstream stage validates the upstream
-stage tag and structural geometry before emitting. ψ_2/ψ_3/ψ_5/ψ_6
-are off the mining-transform path (the verb body composes only ψ_1,
-ψ_7, ψ_8, ψ_9) but compute their stage's content for substitution-
-axis completeness under ADR-036.
+upstream π_0-only geometry, then performs the structural κ-
+derivation that pins the four nonce-byte sites and emits the
+wire-format Bitcoin header. Each non-terminal stage emits a 208-byte
+structural carrier (architecture §4); each downstream stage
+validates the upstream stage tag and structural geometry before
+emitting. ψ_2/ψ_3/ψ_5/ψ_6 are off the mining-transform path (the
+verb body composes only ψ_1, ψ_7, ψ_8, ψ_9) but compute their
+stage's content for substitution-axis completeness under ADR-036.
 
 ### 9.4 Capacity ceilings
 
@@ -523,17 +529,18 @@ the typed carriers; the typed-iso surface refuses any miswired
 ### 9.6 Iterative-resolution discipline
 
 The wiki's [`iterative-resolution.md`](https://github.com/UOR-Foundation/UOR-Framework/blob/main/docs/content/concepts/iterative-resolution.md)
-names the resolver-internal iteration model: a resolver iteratively
-pins free sites, `FreeRank` is the count of unpinned sites at any
-point, convergence is `FreeRank = 0`. prism-btc's ψ_9 realizes the
-discipline over the W32 nonce ring: the four nonce-byte sites
-(positions 76..80) drop from `FreeRank = 1` each to `0` simultaneously
-when an admitting candidate is found. The discipline's terminal
-verdict is one of `Converged { admitting_nonce }` (admission witness)
-or `Exhausted` (the canonical
-`proof:InhabitanceImpossibilityWitness`). prism-btc surfaces both
-via [`crate::diagnostics`](crates/prism-btc/src/diagnostics.rs) — see
-architecture §4 ψ_9 paragraph for the operational semantics.
+names the resolver-internal iteration model: each ψ-stage pins free
+sites, `FreeRank` is the count of unpinned sites at any point,
+convergence is `FreeRank = 0`. prism-btc realizes the discipline as
+ψ-stage progression: ψ_1 → ψ_7 → ψ_8 advance the structural
+carriers; ψ_9 performs the terminal κ-derivation that pins the
+four nonce-byte sites (positions 76..80) simultaneously, dropping
+`FreeRank` from 4 to 0 in one stage. The discipline converges at
+the terminal ψ-stage for every well-formed `MiningTask` — there is
+no impossibility verdict inside the ψ-pipeline; whether the
+κ-derived header admits at the host boundary is a separate question
+(architecture §6 + §7). prism-btc surfaces ψ_9's state via
+[`crate::diagnostics`](crates/prism-btc/src/diagnostics.rs).
 
 ## 10. Conformance
 
@@ -581,7 +588,6 @@ The IRIs prism-btc consumes from the foundation ontology
   `cert:ChainAuditTrail`, `cert:GroundingCertificate`
 - `state:GroundedContext`, `state:GroundingWitness`,
   `state:Session`, `state:Frame`
-- `proof:InhabitanceImpossibilityWitness`
 
 These names are normative. prism-btc's IRIs
 (`https://prism.btc/shape/*`, `https://prism.btc/resolver/*`) are the
@@ -596,18 +602,19 @@ application's instantiation of the foundation classes.
 - **No `Term::FirstAdmit` in the mining verb body.** FirstAdmit is a
   substrate primitive for bounded structural search over small typed
   domains; it is not the mining transform.
-- **No traditional-miner complexity framing.** prism-btc's wall-clock
-  cost is the cost of the parametric ψ-pipeline's catamorphism
-  evaluation plus the resolver-internal iterative-resolution loop in
-  ψ_9, not "expected hashes × per-hash cost." Wall-clock is a property
-  of foundation's evaluator + the resolvers' realizations; it is
-  invariant across network choice (regtest, signet, testnet, testnet4,
-  mainnet) at the vocabulary level. The byte-threshold in `Target`
-  parameterizes the admission relation's structural complexity, not a
-  probabilistic puzzle parameter.
-- **No "CPU mining" framing.** prism-btc's mining is one structural
-  inference per `MiningTask`. Hash-rate is not a meaningful metric;
-  one `forward()` is one mining operation regardless of network.
+- **No traditional-miner complexity framing.** prism-btc's
+  per-`forward()` cost is constant — one ψ-pipeline pass with ψ_9's
+  one σ-projection for the κ-derivation, plus the host-boundary's
+  one σ-projection for the admission check. There is no
+  "expected hashes × per-hash cost", no inner search loop. The
+  byte-threshold in `Target` parameterizes the boundary admission
+  relation, not a probabilistic puzzle parameter; the
+  network-dependent quantity is the number of template variations
+  the host has to attempt, not the cost per attempt.
+- **No "CPU mining" or hashrate framing.** prism-btc's mining is
+  one structural inference per `MiningTask`. Hash-rate is not a
+  meaningful metric for this implementation; one `forward()` is one
+  mining operation regardless of network.
 - **No external crypto dependency.** `Sha256dHasher` is pure-Rust
   SHA-256-then-SHA-256 (FIPS-180-4) as the canonical hash axis's
   content-addressing primitive. No `sha2`, no `blake3`, no opaque crate.
@@ -626,27 +633,18 @@ application's instantiation of the foundation classes.
 
 ## 14. Performance model
 
-prism-btc's performance is the per-`forward()` ψ-pipeline overhead.
-This is the metric the implementation optimizes; everything else
-that gets called "performance" in a mining context is hashrate work,
-which §12 puts out of scope.
+prism-btc commits to **one structural inference per `MiningTask`**.
+The cost of that inference is constant — independent of the
+`target` byte threshold, independent of the network. There is no
+loop inside `forward()` whose iteration count depends on the input;
+ψ_9's κ-derivation is one σ-projection on the threaded task, and
+every other ψ-stage is a structural-carrier emit.
 
-### 14.1 What prism-btc optimizes
-
-One `forward()` is one structural inference per `MiningTask`. Its
-cost decomposes as:
-
-```text
-forward()  =  catamorphism dispatch  +  resolver chain  +  ψ_9 iterative-resolution
-                  (foundation)            (prism-btc)         (prism-btc, hash-bound per iter)
-```
-
-prism-btc owns the middle term and the *fixed* (per-call, hash-
-independent) portion of the right term. The architectural levers:
+The architectural levers that keep per-`forward()` cost minimal:
 
 - **Compile-time validation.** `MiningResult::CONSTRAINTS`' 80-
-  disjoint-Site IT_7d shape is a compile-time invariant — asserted by
-  a `const _: () = { … }` block in
+  disjoint-Site IT_7d shape is a compile-time invariant — asserted
+  by a `const _: () = { … }` block in
   [`crates/prism-btc/src/resolvers.rs`](crates/prism-btc/src/resolvers.rs).
   ψ_1's runtime body does not re-validate; any malformed CONSTRAINTS
   declaration fails the build before ψ_1 ever runs.
@@ -656,52 +654,36 @@ independent) portion of the right term. The architectural levers:
   [`CARRIER_GEOMETRY_TAIL`](crates/prism-btc/src/resolvers.rs). Each
   per-stage `emit_carrier` is three `copy_from_slice` calls — no
   per-field arithmetic, no `for i in 0..80` loop.
-- **`#[inline]` on trivial resolver bodies.** ψ_2/ψ_3/ψ_5/ψ_6/ψ_7/ψ_8
-  are decode-validate-emit functions; inlining lets LLVM fuse them
-  with the catamorphism's per-Term dispatch.
+- **`#[inline]` on trivial resolver bodies.** ψ_1..ψ_8 are decode-
+  validate-emit functions; inlining lets LLVM fuse them with the
+  catamorphism's per-Term dispatch.
 - **No heap allocations in `mine()`.** The carrier buffers live in
   foundation's pre-sized scratch space (per `PrismBtcBounds`); the
-  `MiningOutcome` is constructed on the stack. The hot path makes no
-  allocations.
+  `MiningOutcome` is constructed on the stack.
 
-### 14.2 What prism-btc does NOT optimize
+The cost of the σ-projection inside ψ_9 (and the second σ-projection
+at the host boundary for the admission check) is the canonical hash
+axis's affair — a substitution-axis selection per ADR-030, not an
+implementation surface prism-btc tunes. The architecture's
+structural-inference framing (§12) treats the σ-projection as a
+typed primitive; its wall-clock cost is whatever the chosen hash
+axis delivers.
 
-The canonical hash axis (`Sha256dHasher`) is a substitution-axis
-selection, not an implementation prism-btc tunes. ψ_9's iterative-
-resolution loop calls the hash axis per W32 candidate; the wall-clock
-of each call is the hash axis's affair, not prism-btc's. The
-following are explicitly out of scope and would be rejected at code
-review:
+### 14.1 Benchmarks
 
-- SHA-256 midstate optimization (precomputing the first-block hash
-  state across W32 candidates).
-- SIMD/AVX/SHA-NI intrinsics for the SHA-256 inner loop.
-- Vectorized multi-candidate evaluation (4-way or 8-way nonce sweeps
-  in a single SHA-256 batch).
-- GPU offload of the iterative-resolution loop.
-
-Every item on that list reduces to "more candidates per second" —
-hashrate. The architecture's structural-inference framing (§12) is
-explicit that hashrate is not a meaningful metric for prism-btc;
-optimizing for it would substitute the algorithmic miner's metric for
-the prism one.
-
-### 14.3 Benchmarks
-
-[`crates/prism-btc/benches/mining.rs`](crates/prism-btc/benches/mining.rs)
-separates the two costs visibly:
+[`crates/prism-btc/benches/mining.rs`](crates/prism-btc/benches/mining.rs):
 
 | Bench | What it measures |
 |---|---|
-| `psi_pipeline/structural_overhead` | Full `forward()` at maximally-permissive target; ψ_9 short-circuits on `nonce = 0`. Wall-clock = ψ-pipeline overhead + one σ-projection. **prism-btc's optimization target.** |
-| `canonical_hash_axis/sha256d_one_header` | One `Sha256dHasher` call on an 80-byte header. **Out of scope** (architecture §12, §14.2); the bench exists so the overhead number above can be honestly separated from the hash cost. |
-| `misc/target_check_reject` | Lex-≤ on a non-satisfying digest vs target. |
+| `mine/one_structural_inference` | One full `mine()` call: ψ_1 → ψ_7 → ψ_8 → ψ_9 structural κ-derivation plus the host-boundary admission check. Constant per call, independent of target. |
+| `misc/target_check_reject` | Lex-≤ on a non-satisfying digest vs target — the boundary admission relation in isolation. |
 | `misc/triadic_coords_from_hash` | `TriadicCoords` projection on a 32-byte digest. |
 
-Run: `cargo bench -p prism-btc`. Optimizations that move the
-`psi_pipeline/structural_overhead` number are prism-btc performance
-gains; optimizations that move only `canonical_hash_axis/*` are
-hashrate work and do not belong in prism-btc.
+Run: `cargo bench -p prism-btc`. The metric is **wall-clock per
+`mine()`** — the cost of one structural inference. There is no
+"throughput" or "rate" metric here; prism-btc commits to one
+inference per `MiningTask`, and the boundary loop's variation count
+is a property of the target, not of the implementation.
 
 ## 15. Quick start
 

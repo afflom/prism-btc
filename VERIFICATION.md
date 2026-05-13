@@ -50,8 +50,8 @@ unit tests across the prism-btc crate's modules:
   serialization round-trip.
 
 The [`crate::diagnostics`](crates/prism-btc/src/diagnostics.rs)
-module exposes the iterative-resolution surface (`ResolutionState`,
-`ResolutionVerdict`, `take_resolution_state`); its behaviour is
+module exposes ψ_9's structural κ-derivation state
+(`ResolutionState`, `take_resolution_state`); its behaviour is
 pinned by the §2 V&V tests below (rows 15–17).
 
 ## §2 V&V suite — `crates/prism-btc/tests/verification.rs`
@@ -77,9 +77,9 @@ per-test rationale.
 | 12 | `v_constraint_nerve_is_eighty_isolated_vertices_no_higher_simplices` | Constraint-nerve geometry: β_0 = 80, β_k = 0 for k ≥ 1, χ = 80 = SITE_COUNT |
 | 13 | `v_constraint_site_supports_span_the_full_wire_format_header` | Site supports cover [0, 80) — every wire-format-header byte pinned by one Site constraint |
 | 14 | `v_prism_btc_bounds_declare_algebraic_closure_target` | `PrismBtcBounds` declares the algebraic-closure ceilings (compile-time assertion) |
-| 15 | `v_mine_outcome_carries_converged_resolution_state` | Iterative-resolution diagnostic: `MiningOutcome.resolution` carries `Converged { admitting_nonce }`, `free_rank = 0`, `iterations = admitting_nonce + 1` on the Ok path |
+| 15 | `v_mine_outcome_carries_kappa_derivation_state` | `MiningOutcome.resolution` carries `free_rank = 0` (terminal-stage convergence) and `derived_nonce` matching the κ-derived nonce on the wire-format header |
 | 16 | `v_mine_drains_thread_local_diagnostic_channel` | `mine()` drains the thread-local diagnostic channel as part of returning the outcome — a subsequent `take_resolution_state()` returns `None` |
-| 17 | `v_forward_records_resolution_state_for_inspection` | Direct `forward()` callers (not via `mine()`) inspect ψ_9's state via `take_resolution_state()` — ψ_9 records state regardless of entry-point |
+| 17 | `v_forward_records_resolution_state_for_inspection` | Direct `forward()` callers (not via `mine()`) inspect ψ_9's state via `take_resolution_state()` — ψ_9 records state on every invocation |
 
 Run: `cargo test --release -p prism-btc --test verification`.
 
@@ -106,9 +106,9 @@ complete client against a real bitcoind:
 1. `getblocktemplate` for a fresh regtest template.
 2. `PrismMiner::mine_one_block` drives the host-boundary template-
    variation loop: build `MiningTask` from current extranonce, call
-   `prism_btc::mine`, on `PipelineFailure` (the canonical
-   `InhabitanceImpossibilityWitness`) roll the extranonce, on `Ok`
-   submit.
+   `prism_btc::mine`, on `DidNotAdmit` (κ-derivation didn't satisfy
+   target at the boundary admission check) roll the extranonce,
+   on `Ok` submit.
 3. `submitblock` accepts the prism-btc-produced block.
 4. The observer client confirms the chain height advanced by exactly 1
    and the new tip equals the prism-btc-mined block hash.

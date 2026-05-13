@@ -211,10 +211,10 @@ impl PartitionProductFields for MiningTask {
 // — the IT_7d algebraic-closure criterion is satisfied at the
 // declaration level. The wiki's iterative-resolution discipline
 // (`iterative-resolution.md`) converges in n - χ(N(C)) = 0 residual
-// rank: each iteration pins one site by applying one constraint, and
-// the iterative-resolution loop in the resolver chain materializes
-// the pinned values (template-supplied for sites 0..76, κ-derived
-// via the ψ_9 W32 walk for sites 76..80).
+// rank: each ψ-stage's progression pins free sites, and at the
+// terminal ψ_9 stage all 80 sites are pinned — the leading 76 by
+// the host-supplied template, the trailing 4 by ψ_9's structural
+// κ-derivation via the canonical hash axis.
 output_shape! {
     pub struct MiningResult;
     impl ConstrainedTypeShape for MiningResult {
@@ -229,9 +229,11 @@ output_shape! {
             //
             // Sites 0..76 are template-pinned (the host-supplied
             // prefix bytes); sites 76..80 are κ-pinned (the ψ_9
-            // resolver's W32 walk materializes the admitting nonce
-            // bytes). Both mechanisms terminate at the same fixed
-            // point: 80 sites pinned ⇒ FreeRank = 0 ⇒ convergence.
+            // resolver's structural κ-derivation via the canonical
+            // hash axis projects the typed MiningTask and pins the
+            // four nonce bytes). Both mechanisms terminate at the
+            // same fixed point: 80 sites pinned ⇒ FreeRank = 0 ⇒
+            // convergence.
             ConstraintRef::Site { position: 0 },
             ConstraintRef::Site { position: 1 },
             ConstraintRef::Site { position: 2 },

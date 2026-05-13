@@ -104,12 +104,13 @@ fn forward_kappa_label_is_deterministic_in_the_typed_input() {
 #[test]
 fn forward_kappa_label_is_distinct_for_distinct_inputs() {
     // The ψ-pipeline distinguishes typed inputs: distinct MiningTask
-    // prefixes yield distinct κ-labels. Under the resolver-owned
-    // iterative-resolution model, two distinct (prefix, target) pairs
-    // may converge on the same resolved nonce (e.g., nonce=0 admits
-    // for many prefixes under a maximally-permissive target); the
-    // structural distinction lives in the prefix region of the
-    // wire-format header, not necessarily in the 4-byte nonce field.
+    // prefixes yield distinct κ-labels. The κ-derivation projects the
+    // typed input via the canonical hash axis; distinct prefixes
+    // produce distinct content-addresses (cryptographic collision-
+    // resistance) and therefore distinct κ-derivations. Even on the
+    // unlikely event of a κ-nonce collision, the structural
+    // distinction would remain in the prefix region of the wire-
+    // format header.
     let mut p_a = [0u8; 76];
     p_a[0] = 0x01;
     let mut p_b = [0u8; 76];
@@ -171,16 +172,22 @@ fn forward_path_identity_is_input_invariant() {
 }
 
 #[test]
-fn mine_admits_in_one_call_against_a_permissive_target() {
-    // Under the wiki's iterative-resolution discipline, the ψ_9
-    // resolver walks the W32 nonce ring internally until admission
-    // lands. For a permissive target (regtest's 0x207fffff: ~50%
-    // admission probability per nonce), the first call to mine()
-    // admits — no host-boundary iteration needed.
-    let header = easy_header();
+fn mine_admits_within_a_few_template_variations_against_permissive_target() {
+    // Each mine() call is one structural inference: ψ_9 deterministically
+    // κ-derives a nonce, the boundary checks σ(header) ≤ target. For a
+    // permissive target (regtest's 0x207fffff: ~50% admission probability
+    // per κ-derivation), iterating a small number of template variations
+    // (varying the timestamp) finds an admitting κ-candidate.
+    let base = easy_header();
     let target = Target::new(0x207fffff);
 
-    let outcome = mine(&header, target).expect("permissive target must admit in one call");
+    let outcome = (0u32..32)
+        .find_map(|ts_offset| {
+            let mut h = base.clone();
+            h.timestamp = Timestamp(base.timestamp.0.wrapping_add(ts_offset));
+            mine(&h, target).ok()
+        })
+        .expect("permissive target must admit within a small variation window");
 
     // Fail-closed: mine() returning Ok means the digest genuinely
     // satisfies the target. Bit-identicality: the wire-format header

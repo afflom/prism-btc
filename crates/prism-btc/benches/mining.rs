@@ -1,45 +1,15 @@
-//! Micro-benchmarks for prism-btc.
+//! Micro-benchmarks for prism-btc's typed-iso surface.
 //!
-//! **Performance model** (architecture §14). prism-btc's performance
-//! is the per-`forward()` ψ-pipeline overhead — catamorphism dispatch,
-//! resolver-chain carrier I/O, ψ_9 setup — NOT the hashrate of the
-//! canonical hash axis. These benches are organized to make that
-//! distinction visible:
-//!
-//! - **`psi_pipeline_structural_overhead`**: bench `forward()` under
-//!   the maximally-permissive target `0xff…ff` so ψ_9 admits on
-//!   `nonce = 0` after exactly one σ-projection. The wall-clock here
-//!   is ψ-pipeline overhead (4-stage catamorphism + carrier I/O) plus
-//!   one SHA-256d. This is what prism-btc optimizes.
-//!
-//! - **`canonical_hash_axis_cost`**: bench one `Sha256dHasher` σ-
-//!   projection on the wire-format header in isolation. This is
-//!   pure hashrate territory — prism-btc *does not* optimize it
-//!   (architecture §12 + §14.2); the bench exists so the
-//!   structural-overhead number above can be honestly separated
-//!   from the hash cost.
-//!
-//! - **`target_check_reject`**: lex-≤ on a 32-byte non-satisfying
-//!   digest vs target. Trivially fast; included for completeness.
-//!
-//! - **`triadic_coords_from_hash`**: cost of the digest-domain
-//!   `TriadicCoords` projection that lives on `MiningOutcome`.
-//!
-//! Performance work that prism-btc explicitly **does not** undertake:
-//! SHA-256 midstate optimization, SIMD vectorization of the W32
-//! candidate sweep, GPU offload — every such "improvement" reduces to
-//! a hashrate gain on the canonical hash axis, which the architecture
-//! puts out of scope.
+//! Each bench measures one operation on the surface. There are no
+//! "mining throughput" or "candidates per second" metrics here —
+//! prism-btc commits to one structural inference per `MiningTask`
+//! (architecture §6 + §14), so the meaningful measurement is the
+//! wall-clock cost of a single `forward()`.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
-use prism_btc::{
-    mine, sha256d_display, Bits, BlockHeader, MerkleRoot, Target, Timestamp, TriadicCoords, Version,
-};
+use prism_btc::{mine, Bits, BlockHeader, MerkleRoot, Target, Timestamp, TriadicCoords, Version};
 
 fn permissive_header() -> BlockHeader {
-    // Regtest's most permissive nBits — ψ_9 admits on nonce = 0 after
-    // exactly one σ-projection, so wall-clock = ψ-pipeline overhead +
-    // one SHA-256d call.
     let merkle_bytes: [u8; 32] = [
         0x3b, 0xa3, 0xed, 0xfd, 0x7a, 0x7b, 0x12, 0xb2, 0x7a, 0xc7, 0x2c, 0x3e, 0x67, 0x76, 0x8f,
         0x61, 0x7f, 0xc8, 0x1b, 0xc3, 0x88, 0x8a, 0x51, 0x32, 0x3a, 0x9f, 0xb8, 0xaa, 0x4b, 0x1e,
@@ -54,37 +24,20 @@ fn permissive_header() -> BlockHeader {
     }
 }
 
-fn bench_psi_pipeline_structural_overhead(c: &mut Criterion) {
-    // The canonical "prism-btc performance" bench: one structural
-    // inference per MiningTask, with the W32 loop short-circuiting on
-    // the first candidate. Includes the catamorphism dispatch through
-    // BitcoinResolverTuple (ψ_1 Nerve → ψ_7 Postnikov → ψ_8 HomotopyGroups
-    // → ψ_9 KInvariants), the three structural carriers, ψ_9's
-    // iterative-resolution setup, and one canonical-hash-axis call.
+fn bench_mine_one_structural_inference(c: &mut Criterion) {
+    // One full `mine()` against a maximally-permissive target —
+    // ψ_1 → ψ_7 → ψ_8 → ψ_9 structural κ-derivation plus the
+    // boundary admission check. The κ-derivation is deterministic
+    // in the typed input; the wall-clock per call is constant
+    // (independent of target restrictiveness).
     let header = permissive_header();
     let target = Target::new(0x207fffff);
-    let mut g = c.benchmark_group("psi_pipeline");
+    let mut g = c.benchmark_group("mine");
     g.throughput(Throughput::Elements(1));
-    g.bench_function("structural_overhead", |b| {
+    g.bench_function("one_structural_inference", |b| {
         b.iter(|| {
             let outcome = mine(black_box(&header), black_box(target));
             black_box(outcome.ok());
-        })
-    });
-    g.finish();
-}
-
-fn bench_canonical_hash_axis_cost(c: &mut Criterion) {
-    // Pure σ-projection cost on a wire-format header. NOT a prism-btc
-    // optimization target (architecture §12 + §15); bench exists so
-    // the structural-overhead number above is interpretable.
-    let mut header = [0u8; 80];
-    header[0] = 0x01;
-    let mut g = c.benchmark_group("canonical_hash_axis");
-    g.throughput(Throughput::Bytes(80));
-    g.bench_function("sha256d_one_header", |b| {
-        b.iter(|| {
-            black_box(sha256d_display(black_box(&header)));
         })
     });
     g.finish();
@@ -121,8 +74,7 @@ fn bench_triadic_coords(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_psi_pipeline_structural_overhead,
-    bench_canonical_hash_axis_cost,
+    bench_mine_one_structural_inference,
     bench_target_check,
     bench_triadic_coords,
 );

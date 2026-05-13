@@ -62,33 +62,37 @@
 //! bytes — the wire-format Bitcoin header. The k-invariant signature
 //! itself is trivial for π_0-only spaces (no obstruction classes), so
 //! the structural content reduces to π_0's 80 generators. ψ_9's
-//! load-bearing computation is the **iterative-resolution discipline**
-//! per the wiki's
-//! [`iterative-resolution.md`](https://github.com/UOR-Foundation/UOR-Framework/blob/main/docs/content/concepts/iterative-resolution.md):
-//! the four nonce-byte sites (positions 76..80) carry initial
-//! `FreeRank = 1`; the resolver walks the W32 nonce ring
-//! (`witt_domain::W32`, `CYCLE_SIZE = 2^32`) — each iteration pins a
-//! candidate nonce, evaluates the structural admission relation
-//! `H(header) ≤ target` via the canonical hash axis (`H: Hasher`),
-//! and continues until convergence (the first admitting nonce) or
-//! W32 ring exhaustion. Convergence pins the four nonce-byte sites;
-//! the resolver emits the admitting wire-format header.
+//! load-bearing computation is the **structural κ-derivation**: the
+//! typed `MiningTask` projects via the canonical hash axis to a 32-
+//! byte content-address; the leading four bytes (canonical Bitcoin
+//! little-endian) pin the four nonce-byte sites (positions 76..80)
+//! simultaneously. One σ-projection per `forward()` — deterministic
+//! in the typed input, no enumeration, no search.
 //!
-//! On W32 ring exhaustion without admission, the resolver returns
-//! the canonical `proof:InhabitanceImpossibilityWitness` for this
-//! constraint geometry; the host boundary (architecture §7) varies
-//! the template (extranonce roll → distinct `MiningTask`) and
-//! retries.
+//! The wiki's iterative-resolution discipline converges at the
+//! terminal ψ-stage for every well-formed `MiningTask`: `FreeRank`
+//! over `MiningResult` drops from 4 (the four free nonce-byte sites)
+//! to 0 (all 80 sites pinned) in this one stage. The resolver
+//! returns `Ok` with the κ-label.
+//!
+//! Whether the κ-candidate's σ-projection satisfies the host-
+//! supplied target is the **admission relation**, enforced at the
+//! host boundary by [`crate::pipeline::mine`] — not inside the
+//! ψ-pipeline. The boundary returns
+//! [`crate::pipeline::MiningFailure::DidNotAdmit`] when admission
+//! fails; the host (architecture §7) varies the template-derived
+//! `MiningTask` (extranonce roll → distinct prefix → distinct
+//! κ-derivation) and retries.
 //!
 //! ## Pure-prism commitment
 //!
 //! The verb body composes only ψ-Term variants
 //! (`Term::Nerve / PostnikovTower / HomotopyGroups / KInvariants`); no
-//! σ-enumeration leaks into the typed-iso surface. The
-//! resolver-internal iterative-resolution loop in ψ_9 IS the
-//! framework's structural transform per the wiki, not a σ-enumeration
-//! leak. From outside, `forward()` is one structural inference per
-//! `MiningTask`.
+//! σ-enumeration leaks into the typed-iso surface, and none of the
+//! resolver bodies enumerate either. From outside, `forward()` is
+//! one structural inference per `MiningTask` — the ψ-pipeline maps
+//! typed input to κ-label by structural transformation, never by
+//! search.
 
 use core::marker::PhantomData;
 
@@ -102,7 +106,7 @@ use uor_foundation::pipeline::{
 use uor_foundation::{HostBounds, ViolationKind};
 use uor_foundation_sdk::resolver;
 
-use crate::diagnostics::{record as record_resolution, ResolutionState, ResolutionVerdict};
+use crate::diagnostics::{record as record_resolution, ResolutionState};
 use crate::model::MiningResult;
 use crate::shapes::bounds::PrismBtcBounds;
 
@@ -119,12 +123,6 @@ const VERTEX_DATA_BYTES: usize = NERVE_VERTEX_COUNT as usize;
 const CARRIER_BYTES: usize = TASK_BYTES + STAGE_HEADER_BYTES + VERTEX_DATA_BYTES;
 /// Wire-format Bitcoin header byte width — the ψ_9 output width.
 const WIRE_FORMAT_HEADER_BYTES: usize = 80;
-/// Number of `MiningResult` sites pinned jointly by the W32 nonce
-/// field (positions 76..80). These are the sites whose `FreeRank`
-/// drops from 1 → 0 simultaneously when ψ_9 converges on an
-/// admitting candidate; they remain free if the resolver exhausts
-/// the W32 ring without admission.
-const NONCE_FIELD_SITE_COUNT: u32 = 4;
 
 /// Length of the constant tail of every non-terminal ψ-stage's
 /// carrier: vertex_count (4) + highest_dim (4) + reserved (4) +
@@ -220,26 +218,6 @@ const GEOMETRY_VIOLATION: ShapeViolation = ShapeViolation {
     expected_range: "http://www.w3.org/2001/XMLSchema#unsignedInt",
     min_count: NERVE_VERTEX_COUNT,
     max_count: NERVE_VERTEX_COUNT,
-    kind: ViolationKind::ValueCheck,
-};
-
-/// `InhabitanceImpossibilityWitness` for the κ-derivation — signalled
-/// when the W32 nonce ring is walked end-to-end without the
-/// structural admission relation being satisfied for the host-supplied
-/// `(prefix, target)`. Foundation carries the canonical
-/// impossibility-witness vocabulary in
-/// [`proof:InhabitanceImpossibilityWitness`](https://uor.foundation/proof/InhabitanceImpossibilityWitness);
-/// prism-btc surfaces it through the resolver-bound
-/// [`uor_foundation::enforcement::ShapeViolation`] channel until the
-/// substrate exposes the impossibility witness as a first-class
-/// resolver return type.
-const NONCE_FIBER_EXHAUSTED: ShapeViolation = ShapeViolation {
-    shape_iri: "https://prism.btc/resolver/InhabitanceImpossibility",
-    constraint_iri: "https://prism.btc/resolver/InhabitanceImpossibility/nonceFiberExhausted",
-    property_iri: "https://prism.btc/resolver/InhabitanceImpossibility/byteCount",
-    expected_range: "http://www.w3.org/2001/XMLSchema#nonNegativeInteger",
-    min_count: 0,
-    max_count: 0,
     kind: ViolationKind::ValueCheck,
 };
 
@@ -595,33 +573,37 @@ impl<H: Hasher> HomotopyGroupResolver<H> for BitcoinHomotopyGroupResolver<H> {
 /// tower's twisted-fibration data. For prism-btc's discrete 80-vertex
 /// space (`π_0 = 80-set`, `π_k = 0` for k ≥ 1), the k-invariant
 /// signature itself is **trivial** — no obstruction classes to fuse.
-/// The load-bearing computation is the **iterative-resolution
-/// discipline** (wiki `iterative-resolution.md`) that materializes
-/// the four nonce-byte sites against the structural admission relation,
-/// producing the 80-byte wire-format Bitcoin header as the κ-label.
+/// The terminal ψ-stage's load-bearing computation is the **structural
+/// κ-derivation** that pins the four nonce-byte sites (positions
+/// 76..80) deterministically from the typed `MiningTask` input.
 ///
-/// The resolver:
-/// 1. Validates the upstream ψ_8 carrier (geometry = 80 isolated
-///    π_0 components).
-/// 2. Extracts the host-supplied prefix (76 bytes) and target
-///    (32 bytes) from the threaded `MiningTask` data.
-/// 3. Runs the iterative-resolution loop on the four nonce-byte sites
-///    (positions 76..80). Each iteration evaluates the structural
-///    admission relation `H(header) ≤ target` (lex on 32-byte
-///    display-order bytes) via the canonical hash axis `H`; `FreeRank`
-///    decreases by 1 per pinned site, and convergence (FreeRank = 0
-///    across all four sites simultaneously) is the first satisfying
-///    nonce.
-/// 4. On convergence, emits the admitting wire-format header.
-/// 5. On W32 ring exhaustion without admission, returns the canonical
-///    `proof:InhabitanceImpossibilityWitness` ([`NONCE_FIBER_EXHAUSTED`])
-///    so the host boundary varies the template and retries.
+/// **The κ-derivation.** ψ_9 projects the typed `MiningTask` to a
+/// 32-byte content-address via the canonical hash axis (`H: Hasher` —
+/// the substitution-axis selection per ADR-030); the leading four
+/// bytes (in canonical Bitcoin little-endian) are the κ-nonce. One
+/// σ-projection total per `forward()` — deterministic in the typed
+/// input, no enumeration, no search. The wiki's iterative-resolution
+/// discipline converges here: the four free nonce-byte sites pin
+/// simultaneously to the κ-derivation; `FreeRank` over `MiningResult`
+/// drops from 4 to 0 in this single terminal stage.
+///
+/// **The resolver always succeeds** for well-formed `MiningTask`
+/// inputs: every typed input produces a wire-format header
+/// candidate. Whether that candidate's σ-projection satisfies the
+/// host-supplied `target` is the **admission relation**, enforced at
+/// the host boundary by [`crate::pipeline::mine`] — not inside the
+/// ψ-pipeline. The boundary returns
+/// [`crate::pipeline::MiningFailure::DidNotAdmit`] when the κ-
+/// candidate's σ-projection does not satisfy the target; the host
+/// (architecture §7) varies the template-derived `MiningTask` and
+/// retries.
 #[derive(Debug)]
 pub struct BitcoinKInvariantResolver<H>(PhantomData<H>);
 
 impl<H: Hasher> uor_foundation::pipeline::__sdk_seal::Sealed for BitcoinKInvariantResolver<H> {}
 
 impl<H: Hasher> KInvariantResolver<H> for BitcoinKInvariantResolver<H> {
+    #[inline]
     fn resolve(
         &self,
         input: HomotopyGroupsBytes<'_>,
@@ -636,73 +618,27 @@ impl<H: Hasher> KInvariantResolver<H> for BitcoinKInvariantResolver<H> {
 
         // task[0..76] = prefix; task[76..108] = target.
         let prefix = &carrier.task[..76];
-        let target = &carrier.task[76..108];
 
-        // Assemble the candidate header in place; nonce-field bytes
-        // [76..80) are pinned per iteration.
-        let mut header = [0u8; WIRE_FORMAT_HEADER_BYTES];
-        header[..76].copy_from_slice(prefix);
+        // Structural κ-derivation: project the typed MiningTask to a
+        // 32-byte content-address via the canonical hash axis;
+        // bytes [0..4) become the κ-nonce in Bitcoin little-endian.
+        // The four nonce-byte sites pin simultaneously to this
+        // structural derivation — one σ-projection, no enumeration.
+        let derivation = H::initial().fold_bytes(carrier.task).finalize();
+        let nonce_bytes: [u8; 4] = [derivation[0], derivation[1], derivation[2], derivation[3]];
+        let derived_nonce = u32::from_le_bytes(nonce_bytes);
 
-        // Iterative-resolution loop over witt_domain::W32. Each
-        // iteration evaluates the structural admission relation
-        // H(header) ≤ target (lex on 32-byte display-order bytes);
-        // convergence is the first satisfying nonce. The diagnostic
-        // surface (crate::diagnostics) records the terminal state
-        // before either return path.
-        let mut nonce: u32 = 0;
-        loop {
-            header[76..80].copy_from_slice(&nonce.to_le_bytes());
+        // Emit wire-format header: prefix(76) ‖ κ-nonce(4 LE).
+        out[..76].copy_from_slice(prefix);
+        out[76..WIRE_FORMAT_HEADER_BYTES].copy_from_slice(&nonce_bytes);
 
-            // σ-projection of the assembled header via the canonical
-            // hash axis. Sha256dHasher returns SHA-256d in internal
-            // byte order; Bitcoin's admission rule compares in display
-            // order (internal-reversed).
-            let digest_internal = H::initial().fold_bytes(&header).finalize();
-            let mut digest_display = [0u8; 32];
-            let copy_len = digest_internal.len().min(32);
-            digest_display[..copy_len].copy_from_slice(&digest_internal[..copy_len]);
-            digest_display.reverse();
+        record_resolution(ResolutionState {
+            free_rank: 0,
+            derived_nonce,
+        });
 
-            if lex_le(&digest_display, target) {
-                out[..WIRE_FORMAT_HEADER_BYTES].copy_from_slice(&header);
-                record_resolution(ResolutionState {
-                    free_rank: 0,
-                    iterations: (nonce as u64) + 1,
-                    verdict: ResolutionVerdict::Converged {
-                        admitting_nonce: nonce,
-                    },
-                });
-                return Ok(WIRE_FORMAT_HEADER_BYTES);
-            }
-
-            if nonce == u32::MAX {
-                record_resolution(ResolutionState {
-                    free_rank: NONCE_FIELD_SITE_COUNT,
-                    iterations: 1u64 << 32,
-                    verdict: ResolutionVerdict::Exhausted,
-                });
-                return Err(NONCE_FIBER_EXHAUSTED);
-            }
-            nonce += 1;
-        }
+        Ok(WIRE_FORMAT_HEADER_BYTES)
     }
-}
-
-/// Lex-≤ over two 32-byte big-endian byte sequences (Bitcoin display
-/// order). Returns `true` iff `lhs` is lexicographically ≤ `rhs`.
-#[inline]
-fn lex_le(lhs: &[u8; 32], rhs: &[u8]) -> bool {
-    let mut i = 0;
-    while i < 32 && i < rhs.len() {
-        if lhs[i] < rhs[i] {
-            return true;
-        }
-        if lhs[i] > rhs[i] {
-            return false;
-        }
-        i += 1;
-    }
-    lhs.len() <= rhs.len()
 }
 
 // ─── Default impls + ResolverTuple ─────────────────────────────────────

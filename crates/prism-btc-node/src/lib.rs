@@ -106,10 +106,12 @@ impl PrismMiner {
             )
             .context("getblocktemplate RPC")?;
 
-        // Outer template-variation loop: only iterates when the W32
-        // ring is exhausted (the resolver returns
-        // `InhabitanceImpossibilityWitness`). For permissive targets
-        // (regtest), this loop body runs once.
+        // Template-variation loop: each iteration produces a fresh
+        // MiningTask (distinct merkle root via the rolled extranonce)
+        // and a distinct κ-derivation. mine() returns Ok when the
+        // κ-candidate's σ-projection admits; DidNotAdmit otherwise.
+        // For permissive targets (regtest), the loop body typically
+        // runs once.
         let mut extranonce: u64 = 0;
         loop {
             let job = MiningJob::from_template_with_extranonce(
@@ -134,18 +136,22 @@ impl PrismMiner {
                         extranonce_attempts: extranonce,
                     });
                 }
-                Err(MiningFailure::PipelineFailure) => {
-                    // ψ_9 resolver's InhabitanceImpossibilityWitness:
-                    // the W32 ring did not admit for this template's
-                    // (prefix, target). Vary the extranonce → distinct
-                    // MerkleRoot → distinct TemplatePrefix → fresh
-                    // W32 ring.
+                Err(MiningFailure::DidNotAdmit) => {
+                    // The κ-derivation for this template's
+                    // (prefix, target) didn't satisfy target. Vary
+                    // the extranonce → distinct MerkleRoot →
+                    // distinct TemplatePrefix → distinct κ-derivation.
                     extranonce = extranonce.wrapping_add(1);
                     if extranonce == 0 {
                         anyhow::bail!(
                             "u64 extranonce space exhausted for this template without admission"
                         );
                     }
+                }
+                Err(MiningFailure::PipelineFailure) => {
+                    bail!(
+                        "ψ-pipeline shape violation — defensive failure mode, should not occur for well-formed MiningTask inputs"
+                    );
                 }
             }
         }

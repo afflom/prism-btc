@@ -26,7 +26,7 @@
 use prism_btc::{
     mine, serialize_header, sha256d_display, take_resolution_state, BitcoinMiningModel,
     BitcoinResolverTuple, Bits, BlockHeader, MerkleRoot, MiningResult, MiningTask, PrismBtcBounds,
-    ResolutionVerdict, Sha256dHasher, Target, Timestamp, Version, VERB_TERMS_MINING_INFERENCE,
+    Sha256dHasher, Target, Timestamp, Version, VERB_TERMS_MINING_INFERENCE,
 };
 use uor_foundation::enforcement::Term;
 use uor_foundation::pipeline::{ConstrainedTypeShape, ConstraintRef, PrismModel};
@@ -110,28 +110,34 @@ fn v_verb_arena_implements_the_k_invariant_branch() {
 // ─── §2. Fail-closed mining contract ───────────────────────────────────
 
 #[test]
-fn v_mine_admits_in_one_call_against_a_permissive_target() {
-    // Architecture §6 fail-closed invariant + the wiki's iterative-
-    // resolution discipline: the ψ_9 resolver walks the W32 nonce ring
-    // internally until admission lands. For a permissive target
-    // (regtest's 0x207fffff: ~50% per-nonce admission), the first
-    // call to mine() admits. Cryptographic re-derivation: recompute
-    // SHA-256d from the wire-format header bytes and verify it
-    // matches the reported digest AND satisfies the target.
-    let header = canonical_header(1, 1_700_000_000, 0x207fffff);
+fn v_mine_admits_within_a_few_template_variations_for_permissive_target() {
+    // Architecture §6 fail-closed invariant: ψ_9's structural
+    // κ-derivation produces one wire-format header candidate per
+    // MiningTask; the host boundary's admission check decides Ok vs
+    // DidNotAdmit. For a permissive target (regtest's 0x207fffff:
+    // ~50% per-κ-derivation admission probability), iterating a
+    // small number of template variations lands an admitting
+    // κ-derivation. Cryptographic re-derivation: recompute SHA-256d
+    // from the wire-format header bytes and verify it matches the
+    // reported digest AND satisfies the target.
     let target = Target::new(0x207fffff);
 
-    let outcome = mine(&header, target).expect("permissive target must admit in one call");
+    let admitted = (0u32..32)
+        .find_map(|ts_offset| {
+            let header = canonical_header(1, 1_700_000_000_u32 + ts_offset, 0x207fffff);
+            mine(&header, target).ok()
+        })
+        .expect("at least one of 32 template variations should admit at a permissive target");
 
     // Re-derive the digest from the wire-format header bytes.
-    let wire_header = outcome.witness.output_bytes();
+    let wire_header = admitted.witness.output_bytes();
     assert_eq!(wire_header.len(), 80);
     let mut header_bytes = [0u8; 80];
     header_bytes.copy_from_slice(wire_header);
     let re_derived_digest = sha256d_display(&header_bytes);
 
     assert_eq!(
-        outcome.digest, re_derived_digest,
+        admitted.digest, re_derived_digest,
         "outcome.digest must equal SHA-256d(wire-format header) in display order"
     );
     assert!(
@@ -141,22 +147,30 @@ fn v_mine_admits_in_one_call_against_a_permissive_target() {
 }
 
 #[test]
-fn v_mine_outcome_digest_actually_satisfies_target_across_inputs() {
-    // Fail-closed across the input space: for every host-supplied
-    // (header, target) pair where mine() returns Ok, the wire-format
-    // header's digest genuinely satisfies the target. The ψ_9
-    // resolver's iterative-resolution guarantee: if convergence
-    // lands, the pinned nonce satisfies the structural admission
-    // relation.
+fn v_mine_outcome_digest_actually_satisfies_target_when_admitted() {
+    // Fail-closed across the input space: for every (header, target)
+    // pair where mine() returns Ok, the wire-format header's digest
+    // genuinely satisfies the target. Templates whose κ-derivation
+    // does not admit return Err(DidNotAdmit) — those don't produce
+    // a MiningOutcome, so there is no admitted-but-invalid case to
+    // worry about. The boundary admission check is the fail-closed
+    // gate.
     let target = Target::new(0x207fffff);
-    for ts_offset in 0u32..16 {
+    let mut admitted_count = 0;
+    for ts_offset in 0u32..64 {
         let header = canonical_header(1, 1_700_000_000_u32 + ts_offset, 0x207fffff);
-        let outcome = mine(&header, target).expect("permissive target admits");
-        assert!(
-            target.is_satisfied_by_bytes(&outcome.digest),
-            "fail-closed: outcome.digest must satisfy target"
-        );
+        if let Ok(outcome) = mine(&header, target) {
+            admitted_count += 1;
+            assert!(
+                target.is_satisfied_by_bytes(&outcome.digest),
+                "fail-closed: outcome.digest must satisfy target whenever mine() returns Ok"
+            );
+        }
     }
+    assert!(
+        admitted_count > 0,
+        "with a permissive target and 64 variations, at least one κ-derivation should admit"
+    );
 }
 
 // ─── §3. Determinism + parametricity ───────────────────────────────────
@@ -187,12 +201,12 @@ fn v_psi_pipeline_is_pure_function_of_typed_input() {
 #[test]
 fn v_kappa_label_is_distinct_for_distinct_typed_inputs() {
     // Architecture §4: distinct typed inputs yield distinct κ-labels.
-    // Under the resolver-owned iterative-resolution model, two
-    // distinct prefixes may converge on the same admitting nonce
-    // (e.g., both lock to nonce=0 against a maximally-permissive
-    // target); the structural distinction is preserved in the
-    // wire-format prefix region of the κ-label, not necessarily in
-    // the 4-byte nonce field.
+    // The κ-derivation projects the typed MiningTask via the canonical
+    // hash axis; distinct prefixes produce distinct content-addresses
+    // and therefore distinct κ-derivations (in the cryptographic
+    // collision-resistance sense). Even if two prefixes happened to
+    // collide on the κ-nonce, the structural distinction would
+    // remain in the wire-format prefix region of the κ-label.
     let target = [0xffu8; 32];
     let mut labels = std::collections::HashSet::new();
     for v in 0u8..64 {
@@ -279,11 +293,10 @@ fn v_model_declarations_invariant_across_network_byte_thresholds() {
     // Static check: for representative `bits` values from each
     // network, the typed `MiningTask` partition_product layout is
     // identical, the substitution-axis triple is identical, and the
-    // verb-arena slice is identical. The structural-admission
-    // satisfaction is a runtime property of the (prefix, target)
-    // pair — not exercised here because the W32 walk under
-    // restrictive bits is computationally intractable in unit-test
-    // time. The regtest end-to-end suite (VERIFICATION.md §4)
+    // verb-arena slice is identical. Whether the κ-derivation for a
+    // given (prefix, target) admits at the boundary is a property
+    // of the typed input, not of the implementation — not exercised
+    // here. The regtest end-to-end suite (VERIFICATION.md §4)
     // exercises an actual network end-to-end.
     use uor_foundation::HostBounds;
 
@@ -396,9 +409,9 @@ fn v_constraint_site_supports_span_the_full_wire_format_header() {
     // Architecture §2.3 + IT_7d: site supports collectively cover all
     // 80 wire-format-header byte positions. Sites 0..76 are
     // template-pinned (runtime, via MiningTask's prefix factor); sites
-    // 76..80 are κ-pinned (ψ_9 resolver's W32 walk). The constraint
-    // declaration is uniform; the pinning mechanism differs per
-    // site range.
+    // 76..80 are κ-pinned (ψ_9 resolver's structural κ-derivation
+    // via the canonical hash axis). The constraint declaration is
+    // uniform; the pinning mechanism differs per site range.
     let cs = <MiningResult as ConstrainedTypeShape>::CONSTRAINTS;
     let mut sites: Vec<u32> = cs
         .iter()
@@ -432,37 +445,30 @@ fn v_prism_btc_bounds_declare_algebraic_closure_target() {
     };
 }
 
-// ─── §8. Iterative-resolution diagnostic surface ───────────────────────
+// ─── §8. ψ_9 κ-derivation diagnostic surface ──────────────────────────
 
 #[test]
-fn v_mine_outcome_carries_converged_resolution_state() {
+fn v_mine_outcome_carries_kappa_derivation_state() {
     // Architecture §4 + crate::diagnostics: on the Ok path of mine(),
-    // outcome.resolution carries the Converged verdict with the
-    // admitting nonce, free_rank=0 (all 80 MiningResult sites pinned),
-    // and iterations=admitting_nonce+1 (the count of W32 candidates
-    // ψ_9 evaluated before convergence).
-    let header = canonical_header(1, 1_700_000_000, 0x207fffff);
-    let outcome = mine(&header, Target::new(0x207fffff)).expect("permissive target admits");
+    // outcome.resolution carries free_rank = 0 (all 80 MiningResult
+    // sites pinned at the terminal ψ-stage) and derived_nonce
+    // matching the κ-derived nonce on the wire-format header.
+    let target = Target::new(0x207fffff);
+    let outcome = (0u32..32)
+        .find_map(|ts_offset| {
+            let header = canonical_header(1, 1_700_000_000_u32 + ts_offset, 0x207fffff);
+            mine(&header, target).ok()
+        })
+        .expect("permissive target admits within a small variation window");
 
-    assert!(outcome.resolution.converged(), "Converged on Ok path");
     assert_eq!(
         outcome.resolution.free_rank, 0,
-        "free_rank = 0 when all 80 sites pinned"
+        "free_rank = 0 at terminal ψ-stage convergence"
     );
-    match outcome.resolution.verdict {
-        ResolutionVerdict::Converged { admitting_nonce } => {
-            assert_eq!(
-                admitting_nonce, outcome.nonce,
-                "resolver's admitting_nonce matches the host-perspective u32"
-            );
-            assert_eq!(
-                outcome.resolution.iterations,
-                (admitting_nonce as u64) + 1,
-                "iterations = admitting_nonce + 1 (resolver visits 0..=admitting_nonce)"
-            );
-        }
-        ResolutionVerdict::Exhausted => panic!("permissive target must not Exhaust"),
-    }
+    assert_eq!(
+        outcome.resolution.derived_nonce, outcome.nonce,
+        "ψ_9's recorded κ-derivation matches the host-perspective nonce"
+    );
 }
 
 #[test]
@@ -470,8 +476,13 @@ fn v_mine_drains_thread_local_diagnostic_channel() {
     // crate::diagnostics: mine() drains the thread-local channel as
     // part of constructing MiningOutcome; a subsequent
     // take_resolution_state() returns None.
-    let header = canonical_header(1, 1_700_000_001, 0x207fffff);
-    let _ = mine(&header, Target::new(0x207fffff)).expect("admits");
+    let target = Target::new(0x207fffff);
+    let _ = (0u32..32)
+        .find_map(|ts_offset| {
+            let header = canonical_header(1, 1_700_000_000_u32 + ts_offset, 0x207fffff);
+            mine(&header, target).ok()
+        })
+        .expect("permissive target admits within a small variation window");
 
     assert!(
         take_resolution_state().is_none(),
@@ -483,8 +494,7 @@ fn v_mine_drains_thread_local_diagnostic_channel() {
 fn v_forward_records_resolution_state_for_inspection() {
     // Direct forward() callers (not going through mine()) inspect
     // the diagnostic channel via take_resolution_state(). ψ_9
-    // records state on its way out regardless of which entry-point
-    // invoked the catamorphism.
+    // records state on every invocation.
     let _ = take_resolution_state(); // drain any leftover state
     let mut prefix = [0u8; 76];
     prefix[0] = 0x55;
@@ -501,7 +511,15 @@ fn v_forward_records_resolution_state_for_inspection() {
 
     let state =
         take_resolution_state().expect("ψ_9 must have recorded resolution state for forward()");
-    assert!(state.converged(), "permissive target Converged");
-    assert_eq!(state.free_rank, 0);
-    assert!(state.admitting_nonce().is_some());
+    assert_eq!(state.free_rank, 0, "terminal ψ-stage converges");
+    // derived_nonce is whatever H(task)[..4] LE produces; just
+    // confirm it matches the wire-format header's bytes 76..80.
+    let kappa_label = _grounded.output_bytes();
+    let on_label = u32::from_le_bytes([
+        kappa_label[76],
+        kappa_label[77],
+        kappa_label[78],
+        kappa_label[79],
+    ]);
+    assert_eq!(state.derived_nonce, on_label);
 }

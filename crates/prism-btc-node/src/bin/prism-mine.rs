@@ -80,14 +80,14 @@ fn main() -> Result<()> {
         let dt = started.elapsed();
         println!(
             "[{i}/{}] mined block #{} hash={} nonce={} txs={} \
-             extranonce_attempts={} ψ_9_iterations={} ({:?})",
+             extranonce_attempts={} \u{03ba}_derived_nonce={} ({:?})",
             args.blocks,
             mined.height,
             mined.hash,
             mined.nonce,
             mined.tx_count,
             mined.extranonce_attempts,
-            mined.resolution.iterations,
+            mined.resolution.derived_nonce,
             dt
         );
     }

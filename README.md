@@ -54,11 +54,13 @@ The verb body lowers to the ψ-Term variants `Term::Nerve` (ψ_1) →
 `Term::KInvariants` (ψ_9) — the **k-invariant branch** of the ψ-pipeline.
 Foundation's catamorphism evaluates the chain end-to-end, dispatching
 each ψ-stage through prism-btc's `BitcoinResolverTuple`. The terminal
-ψ_9 resolver implements the wiki's iterative-resolution discipline
-(`iterative-resolution.md`): walks the W32 nonce ring until the
-structural admission relation lands, pins the four nonce-byte sites,
-and emits the κ-label — 80 bytes that ARE the wire-format Bitcoin
-header by construction (architecture §4, §6).
+ψ_9 resolver performs the **structural κ-derivation**: it projects the
+typed `MiningTask` to a 32-byte content-address via the canonical hash
+axis and pins the four nonce-byte sites (positions 76..80) to the
+leading four bytes in canonical Bitcoin little-endian. One σ-projection
+per `forward()` — deterministic in the typed input, no enumeration.
+The emitted 80 bytes ARE the wire-format Bitcoin header by construction
+(architecture §4, §6).
 
 ## The mining model
 
@@ -109,35 +111,38 @@ the typed inference admits; its `output_bytes()` carry the label.
 
 `BitcoinMiningModel::forward(task)` returns a `Grounded<MiningResult>`
 whose `output_bytes()` are exactly 80 bytes — the wire-format Bitcoin
-header. The host-boundary entry point `mine(header, target)` only
-returns `Ok(MiningOutcome)` when the κ-derived header's SHA-256d digest
-genuinely satisfies the host-supplied `target` — the ψ_9 resolver's
-convergence guarantee. The W32 ring walked to exhaustion without
-admission surfaces as `Err(MiningFailure::PipelineFailure)`, carrying
-the canonical `proof:InhabitanceImpossibilityWitness`; the host boundary
-varies the template (extranonce roll → distinct `MiningTask` → fresh
-W32 ring) and retries.
+header. `forward()` always succeeds for well-formed inputs (the
+ψ-pipeline is total over the typed input surface). The host-boundary
+entry point `mine(header, target)` enforces the admission relation
+`σ(header) ≤ target` on the κ-derived header and returns
+`Ok(MiningOutcome)` only when admission holds. When the κ-candidate
+doesn't satisfy the target, `mine()` returns
+`Err(MiningFailure::DidNotAdmit)`; the host boundary varies the
+template (extranonce roll → distinct `MiningTask` → distinct
+κ-derivation) and retries.
 
-**Valid input either produces a valid mined-block header or surfaces an
-`InhabitanceImpossibilityWitness` for the host to handle.** `mine()`
-never returns a non-admitting outcome dressed as success.
+**Valid input either produces a valid mined-block header or surfaces
+`DidNotAdmit` for the host to handle.** `mine()` never returns a
+non-admitting outcome dressed as success — the boundary check is the
+fail-closed gate.
 
-prism-btc's transform is structural (the ψ-pipeline + the resolver's
-iterative-resolution loop); a traditional miner's transform is
-algorithmic (enumerate nonces, double-SHA-256, compare to target). The
-two paths arrive at byte-for-byte equivalent wire-format output because
-both are determined by the same wire-format protocol — prism-btc
-declares the protocol structurally; the traditional miner discovers it
-by enumeration. The label is the same artifact.
+prism-btc's transform is structural: the typed-iso surface maps
+`MiningTask → wire-format header` deterministically via the ψ-pipeline;
+the host boundary checks admission at the σ-projection. There is no
+inner search loop, no nonce enumeration, no "hashrate" metric. The
+wire-format output is byte-for-byte what Bitcoin Core's `submitblock`
+accepts because both reach the same canonical serialization — prism-btc
+declares the structure; the wire format is the same artifact.
 
 **Network-invariant.** Same `BitcoinMiningModel`, same ψ-pipeline verb
-body, same `BitcoinResolverTuple` across regtest, signet, testnet,
-testnet4, and mainnet. The network-dependent value is the runtime byte
-threshold from the template's `Bits` field; the host boundary
-(`prism-btc-node`) iterates over template-derived `MiningTask`
-variations (extranonce roll) when the ψ-pipeline returns the
-`InhabitanceImpossibilityWitness`. From outside, `forward()` is **one
-structural inference per `MiningTask`**.
+body, same `BitcoinResolverTuple`, same κ-derivation across regtest,
+signet, testnet, testnet4, and mainnet. The network-dependent value is
+the byte threshold from the template's `Bits` field; the host boundary
+(`prism-btc-node`) varies template-derived `MiningTask` inputs when
+`mine()` returns `DidNotAdmit`. From outside, `forward()` is **one
+structural inference per `MiningTask`** at constant cost — the
+network-dependent quantity is the number of template variations the
+host attempts, not the cost per attempt.
 
 ## Algebraic-closure encoding
 
@@ -151,15 +156,13 @@ prefix bytes); sites 76..80 are κ-pinned (ψ_9 resolver's W32 walk
 materializes the admitting nonce bytes). Both mechanisms terminate at
 the same fixed point: 80 sites pinned ⇒ `FreeRank = 0` ⇒ convergence.
 
-## Iterative-resolution diagnostic surface
+## Diagnostic surface
 
-The wiki's iterative-resolution discipline names a per-resolver
-observability channel: `FreeRank` (unpinned sites at exit),
-`iterations` (W32 candidates evaluated), and the terminal verdict
-(`Converged { admitting_nonce }` or `Exhausted`, the canonical
-`proof:InhabitanceImpossibilityWitness`). prism-btc exposes this via
-[`ResolutionState`](crates/prism-btc/src/diagnostics.rs) on
-`MiningOutcome.resolution` (the `Ok` path) and via the public
+ψ_9 records a [`ResolutionState`](crates/prism-btc/src/diagnostics.rs)
+for every `forward()` call — `free_rank` (always 0 at the terminal
+ψ-stage's convergence) plus `derived_nonce` (the κ-derivation that
+pinned the four nonce-byte sites). Available via
+`MiningOutcome.resolution` (the `Ok` path) and the public
 `take_resolution_state()` function (the `Err` path and direct
 `forward()` callers). `prism-btc-node`'s `MinedBlock` summary
 includes the resolution state plus the host-boundary

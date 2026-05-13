@@ -8,28 +8,28 @@
 //!    catamorphism. The catamorphism dispatches each resolver-bound
 //!    ψ-Term through [`crate::resolvers::BitcoinResolverTuple`].
 //! 3. The terminal ψ_9 resolver
-//!    ([`crate::resolvers::BitcoinKInvariantResolver`]) implements the
-//!    framework's iterative-resolution discipline (wiki
-//!    `iterative-resolution.md`): walks the W32 nonce ring until the
-//!    structural admission relation lands, pins the four nonce-byte
-//!    sites, and emits the **κ-label** — 80 bytes that ARE the
-//!    wire-format Bitcoin header by construction.
-//! 4. [`mine`] returns [`MiningOutcome`] on success. The resolver
-//!    guarantees admission on `Ok`; from the host's perspective
-//!    `mine()` is one structural inference per `(prefix, target)`.
+//!    ([`crate::resolvers::BitcoinKInvariantResolver`]) structurally
+//!    κ-derives the four nonce-byte sites from the typed `MiningTask`
+//!    via the canonical hash axis (one σ-projection — deterministic,
+//!    no enumeration). The 80-byte wire-format Bitcoin header is the
+//!    κ-label.
+//! 4. [`mine`] enforces the **admission relation** at the host
+//!    boundary: it recomputes the σ-projection on the wire-format
+//!    header and checks `σ(header) ≤ target`. If admission holds,
+//!    [`mine`] returns [`MiningOutcome`]; otherwise it returns
+//!    [`MiningFailure::DidNotAdmit`] and the host (architecture §7)
+//!    varies the template-derived `MiningTask` and retries.
 //!
 //! **Fail-closed contract.** `mine()` returns `Ok(MiningOutcome)` only
 //! when the κ-derived wire-format header satisfies the host-supplied
-//! `target`. When the W32 ring is walked end-to-end without
-//! admission, the resolver returns the canonical
-//! `InhabitanceImpossibilityWitness` (surfaced through
-//! [`MiningFailure::PipelineFailure`]); the host boundary varies the
-//! template-derived `MiningTask` (extranonce roll) and retries.
+//! `target`. The ψ-pipeline produces one structural candidate per
+//! `MiningTask`; the admission relation is the boundary's
+//! responsibility, not the pipeline's.
 
 use uor_foundation::pipeline::PrismModel;
 use uor_foundation::DefaultHostTypes;
 
-use crate::diagnostics::{take_resolution_state, ResolutionState, ResolutionVerdict};
+use crate::diagnostics::{take_resolution_state, ResolutionState};
 use crate::domain::{BlockHeader, MiningTag, MiningWitness, Target, TriadicCoords};
 use crate::model::{BitcoinMiningModel, MiningTask};
 use crate::ops::sha256::sha256d_display;
@@ -45,32 +45,32 @@ pub struct MiningOutcome {
     /// Foundation-sealed `Grounded<MiningResult, MiningTag>`; its
     /// `output_bytes()` are the 80-byte wire-format Bitcoin header.
     pub witness: MiningWitness,
-    /// The admitting nonce (canonical Bitcoin LE, bytes 76..80 of the
+    /// The κ-derived nonce (canonical Bitcoin LE, bytes 76..80 of the
     /// κ-label).
     pub nonce: u32,
     /// SHA-256d of the wire-format header in display order.
     pub digest: [u8; 32],
     /// Digest's triadic coordinates.
     pub coords: TriadicCoords,
-    /// Diagnostic state from the ψ_9 iterative-resolution loop
-    /// (wiki `iterative-resolution.md`). On the `Ok` path
-    /// `resolution.verdict` is always
-    /// [`ResolutionVerdict::Converged`] (the resolver pinned the
-    /// four nonce-byte sites); use `resolution.iterations` to
-    /// inspect how many W32 candidates were evaluated before
-    /// convergence. See [`crate::diagnostics`].
+    /// Diagnostic state from ψ_9's structural κ-derivation. See
+    /// [`crate::diagnostics`].
     pub resolution: ResolutionState,
 }
 
 /// Failure modes from [`mine`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MiningFailure {
-    /// Foundation's catamorphism or a resolver returned a shape
-    /// violation. The canonical instance for prism-btc is the
-    /// `NONCE_FIBER_EXHAUSTED` impossibility-witness the ψ_9
-    /// resolver emits when the W32 ring is walked end-to-end without
-    /// admission — the host boundary varies the template-derived
-    /// `MiningTask` (extranonce roll) and retries.
+    /// The ψ-pipeline produced a wire-format header candidate via
+    /// ψ_9's structural κ-derivation, but its σ-projection did not
+    /// satisfy the host-supplied target. The host boundary
+    /// (architecture §7) varies the template-derived `MiningTask`
+    /// (extranonce roll → distinct prefix → distinct κ-derivation)
+    /// and retries.
+    DidNotAdmit,
+    /// Defensive: foundation's catamorphism or a resolver returned a
+    /// shape violation. Unreachable for well-formed `MiningTask`
+    /// inputs — the ψ-pipeline is total over the typed input
+    /// surface.
     PipelineFailure,
 }
 
@@ -78,21 +78,18 @@ pub enum MiningFailure {
 /// inference per `(prefix, target)`.
 ///
 /// Builds a [`MiningTask`] from `(header, target)`, invokes
-/// `BitcoinMiningModel::forward`, and returns the [`MiningOutcome`]
-/// whose witness's `output_bytes()` are the wire-format Bitcoin
-/// header. The resolver chain's iterative-resolution loop (wiki
-/// `iterative-resolution.md`) walks the W32 nonce ring internally and
-/// returns on first admission; the resolved nonce is the structurally-
-/// derived solution to the admission constraint set, not the result of
-/// host-boundary enumeration.
+/// `BitcoinMiningModel::forward` (which always produces a κ-label
+/// candidate for well-formed inputs), and enforces the admission
+/// relation `σ(header) ≤ target` at the host boundary.
 ///
 /// # Errors
 ///
-/// Returns [`MiningFailure::PipelineFailure`] when the catamorphism
-/// or a resolver returns a shape violation — canonically, the ψ_9
-/// resolver's `InhabitanceImpossibilityWitness` after walking the
-/// full W32 ring without admission for the host-supplied `(prefix,
-/// target)`.
+/// - [`MiningFailure::DidNotAdmit`] — the κ-derived wire-format
+///   header's σ-projection did not satisfy `target`. The structural
+///   admission relation has no inhabitant for this typed input under
+///   ψ_9's κ-derivation; the host varies the template and retries.
+/// - [`MiningFailure::PipelineFailure`] — defensive variant for
+///   substrate-level shape violations; unreachable in normal flow.
 pub fn mine(header: &BlockHeader, target: Target) -> Result<MiningOutcome, MiningFailure> {
     let prefix = crate::ops::header::serialize_prefix(header);
     let target_bytes = target.to_bytes();
@@ -124,16 +121,20 @@ pub fn mine(header: &BlockHeader, target: Target) -> Result<MiningOutcome, Minin
     header_array.copy_from_slice(header_bytes);
     let digest = sha256d_display(&header_array);
 
-    // Drain the diagnostic channel ψ_9 wrote on its way out. On the
-    // Ok path we expect a Converged state matching the resolved
-    // nonce; under `no_std` the channel does not exist and we
-    // reconstruct equivalent state from the outcome.
+    // Host-boundary admission relation: ψ_9 produced this κ-candidate
+    // structurally; the boundary checks whether σ(header) ≤ target.
+    // Fail-closed: mine() returns Ok only when admission genuinely
+    // holds.
+    if !target.is_satisfied_by_bytes(&digest) {
+        return Err(MiningFailure::DidNotAdmit);
+    }
+
+    // Drain the diagnostic channel ψ_9 wrote on its way out. Under
+    // `no_std` the channel does not exist; reconstruct from the
+    // outcome.
     let resolution = take_resolution_state().unwrap_or(ResolutionState {
         free_rank: 0,
-        iterations: (nonce as u64) + 1,
-        verdict: ResolutionVerdict::Converged {
-            admitting_nonce: nonce,
-        },
+        derived_nonce: nonce,
     });
 
     Ok(MiningOutcome {
