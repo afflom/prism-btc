@@ -744,12 +744,14 @@ PRF cost.
 surface:
 
 ```rust
-pub struct ParityCommitment {
-    pub omega: [u8; 32],
-    pub expected: u32,
+pub enum Predicate {
+    Parity              { omega: [u8; 32], expected: u32 },
+    StratumEq           { k: u32 },
+    PAdicEq             { p: u64, k: u32 },
+    UltrametricCloseTo  { reference: [u8; 32], k: u32 },
 }
 
-pub struct MiningCommitment { /* Vec<ParityCommitment> */ }
+pub struct MiningCommitment { /* Vec<Predicate> */ }
 
 pub fn mine_with_commitment(
     header: &BlockHeader,
@@ -758,21 +760,55 @@ pub fn mine_with_commitment(
 ) -> Result<MiningOutcome, MiningFailure>;
 ```
 
-- [`ParityCommitment`] is the elementary 1-bit predicate: a
-  Walsh–Hadamard parity at frequency `ω` with the given expected
-  value. Per ANALYSIS.md §4.1 U1, each `ParityCommitment` has
-  independent satisfaction probability 1/2 on uniformly random
-  digests.
-- [`MiningCommitment`] is a runtime Conjunction of K
-  `ParityCommitment` instances. Builder-style:
-  `MiningCommitment::empty().add_parity(ω_1, e_1).add_parity(ω_2,
-  e_2)…`. The substrate's [`uor_foundation::pipeline::ConstraintRef::Conjunction`]
-  variant is the compile-time analogue for fixed K declared at
-  type-definition time.
-- [`mine_with_commitment`] wraps [`mine`] with the additional
-  boundary check `commitment.evaluate(&digest)`. The fail-closed
-  contract holds across both axes: `Ok(MiningOutcome)` is returned
-  only when both admission AND every commitment predicate hold.
+The [`Predicate`] enum names the typed predicate library —
+each variant is one of the UOR observables that the cryptanalysis
+battery (ANALYSIS.md §3) confirmed admission-orthogonal under PRF:
+
+| Variant | Predicate condition | PRF probability | Bandwidth (bits) |
+|---|---|---|---|
+| `Parity { ω, e }` | `walsh_hadamard_parity_at(d, ω) == e` | `1/2` | `1` |
+| `StratumEq { k }` | `stratum(d) == k` | `2⁻⁽ᵏ⁺¹⁾` | `k + 1` |
+| `PAdicEq { p, k }` | `p_adic_valuation(d, p) == k` | `(p − 1)/p^(k+1)` | `(k+1)·log₂p − log₂(p−1)` |
+| `UltrametricCloseTo { r, k }` | `ultrametric_valuation(d, &r) ≥ k` | `2⁻ᵏ` | `k` |
+
+Each variant exposes `Predicate::evaluate(digest) -> bool` and
+`Predicate::bandwidth_bits() -> f64`. The variants span
+2-adic / 2-adic-shifted / p-adic / ultrametric observables — every
+elementary observable on the content-addressed manifold the
+analysis battery covered.
+
+[`MiningCommitment`] is a runtime Conjunction of K `Predicate`
+instances. Typed builders:
+
+```rust
+let commitment = MiningCommitment::empty()
+    .add_parity(omega, 1)                 // +1 bit
+    .add_stratum_eq(3)                    // +4 bits
+    .add_p_adic_eq(3, 0)                  // +~0.585 bits
+    .add_ultrametric_close_to(reference, 7); // +7 bits
+// commitment.bandwidth_bits() ≈ 12.585
+```
+
+The substrate's [`uor_foundation::pipeline::ConstraintRef::Conjunction`]
+variant is the compile-time analogue for fixed commitments declared
+at type-definition time. [`mine_with_commitment`] wraps [`mine`]
+with the additional boundary check `commitment.evaluate(&digest)`.
+The fail-closed contract holds across both axes:
+`Ok(MiningOutcome)` is returned only when both admission AND every
+commitment predicate hold.
+
+**Bandwidth-additivity (U6).** `MiningCommitment::bandwidth_bits()`
+returns the sum of per-predicate contributions. Per
+[`PrismBtc.CommitmentChannel.bandwidth_append`](../prism-btc-lean/PrismBtc/CommitmentChannel.lean),
+the Conjunction is monoidal under list-concatenation: bandwidth and
+evaluation distribute over commitment concatenation. The
+probabilistic content of U6 (PRF cost = `α⁻¹ · 2^bandwidth_bits`)
+holds when the predicates are **jointly independent** in the
+random-oracle sense; pairing predicates that touch the same
+manifold region (e.g. `StratumEq{k=2}` ∧ `UltrametricCloseTo{·, 2}`)
+double-counts constraints and the additivity is only an upper bound.
+The Lean theorem covers the algebraic-additivity claim regardless
+of independence.
 
 ### 14.3 Empirical scaling
 

@@ -25,8 +25,11 @@
 //!   surface for ψ_9's structural κ-derivation
 //!   ([`diagnostics`] module).
 //! - [`mine_with_commitment`] / [`MiningCommitment`] /
-//!   [`ParityCommitment`] — UOR-optimal mining: typed Conjunction
-//!   commitment on the κ-label (architecture §14).
+//!   [`Predicate`] — UOR-optimal mining: typed Conjunction
+//!   commitment on the κ-label (architecture §14). The
+//!   [`Predicate`] enum covers Walsh-Hadamard parity, stratum
+//!   equality, p-adic equality, and ultrametric closeness — each a
+//!   typed observable on the content-addressed manifold.
 //! - [`ultrametric_valuation`] / [`walsh_hadamard_parity_at`] /
 //!   [`p_adic_valuation`] — UOR observable surface on the content-
 //!   addressed manifold (ANALYSIS.md §1.3).
@@ -55,7 +58,7 @@ pub use domain::{
 };
 pub use model::{BitcoinMiningModel, BitcoinMiningRoute, MiningResult, MiningTask, TemplatePrefix};
 pub use pipeline::{
-    mine, mine_with_commitment, MiningCommitment, MiningFailure, MiningOutcome, ParityCommitment,
+    mine, mine_with_commitment, MiningCommitment, MiningFailure, MiningOutcome, Predicate,
 };
 pub use resolvers::{
     BitcoinChainComplexResolver, BitcoinCochainComplexResolver, BitcoinCohomologyGroupResolver,

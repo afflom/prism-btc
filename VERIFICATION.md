@@ -12,7 +12,7 @@ artifact in the repo.
 ## §1 Architectural conformance — `cargo test --release`
 
 The verb arena, model declarations, and substrate-bindings carry
-compile-time invariants the test surface re-asserts at runtime. 44
+compile-time invariants the test surface re-asserts at runtime. 47
 unit tests across the prism-btc crate's modules:
 
 - **`crates/prism-btc/src/verbs.rs::tests`** (6 tests) — the verb
@@ -53,11 +53,16 @@ unit tests across the prism-btc crate's modules:
   against rust-bitcoin reference; canonical 80-byte header
   serialization round-trip.
 
-- **`crates/prism-btc/src/pipeline.rs::tests`** (5 tests) — the
+- **`crates/prism-btc/src/pipeline.rs::tests`** (8 tests) — the
   UOR-optimal mining surface (architecture §14): empty commitment
-  agrees with bare `mine()`; `ParityCommitment` reads single-bit
-  values correctly; `MiningCommitment::bandwidth` counts predicates;
-  Conjunction'd evaluation is the AND of per-predicate evaluations;
+  agrees with bare `mine()`; `Predicate::Parity` reads a single bit
+  with bandwidth 1; `Predicate::StratumEq{k}` matches the 2-adic
+  stratum with bandwidth `k+1`; `Predicate::PAdicEq{p, k}` matches
+  the p-adic valuation with bandwidth `(k+1)·log₂(p) − log₂(p−1)`;
+  `Predicate::UltrametricCloseTo{r, k}` matches the 2-adic distance
+  with bandwidth `k`; `MiningCommitment::bandwidth_bits` is
+  additive over mixed predicates (U6); Conjunction'd evaluation is
+  the AND of per-predicate evaluations across mixed types;
   `mine_with_commitment` admits at a permissive target with the
   empty commitment.
 
@@ -106,6 +111,7 @@ Lean 4 proofs of foundational algebraic identities prism-btc depends on:
 | `ShapeConstraint.lean` | Target satisfaction monotonicity; leading-zeros → stratum bound | proved |
 | `FreeRankProtocol.lean` | FreeRank decreases monotonically under refinement | proved |
 | `ConvergenceProtocol.lean` | σ-projection identity + ψ-vs-σ distinction (load-bearing for ADR-035) | proved |
+| `CommitmentChannel.lean` | U6 Bandwidth-Additivity: Conjunction is monoidal over commitment concatenation; bandwidth and evaluation distribute over append (architecture §14) | proved |
 
 Run: `just verify` (= `cd prism-btc-lean && lake update && lake build`).
 Build is green against `leanprover/lean4:v4.16.0`.
