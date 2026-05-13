@@ -485,7 +485,7 @@ pub use resolvers::BitcoinResolverTuple;
 pub use pipeline::{mine, MiningOutcome, MiningFailure};
 
 // UOR-optimal mining: typed Conjunction commitment (architecture §14)
-pub use pipeline::{mine_with_commitment, MiningCommitment, ParityCommitment};
+pub use pipeline::{mine_with_commitment, MiningCommitment, Predicate};
 
 // Iterative-resolution diagnostic surface
 pub use diagnostics::{ResolutionState, take_resolution_state};
@@ -511,12 +511,14 @@ that didn't admit.
 
 `mine_with_commitment(header, target, &commitment) → Result<MiningOutcome, MiningFailure>`
 is the UOR-optimal mining entry point (architecture §14): the
-host-boundary admission gate is augmented with a Conjunction of K
-typed predicates (parity commitments at chosen Walsh–Hadamard
-frequencies). Returns `Ok` iff the κ-label satisfies both admission
-and every commitment predicate; cost grows as `2^K × α^-1` template
-variations per ANALYSIS.md §5.5 (U6 Bandwidth-Additivity), with K
-bits of structural commitment encoded per κ-label.
+host-boundary admission gate is augmented with a Conjunction of
+typed [`Predicate`] instances spanning the UOR observable library
+(Walsh–Hadamard parity, 2-adic stratum equality, p-adic equality,
+ultrametric closeness). Returns `Ok` iff the κ-label satisfies both
+admission and every commitment predicate; expected cost grows as
+`α^-1 × 2^B` template variations per ANALYSIS.md §5.5 (U6
+Bandwidth-Additivity), where `B = commitment.bandwidth_bits()` is
+the sum of per-predicate bandwidth contributions.
 
 ## 9. Substrate surface
 
