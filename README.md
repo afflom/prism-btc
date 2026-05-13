@@ -117,9 +117,16 @@ entry point `mine(header, target)` enforces the admission relation
 `σ(header) ≤ target` on the κ-derived header and returns
 `Ok(MiningOutcome)` only when admission holds. When the κ-candidate
 doesn't satisfy the target, `mine()` returns
-`Err(MiningFailure::DidNotAdmit)`; the host boundary varies the
-template (extranonce roll → distinct `MiningTask` → distinct
-κ-derivation) and retries.
+`Err(MiningFailure::DidNotAdmit { observables, nonce, digest })`; the
+host boundary varies the template (extranonce roll → distinct
+`MiningTask` → distinct κ-derivation) and retries, folding each
+attempt's typed property landscape into a `CampaignStats` aggregate.
+
+**The receiver-side typed lens (`KappaObservables`) is total** —
+present on `Ok(MiningOutcome)` and on `DidNotAdmit` alike. Every
+ψ-pipeline inference exposes its candidate's UOR property landscape,
+giving the host operator typed visibility into the search at session
+granularity.
 
 **Valid input either produces a valid mined-block header or surfaces
 `DidNotAdmit` for the host to handle.** `mine()` never returns a
@@ -243,10 +250,13 @@ the commitment's invariants; the Lean theorem
 Every mined block is wire-format-valid for `submitblock` *and*
 commits to `B` bits of application-declared structural information
 at proportional PRF cost. The receiver-side typed lens is
-`KappaObservables` (carried on every `MiningOutcome`) and
-`ExtendedObservables<N_PAR, N_REF>` for application-specific
-parities and reference points. Reproducible via `cargo run --release
---example optimal_mining`.
+`KappaObservables` — **total**, carried on every `MiningOutcome` and
+every `MiningFailure::DidNotAdmit` — and `ExtendedObservables<N_PAR,
+N_REF>` for application-specific parities and reference points.
+Session-level aggregation lives in `CampaignStats` (zero-allocation
+histograms folded across every attempt) — the operator's typed window
+onto the search at mainnet scale. Reproducible via `cargo run
+--release --example optimal_mining`.
 
 ## Real-network mining (`prism-btc-node`)
 

@@ -320,7 +320,11 @@ inside the ψ-pipeline**; it is the host boundary's responsibility
 (architecture §6 + §7). [`crate::pipeline::mine`] recomputes the
 σ-projection on the emitted wire-format header and returns
 `Ok(MiningOutcome)` when admission holds or
-`Err(MiningFailure::DidNotAdmit)` when it does not. The host
+`Err(MiningFailure::DidNotAdmit { observables, nonce, digest })` when
+it does not. The receiver-side typed lens is **total** — every
+inference exposes the candidate's typed property landscape regardless
+of admission, so the host loop can fold each attempt into a
+[`crate::campaign::CampaignStats`] aggregate observatory. The host
 boundary varies the template-derived `MiningTask` (extranonce roll
 → distinct prefix → distinct κ-derivation) until a κ-candidate
 admits.
@@ -379,11 +383,15 @@ the κ-derived wire-format header and checks `σ(header) ≤ target`.
 It returns:
 
 - `Ok(MiningOutcome)` — admission holds; the wire-format header is
-  a valid mined block.
-- `Err(MiningFailure::DidNotAdmit)` — the κ-candidate's σ-projection
-  did not satisfy `target`. The host (architecture §7) varies the
-  template-derived `MiningTask` (extranonce roll → distinct prefix
-  → distinct κ-derivation) and retries.
+  a valid mined block. Carries `observables: KappaObservables`.
+- `Err(MiningFailure::DidNotAdmit { observables, nonce, digest })` —
+  the κ-candidate's σ-projection did not satisfy `target`. The
+  candidate's typed property landscape is exposed in the payload;
+  the receiver-side lens is total (not admission-only). The host
+  (architecture §7) varies the template-derived `MiningTask`
+  (extranonce roll → distinct prefix → distinct κ-derivation) and
+  retries, folding each attempt's observables into a
+  `CampaignStats` aggregate.
 
 **`mine()` never returns a `MiningOutcome` whose header does not
 admit** — the boundary check is the fail-closed gate.
@@ -440,12 +448,15 @@ variation loop** that iterates `MiningTask` inputs across distinct
    timestamp, bits, decoded_target)`.
 6. Call `prism_btc::mine(header, target)`. One structural inference:
    ψ_9 κ-derives a candidate; the boundary admission check decides.
-   - `Ok(outcome)` ⇒ assemble the wire-format Block, submit via
-     `submitblock`, return summary.
-   - `Err(MiningFailure::DidNotAdmit)` ⇒ the κ-derivation for this
-     `(prefix, target)` did not satisfy `target`. Increment
-     `extranonce`, goto step 3. The wrapped extranonce (after
-     `~10¹⁹` variations) signals exhaustion — the chain has
+   - `Ok(outcome)` ⇒ fold `outcome` into the session's
+     `CampaignStats`, assemble the wire-format Block, submit via
+     `submitblock`, return summary (with the campaign aggregate).
+   - `Err(MiningFailure::DidNotAdmit { observables, digest, .. })` ⇒
+     the κ-derivation for this `(prefix, target)` did not satisfy
+     `target`. Fold the candidate's observables into the campaign
+     (the receiver-side lens is total), then increment `extranonce`
+     and goto step 3. The wrapped extranonce (after `~10¹⁹`
+     variations) signals exhaustion — the chain has
      typically advanced first, so the caller fetches a new template.
 
 The boundary's outer loop is the wire-format adaptation — coinbase
@@ -488,6 +499,11 @@ pub use pipeline::{mine, MiningOutcome, MiningFailure};
 pub use pipeline::{mine_with, Predicate, Support};
 pub use commitment::{TypedCommitment, EmptyCommitment, PayloadCommitment};
 pub use observables::{KappaObservables, ExtendedObservables, CANONICAL_PRIMES};
+
+// Session-level aggregate observatory — receiver-side typed lens at scale.
+// Folds every per-attempt KappaObservables (admitting or not) into a
+// stack-resident aggregate. See CONFORMANCE.md §CM.
+pub use campaign::{CampaignStats, STRATUM_BINS, PADIC_BINS};
 
 // Iterative-resolution diagnostic surface
 pub use diagnostics::{ResolutionState, take_resolution_state};
@@ -958,9 +974,14 @@ pub struct ExtendedObservables<const N_PAR: usize, const N_REF: usize> {
 }
 ```
 
-Every `MiningOutcome` carries a `KappaObservables` decoded from the
-produced κ-label — the canonical UOR property landscape is always
-present, always computed at zero overhead (no `Vec`, stack-resident).
+**The lens is total.** Every `MiningOutcome` carries a
+`KappaObservables` decoded from the produced κ-label, AND every
+`MiningFailure::DidNotAdmit { observables, nonce, digest }` carries
+the candidate's `KappaObservables` too. Every ψ-pipeline inference
+exposes its candidate's typed property landscape regardless of
+whether the candidate admits. Always computed at zero overhead
+(no `Vec`, stack-resident).
+
 Applications with custom observable sets use `ExtendedObservables`
 to capture parities at chosen ω-frequencies and ultrametric distances
 to chosen reference points; sizes are const generics, so all the
@@ -969,11 +990,20 @@ the optimizer. The round-trip identity `pred.evaluate(d) ==
 ExtendedObservables::from_digest(d, ωs, refs).satisfies(&pred, d)` is
 pinned by a unit test.
 
+**Session-level aggregate observatory.** [`CampaignStats`] folds
+every per-attempt `KappaObservables` (admitting or not) into a
+stack-resident aggregate — stratum / spectrum / p-adic histograms,
+empirical α, best-candidate-so-far. `O(1)` per recorded attempt; no
+heap. At mainnet's `α ≈ 2⁻⁷⁷` this is what makes the search legible:
+the operator gets typed visibility into a session that would
+otherwise be opaque (CONFORMANCE.md §CM-3, §CM-5).
+
 The Lean correspondence: `KappaObservables` and `ExtendedObservables`
 are the *receiver-side* typed lens to the *sender-side*
 [`TypedCommitment`] surface — together they realize the sender ↔
 receiver duality of prism's typed information channel
-(ANALYSIS.md §5).
+(ANALYSIS.md §5). `CampaignStats` lifts the per-attempt duality to
+session granularity.
 
 ### 14.5 Pareto-optimality and the limits of UOR
 
