@@ -1,12 +1,14 @@
 # prism-btc — Verification & Validation
 
 > **Scope.** This document records what prism-btc verifies and how.
-> The V&V suite is reproducible via `just vv` across five axes:
+> The V&V suite is reproducible via `just vv` across six axes:
 > architecture (fmt + clippy --all-targets + unit + integration
-> tests), the dedicated V&V test module, rustdoc (broken intra-doc
-> links denied), Lean proofs, and a regtest end-to-end run.
+> tests), the dedicated V&V test module, the conformance suite
+> (cost-model scaling — see [`CONFORMANCE.md`](CONFORMANCE.md)),
+> rustdoc (broken intra-doc links denied), Lean proofs, and a regtest
+> end-to-end run.
 
-prism-btc's V&V covers five axes. Each axis has a concrete reproducible
+prism-btc's V&V covers six axes. Each axis has a concrete reproducible
 artifact in the repo.
 
 ## §1 Architectural conformance — `cargo test --release`
@@ -141,7 +143,27 @@ per-test rationale.
 
 Run: `cargo test --release -p prism-btc --test verification`.
 
-## §3 Formal proofs — `prism-btc-lean/`
+## §3 Conformance suite — `crates/prism-btc/tests/conformance.rs`
+
+13 conformance tests validating that prism's zero-cost runtime model
+scales arbitrarily over K (commitment bandwidth) and α (admission
+probability). See [`CONFORMANCE.md`](CONFORMANCE.md) for the
+normative per-invariant statements; tests are ID'd against it.
+
+| Class | Count | What it asserts |
+|---|---|---|
+| **CS** (structural) | 6 | No `Vec<Predicate>` / `dyn TypedCommitment` / `Box<dyn …>` / legacy `MiningCommitment`-era identifiers in `src/`; `TypedCommitment: Copy` enforced; `Predicate` enum fixed at four variants; `MiningOutcome.observables` always present. |
+| **CD** (dynamic) | 3 | `mine_with(EmptyCommitment) ≡ mine` byte-for-byte; `PayloadCommitment<K>` round-trips at K ∈ {0,1,2,4,8}; `MiningOutcome.observables` agrees with the per-primitive `TriadicCoords::from_hash` / `p_adic_valuation` computation. |
+| **CP** (probabilistic scaling) | 3 | `α⁻¹ × 2^K` cost identity holds within ±30% (≈4σ at N=200) across (a) K-sweep over four decades [0..12] at fixed α, (b) α-sweep over four decades [2⁻¹..2⁻¹²] at fixed K=2, (c) compound K × α decompositions of the same product. |
+| **CN** + **CL** | (cross-ref) | Network-invariance (CN-1…4) cross-referenced to V&V §2 + host-loop §4; Lean-formal (CL-1…4) cross-referenced to §3 below. |
+
+Plus 1 negative-conformance witness (`MiningFailure` has exactly two
+variants and carries no dynamic payload).
+
+Run: `just conformance` (or `cargo test --release -p prism-btc
+--test conformance`). Wall-clock ≈ 3 seconds at the calibrated N=200.
+
+## §4 Formal proofs — `prism-btc-lean/`
 
 Lean 4 proofs of foundational algebraic identities prism-btc depends on:
 
@@ -158,7 +180,7 @@ Lean 4 proofs of foundational algebraic identities prism-btc depends on:
 Run: `just verify` (= `cd prism-btc-lean && lake update && lake build`).
 Build is green against `leanprover/lean4:v4.16.0`.
 
-## §4 Production host loop — `crates/prism-btc-node/`
+## §5 Production host loop — `crates/prism-btc-node/`
 
 **Host-loop unit tests** (`crates/prism-btc-node/src/lib.rs::tests`, 4
 tests) — pin the extranonce-roll invariants without requiring

@@ -50,17 +50,24 @@ vv:
     just lint
     echo "── §2 prism-btc unit + integration + V&V tests (release) ────"
     cargo test --workspace --release
-    echo "── §3 rustdoc (broken-intra-doc-links = deny) ───────────────"
+    echo "── §3 conformance (CONFORMANCE.md) ──────────────────────────"
+    just conformance
+    echo "── §4 rustdoc (broken-intra-doc-links = deny) ───────────────"
     just doc-check
-    echo "── §4 Lean proofs ──────────────────────────────────────────"
+    echo "── §5 Lean proofs ──────────────────────────────────────────"
     just verify
-    echo "── §5 regtest end-to-end (skipped if PRISM_RPC_URL unset) ──"
+    echo "── §6 regtest end-to-end (skipped if PRISM_RPC_URL unset) ──"
     if [ -n "${PRISM_RPC_URL:-}" ] && [ -n "${PRISM_PAYOUT:-}" ]; then
         cargo test -p prism-btc-node --release -- --ignored --nocapture
     else
         echo "    SKIPPED: set PRISM_RPC_URL, PRISM_RPC_USER, PRISM_RPC_PASS, PRISM_PAYOUT to run"
     fi
     echo "── V&V complete ─────────────────────────────────────────────"
+
+# Conformance suite — validates that the zero-cost runtime model scales
+# arbitrarily over K and α. See CONFORMANCE.md.
+conformance:
+    cargo test -p prism-btc --release --test conformance -- --nocapture
 
 # Fast CI (excludes Lean and wasm-pack — run separately)
 ci:
