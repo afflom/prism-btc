@@ -226,6 +226,16 @@ autocorrelation-flatness, **U6 bandwidth-additivity**), a proposed
 **UOR Cryptanalysis Battery** as a substrate primitive, a bridge to
 traditional cryptanalysis, and ADR-style framework proposals.
 
+[ARCHITECTURE.md §14](ARCHITECTURE.md) — **UOR-optimal mining**.
+The cryptanalysis identifies the Pareto frontier
+`cost(K) = 2^K × α^-1`; prism-btc realizes it via
+`mine_with_commitment(header, target, commitment)`, the typed
+boundary surface that Conjunction's K parity predicates onto
+admission. Every mined block is wire-format-valid for `submitblock`
+*and* commits to K bits of application-declared structural
+information at proportional PRF cost. Reproducible via
+`cargo run --release --example optimal_mining`.
+
 ## Real-network mining (`prism-btc-node`)
 
 ```bash

@@ -48,7 +48,9 @@ pub use domain::{
     BlockHeader, MerkleRoot, MiningTag, MiningWitness, Target, Timestamp, TriadicCoords, Version,
 };
 pub use model::{BitcoinMiningModel, BitcoinMiningRoute, MiningResult, MiningTask, TemplatePrefix};
-pub use pipeline::{mine, MiningFailure, MiningOutcome};
+pub use pipeline::{
+    mine, mine_with_commitment, MiningCommitment, MiningFailure, MiningOutcome, ParityCommitment,
+};
 pub use resolvers::{
     BitcoinChainComplexResolver, BitcoinCochainComplexResolver, BitcoinCohomologyGroupResolver,
     BitcoinHomologyGroupResolver, BitcoinHomotopyGroupResolver, BitcoinKInvariantResolver,
