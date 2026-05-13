@@ -65,9 +65,11 @@ vv:
     echo "── V&V complete ─────────────────────────────────────────────"
 
 # Conformance suite — validates that the zero-cost runtime model scales
-# arbitrarily over K and α. See CONFORMANCE.md.
+# arbitrarily over K and α, and that the implementation handles every
+# legitimate mainnet input correctly. See CONFORMANCE.md (CS/CD/CP and
+# CM classes).
 conformance:
-    cargo test -p prism-btc --release --test conformance -- --nocapture
+    cargo test -p prism-btc --release --test conformance --test mainnet -- --nocapture
 
 # Fast CI (excludes Lean and wasm-pack — run separately)
 ci:

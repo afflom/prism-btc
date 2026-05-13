@@ -521,18 +521,25 @@ fn cp3_compound_k_alpha_scaling_is_multiplicative() {
 }
 
 #[test]
-fn mining_failure_is_typed_and_does_not_carry_dynamic_state() {
+fn mining_failure_is_typed_and_carries_total_observability_lens() {
     // Negative-conformance witness: MiningFailure has exactly two
-    // variants and carries no dynamic payload. The fail-closed contract
-    // is type-level, not runtime-decided.
+    // variants. `DidNotAdmit` carries the receiver-side typed lens
+    // (KappaObservables) so the lens is total — present on every
+    // ψ-pipeline inference, not just admitting ones. The fail-closed
+    // contract is type-level, not runtime-decided.
     fn exhaustive_failure_match(f: MiningFailure) -> &'static str {
         match f {
-            MiningFailure::DidNotAdmit => "did_not_admit",
+            MiningFailure::DidNotAdmit { .. } => "did_not_admit",
             MiningFailure::PipelineFailure => "pipeline_failure",
         }
     }
+    let mock_did_not_admit = MiningFailure::DidNotAdmit {
+        observables: KappaObservables::from_digest(&[0u8; 32]),
+        nonce: 0,
+        digest: [0u8; 32],
+    };
     assert_eq!(
-        exhaustive_failure_match(MiningFailure::DidNotAdmit),
+        exhaustive_failure_match(mock_did_not_admit),
         "did_not_admit"
     );
     assert_eq!(

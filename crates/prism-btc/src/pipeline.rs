@@ -64,20 +64,41 @@ pub struct MiningOutcome {
     pub resolution: ResolutionState,
 }
 
-/// Failure modes from [`mine`].
+/// Failure modes from [`mine`] and [`mine_with`].
+///
+/// The receiver-side typed lens [`crate::observables::KappaObservables`]
+/// is **total** — present on both `Ok(MiningOutcome)` and on
+/// `DidNotAdmit`. Every ψ-pipeline inference exposes its candidate's
+/// UOR property landscape, whether or not it admits. Host loops can
+/// aggregate these into a [`crate::campaign::CampaignStats`]
+/// observatory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MiningFailure {
     /// The ψ-pipeline produced a wire-format header candidate via
     /// ψ_9's structural κ-derivation, but its σ-projection did not
-    /// satisfy the host-supplied target. The host boundary
-    /// (architecture §7) varies the template-derived `MiningTask`
-    /// (extranonce roll → distinct prefix → distinct κ-derivation)
-    /// and retries.
-    DidNotAdmit,
+    /// satisfy the host-supplied target (or, in [`mine_with`], the
+    /// admitted candidate did not satisfy the typed commitment).
+    /// The host boundary (architecture §7) varies the template-derived
+    /// `MiningTask` (extranonce roll → distinct prefix → distinct
+    /// κ-derivation) and retries.
+    ///
+    /// The candidate's typed property landscape is carried in
+    /// `observables` — the receiver-side lens is total, not
+    /// admission-only. This is the structural visibility prism-btc
+    /// gives the host over every mining attempt.
+    DidNotAdmit {
+        /// The non-admitting κ-label's UOR property decomposition.
+        observables: crate::observables::KappaObservables,
+        /// The κ-derived nonce of this candidate (canonical LE).
+        nonce: u32,
+        /// SHA-256d of the candidate wire-format header.
+        digest: [u8; 32],
+    },
     /// Defensive: foundation's catamorphism or a resolver returned a
     /// shape violation. Unreachable for well-formed `MiningTask`
     /// inputs — the ψ-pipeline is total over the typed input
-    /// surface.
+    /// surface. The conformance suite (CM-1) pins this unreachability
+    /// across a wide range of synthetic mainnet-difficulty inputs.
     PipelineFailure,
 }
 
@@ -131,9 +152,14 @@ pub fn mine(header: &BlockHeader, target: Target) -> Result<MiningOutcome, Minin
     // Host-boundary admission relation: ψ_9 produced this κ-candidate
     // structurally; the boundary checks whether σ(header) ≤ target.
     // Fail-closed: mine() returns Ok only when admission genuinely
-    // holds.
+    // holds. On non-admission the candidate's typed property
+    // landscape is propagated so the receiver-side lens stays total.
     if !target.is_satisfied_by_bytes(&digest) {
-        return Err(MiningFailure::DidNotAdmit);
+        return Err(MiningFailure::DidNotAdmit {
+            observables: crate::observables::KappaObservables::from_digest(&digest),
+            nonce,
+            digest,
+        });
     }
 
     // Drain the diagnostic channel ψ_9 wrote on its way out. Under
@@ -467,7 +493,16 @@ pub fn mine_with<C: crate::commitment::TypedCommitment>(
 ) -> Result<MiningOutcome, MiningFailure> {
     let outcome = mine(header, target)?;
     if !commitment.evaluate(&outcome.digest) {
-        return Err(MiningFailure::DidNotAdmit);
+        // Admission held but the typed commitment did not. Re-package
+        // as DidNotAdmit so the host loop's view is uniform — the
+        // receiver-side lens carries the κ-label's full property
+        // landscape regardless of which gate (admission or commitment)
+        // rejected the candidate.
+        return Err(MiningFailure::DidNotAdmit {
+            observables: outcome.observables,
+            nonce: outcome.nonce,
+            digest: outcome.digest,
+        });
     }
     Ok(outcome)
 }

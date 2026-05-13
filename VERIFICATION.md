@@ -14,7 +14,7 @@ artifact in the repo.
 ## §1 Architectural conformance — `cargo test --release`
 
 The verb arena, model declarations, and substrate-bindings carry
-compile-time invariants the test surface re-asserts at runtime. 63
+compile-time invariants the test surface re-asserts at runtime. 68
 unit tests across the prism-btc crate's modules:
 
 - **`crates/prism-btc/src/verbs.rs::tests`** (6 tests) — the verb
@@ -143,25 +143,37 @@ per-test rationale.
 
 Run: `cargo test --release -p prism-btc --test verification`.
 
-## §3 Conformance suite — `crates/prism-btc/tests/conformance.rs`
+## §3 Conformance suite — `crates/prism-btc/tests/{conformance,mainnet}.rs`
 
-13 conformance tests validating that prism's zero-cost runtime model
-scales arbitrarily over K (commitment bandwidth) and α (admission
-probability). See [`CONFORMANCE.md`](CONFORMANCE.md) for the
-normative per-invariant statements; tests are ID'd against it.
+19 conformance tests validating that prism's zero-cost runtime model
+scales arbitrarily over K (commitment bandwidth), α (admission
+probability), and the full range of legitimate mainnet inputs. See
+[`CONFORMANCE.md`](CONFORMANCE.md) for the normative per-invariant
+statements; tests are ID'd against it.
 
 | Class | Count | What it asserts |
 |---|---|---|
 | **CS** (structural) | 6 | No `Vec<Predicate>` / `dyn TypedCommitment` / `Box<dyn …>` / legacy `MiningCommitment`-era identifiers in `src/`; `TypedCommitment: Copy` enforced; `Predicate` enum fixed at four variants; `MiningOutcome.observables` always present. |
 | **CD** (dynamic) | 3 | `mine_with(EmptyCommitment) ≡ mine` byte-for-byte; `PayloadCommitment<K>` round-trips at K ∈ {0,1,2,4,8}; `MiningOutcome.observables` agrees with the per-primitive `TriadicCoords::from_hash` / `p_adic_valuation` computation. |
 | **CP** (probabilistic scaling) | 3 | `α⁻¹ × 2^K` cost identity holds within ±30% (≈4σ at N=200) across (a) K-sweep over four decades [0..12] at fixed α, (b) α-sweep over four decades [2⁻¹..2⁻¹²] at fixed K=2, (c) compound K × α decompositions of the same product. |
-| **CN** + **CL** | (cross-ref) | Network-invariance (CN-1…4) cross-referenced to V&V §2 + host-loop §4; Lean-formal (CL-1…4) cross-referenced to §3 below. |
+| **CM** (mainnet readiness) | 6 | `Target::new(nBits)` accepts every mainnet-difficulty value in the chain's history; `mine()` produces well-formed 80-byte κ-labels on synthetic mainnet inputs (`PipelineFailure` unreachable across 400 attempts × 8 difficulty levels); aggregate `CampaignStats` matches PRF baseline at N=10⁴ (χ² goodness-of-fit on stratum + spectrum at α=0.001); empirical α converges to theoretical α at N=10⁴ within ±5%; campaign is consistent under cooperative interruption. |
+| **CN** + **CL** | (cross-ref) | Network-invariance (CN-1…4) cross-referenced to V&V §2 + host-loop §5; Lean-formal (CL-1…4) cross-referenced to §4 below. |
 
-Plus 1 negative-conformance witness (`MiningFailure` has exactly two
-variants and carries no dynamic payload).
+Plus 1 negative-conformance witness (`MiningFailure::DidNotAdmit`
+carries the receiver-side typed lens — observables + nonce + digest —
+making the lens total, not admission-only).
 
-Run: `just conformance` (or `cargo test --release -p prism-btc
---test conformance`). Wall-clock ≈ 3 seconds at the calibrated N=200.
+The **total receiver-side typed lens** is the load-bearing extension
+that enables the CM class: every ψ-pipeline inference exposes its
+candidate's typed property landscape via
+`MiningFailure::DidNotAdmit { observables, nonce, digest }` so a host
+loop accumulates a [`prism_btc::CampaignStats`] aggregate over the
+entire session. At mainnet's `α ≈ 2⁻⁷⁷` this gives the operator typed
+visibility into a search that would otherwise be opaque.
+
+Run: `just conformance` (or `cargo test --release -p prism-btc --test
+conformance --test mainnet`). Wall-clock ≈ 6 seconds total (3s
+scaling tests + 0.2s mainnet observatory).
 
 ## §4 Formal proofs — `prism-btc-lean/`
 

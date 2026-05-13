@@ -39,11 +39,17 @@
 //!   as the building blocks and by individual-predicate cryptanalysis
 //!   (`examples/uor_cryptanalysis.rs` §I + §J).
 //! - [`KappaObservables`] / [`ExtendedObservables`] — the **receiver-
-//!   side** typed lens (architecture §14, ANALYSIS.md §5). Every
-//!   [`MiningOutcome`] carries a [`KappaObservables`] decoding of the
-//!   κ-label's canonical UOR property landscape (stratum, spectrum,
-//!   p-adic valuations at the small-prime set). Applications with
+//!   side** typed lens (architecture §14, ANALYSIS.md §5). The lens is
+//!   **total**: every [`MiningOutcome`] carries one, and every
+//!   [`MiningFailure::DidNotAdmit`] carries one too. Applications with
 //!   custom observables use the const-generic [`ExtendedObservables`].
+//! - [`CampaignStats`] — session-level aggregate observatory. Folds
+//!   every per-attempt [`KappaObservables`] into stack-allocated
+//!   histograms (stratum / spectrum / p-adic at primes {3,5,7}),
+//!   tracks empirical α, and converges to the target's theoretical
+//!   α at large N. This is what makes mainnet's `α ≈ 2⁻⁷⁷` search
+//!   legible — the operator gets typed visibility into a session
+//!   that would otherwise be opaque. See `CONFORMANCE.md` §CM.
 //! - [`ultrametric_valuation`] / [`walsh_hadamard_parity_at`] /
 //!   [`p_adic_valuation`] — UOR observable surface on the content-
 //!   addressed manifold (ANALYSIS.md §1.3).
@@ -55,6 +61,7 @@
 #[cfg(not(feature = "std"))]
 extern crate alloc;
 
+pub mod campaign;
 pub mod commitment;
 pub mod diagnostics;
 pub mod domain;
@@ -67,6 +74,7 @@ pub mod shapes;
 pub mod verbs;
 
 // Public façade — typed surface.
+pub use campaign::{CampaignStats, PADIC_BINS, STRATUM_BINS};
 pub use commitment::{EmptyCommitment, PayloadCommitment, TypedCommitment};
 pub use diagnostics::{take_resolution_state, ResolutionState};
 pub use domain::{

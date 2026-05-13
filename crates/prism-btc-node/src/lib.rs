@@ -28,7 +28,8 @@ use bitcoincore_rpc::json::{
 use bitcoincore_rpc::{Auth, Client, RpcApi};
 
 use prism_btc::{
-    mine, Bits, BlockHeader, MerkleRoot, MiningFailure, MiningWitness, Target, Timestamp, Version,
+    mine, Bits, BlockHeader, CampaignStats, MerkleRoot, MiningFailure, MiningWitness, Target,
+    Timestamp, Version,
 };
 
 const COINBASE_WITNESS_RESERVED: [u8; 32] = [0u8; 32];
@@ -131,9 +132,14 @@ impl PrismMiner {
         // MiningTask (distinct merkle root via the rolled extranonce)
         // and a distinct κ-derivation. mine() returns Ok when the
         // κ-candidate's σ-projection admits; DidNotAdmit otherwise.
-        // For permissive targets (regtest), the loop body typically
-        // runs once.
+        // The receiver-side typed lens (KappaObservables) is **total**:
+        // present on every attempt regardless of admission. Folded
+        // into a CampaignStats aggregate across the session so the
+        // operator gets typed visibility into mining at scale (this
+        // is what makes the loop legible at mainnet difficulty — see
+        // CONFORMANCE.md CM-3, CM-5).
         let mut extranonce: u64 = 0;
+        let mut campaign = CampaignStats::new();
         loop {
             let job = MiningJob::from_template_with_extranonce(
                 &template,
@@ -143,6 +149,7 @@ impl PrismMiner {
 
             match mine(&job.header, job.target) {
                 Ok(outcome) => {
+                    campaign.record_admission(&outcome);
                     let block = job.assemble(outcome.nonce);
                     self.client
                         .submit_block(&block)
@@ -155,13 +162,21 @@ impl PrismMiner {
                         tx_count: block.txdata.len(),
                         resolution: outcome.resolution,
                         extranonce_attempts: extranonce,
+                        campaign,
                     });
                 }
-                Err(MiningFailure::DidNotAdmit) => {
+                Err(MiningFailure::DidNotAdmit {
+                    observables,
+                    digest,
+                    ..
+                }) => {
                     // The κ-derivation for this template's
-                    // (prefix, target) didn't satisfy target. Vary
-                    // the extranonce → distinct MerkleRoot →
+                    // (prefix, target) didn't satisfy target. Record
+                    // the non-admitting candidate's typed property
+                    // landscape into the campaign aggregate, then
+                    // vary the extranonce → distinct MerkleRoot →
                     // distinct TemplatePrefix → distinct κ-derivation.
+                    campaign.record_attempt(&observables, &digest);
                     extranonce = extranonce.wrapping_add(1);
                     if extranonce == 0 {
                         anyhow::bail!(
@@ -199,6 +214,13 @@ pub struct MinedBlock {
     /// κ-derivation admitted; higher values count subsequent
     /// extranonce rolls (architecture §7).
     pub extranonce_attempts: u64,
+    /// Aggregate observatory over the session — typed property
+    /// landscape across every κ-candidate the host walked, both
+    /// admitting and non-admitting. Carries empirical α, stratum /
+    /// spectrum / p-adic histograms, and the closest-to-admission
+    /// digest observed. The receiver-side typed lens at session
+    /// granularity.
+    pub campaign: CampaignStats,
 }
 
 /// All the per-template state a mining attempt needs.
