@@ -1,8 +1,8 @@
 //! prism-btc's ψ-chain mining verb (wiki ADR-024, ADR-035, ADR-036;
 //! architecture §4).
 //!
-//! The mining inference is one structural ψ-pipeline applied to a
-//! `MiningTask`:
+//! The mining inference is the **k-invariant branch** of the ψ-pipeline
+//! applied to a `MiningTask`:
 //!
 //! ```text
 //! MiningTask
@@ -13,22 +13,21 @@
 //! MiningResult — the label
 //! ```
 //!
-//! This is the **k-invariant branch** of the ψ-pipeline: k-invariants
-//! `κ_k` are the universal classifying invariants of the Postnikov tower,
-//! and the typed-iso surface of a wire-format-valid Bitcoin block is
-//! naturally characterized by its k-invariant signature. Foundation
-//! 0.4.2's catamorphism evaluates the chain end-to-end via the
-//! application's `ResolverTuple` ([`crate::resolvers::BitcoinResolverTuple`]).
+//! k-invariants `κ_k` are the universal classifying invariants of the
+//! Postnikov tower, and the typed-iso surface of a wire-format-valid
+//! Bitcoin block is naturally characterized by its k-invariant
+//! signature. Foundation's catamorphism evaluates the chain end-to-end
+//! via the application's `ResolverTuple`
+//! ([`crate::resolvers::BitcoinResolverTuple`]).
 //!
 //! ## Conformance against the wiki
 //!
-//! ADR-024: implementation declares the verb composing only foundation
-//! operators and existing verbs — no new primitives. Each ψ-stage is a
-//! `Term::*` variant emitted by the SDK from the closure-body grammar
-//! (G21–G29). ADR-035 commits the catamorphism to fold-rules that
-//! dispatch through ADR-036's `ResolverTuple` for the eight
-//! resolver-bound stages (ψ_4 Betti is resolver-free; not used in this
-//! branch).
+//! ADR-024: the verb composes only foundation operators and existing
+//! verbs — no new primitives. Each ψ-stage is a `Term::*` variant
+//! emitted by the SDK from the closure-body grammar (G21–G29). ADR-035
+//! commits the catamorphism to fold-rules that dispatch through
+//! ADR-036's `ResolverTuple` for the eight resolver-bound stages
+//! (ψ_4 Betti is resolver-free; not on this branch).
 //!
 //! ## What this verb deliberately is not
 //!
@@ -113,8 +112,8 @@ mod tests {
         // by resolvers (architecture §3) — never by the verb body's term
         // composition.
         //
-        // Foundation 0.4.3's SDK enforces this discipline at proc-macro
-        // expansion time (architecture §9.0); any future regression to a
+        // Foundation's SDK enforces this discipline at proc-macro
+        // expansion time (architecture §9.1); any future regression to a
         // σ-residual form would fail at compile time. This test pins the
         // emitted-arena invariant as a belt-and-suspenders check against
         // SDK-emission anomalies.

@@ -1,10 +1,10 @@
 # prism-btc — Verification & Validation
 
 > **Scope.** This document records what prism-btc verifies and how.
-> The V&V suite is reproducible via `just vv` (architecture, fail-closed
-> mining, wire-format equivalence, ψ-pipeline determinism, Lean proofs,
-> regtest end-to-end). All four axes pass against the current
-> implementation.
+> The V&V suite is reproducible via `just vv` across four axes:
+> architecture (fmt + clippy + unit + integration tests), the
+> dedicated V&V test module, Lean proofs, and a regtest end-to-end
+> run.
 
 prism-btc's V&V covers four axes. Each axis has a concrete reproducible
 artifact in the repo.
@@ -12,31 +12,49 @@ artifact in the repo.
 ## §1 Architectural conformance — `cargo test --release`
 
 The verb arena, model declarations, and substrate-bindings carry
-compile-time invariants the test surface re-asserts at runtime.
+compile-time invariants the test surface re-asserts at runtime. 30
+unit tests across the prism-btc crate's modules:
 
-- **`crates/prism-btc/src/verbs.rs::tests`** — 6 tests pin the verb
+- **`crates/prism-btc/src/verbs.rs::tests`** (6 tests) — the verb
   arena's structural shape: non-empty; contains ψ_1 Nerve, ψ_7
   PostnikovTower, ψ_8 HomotopyGroups, ψ_9 KInvariants; contains zero
   σ-residuals (no `Term::FirstAdmit`, no `Term::AxisInvocation`, no
   byte-comparison or `Concat` ops in the verb body). The substrate's
-  proc-macro discipline (ADR-035) enforces the latter at compile time;
-  these runtime assertions are defense-in-depth.
+  proc-macro discipline (ADR-035) enforces the latter at compile
+  time; these runtime assertions are defense-in-depth.
 
-- **`crates/prism-btc/src/model.rs::tests`** — 5 tests pin the typed
+- **`crates/prism-btc/src/model.rs::tests`** (6 tests) — the typed
   feature hierarchy: `TemplatePrefix`'s 76-byte layout
   (`version‖prev_hash‖merkle_root‖timestamp‖bits`); `MiningTask`'s
   108-byte partition_product layout; `MiningResult`'s 80 W8 sites
   (wire-format header width); `IntoBindingValue` 108-byte projection;
-  CONSTRAINTS non-empty.
+  CONSTRAINTS' 80 disjoint Site instances spanning [0, 80).
 
-- **`crates/prism-btc/src/shapes/bounds.rs::tests`** — 2 tests pin
-  `PrismBtcBounds`' 24 capacity constants and the uniformity of the
+- **`crates/prism-btc/src/shapes/bounds.rs::tests`** (2 tests) —
+  `PrismBtcBounds`' prism-btc-specific constants
+  (`FINGERPRINT_{MIN,MAX}_BYTES = 32`, `TRACE_MAX_EVENTS = 64`,
+  `WITT_LEVEL_MAX_BITS = 32`) and the uniformity of the
   per-ψ-stage output ceilings.
+
+- **`crates/prism-btc/src/shapes/hasher.rs::tests`** (3 tests) —
+  `Sha256dHasher` streaming-vs-one-shot equivalence and FIPS-180-4
+  vector matching.
+
+- **`crates/prism-btc/src/domain.rs::tests`** (4 tests) —
+  `Bits ↔ Target` round-trip, `Target::is_satisfied_by_bytes`
+  monotonicity, `TriadicCoords` projection.
+
+- **`crates/prism-btc/src/ops/*::tests`** (9 tests) — pure-Rust
+  SHA-256 / SHA-256d against FIPS-180-4 vectors; merkle reduction
+  against rust-bitcoin reference; canonical 80-byte header
+  serialization round-trip.
 
 ## §2 V&V suite — `crates/prism-btc/tests/verification.rs`
 
-10 tests that pin the load-bearing architectural properties — see the
-module docstring for the per-test rationale.
+14 tests that pin the load-bearing architectural properties. 5
+additional integration tests in `crates/prism-btc/tests/integration.rs`
+exercise the typed-iso surface end-to-end. Module docstrings carry the
+per-test rationale.
 
 | # | Test | Property |
 |---|---|---|
@@ -55,7 +73,7 @@ module docstring for the per-test rationale.
 | 13 | `v_constraint_site_supports_span_the_full_wire_format_header` | Site supports cover [0, 80) — every wire-format-header byte pinned by one Site constraint |
 | 14 | `v_prism_btc_bounds_declare_algebraic_closure_target` | `PrismBtcBounds` declares the algebraic-closure ceilings (compile-time assertion) |
 
-Run: `cargo test --release -p prism-btc --test verification`. All 10 pass.
+Run: `cargo test --release -p prism-btc --test verification`.
 
 ## §3 Formal proofs — `prism-btc-lean/`
 
@@ -70,7 +88,7 @@ Lean 4 proofs of foundational algebraic identities prism-btc depends on:
 | `ConvergenceProtocol.lean` | σ-projection identity + ψ-vs-σ distinction (load-bearing for ADR-035) | proved |
 
 Run: `just verify` (= `cd prism-btc-lean && lake update && lake build`).
-Build is currently green against `leanprover/lean4:v4.16.0`.
+Build is green against `leanprover/lean4:v4.16.0`.
 
 ## §4 Regtest end-to-end — `crates/prism-btc-node/tests/regtest.rs`
 
@@ -80,7 +98,8 @@ complete client against a real bitcoind:
 1. `getblocktemplate` for a fresh regtest template.
 2. `PrismMiner::mine_one_block` drives the host-boundary template-
    variation loop: build `MiningTask` from current extranonce, call
-   `prism_btc::mine`, on `DidNotAdmit` roll the extranonce, on `Ok`
+   `prism_btc::mine`, on `PipelineFailure` (the canonical
+   `InhabitanceImpossibilityWitness`) roll the extranonce, on `Ok`
    submit.
 3. `submitblock` accepts the prism-btc-produced block.
 4. The observer client confirms the chain height advanced by exactly 1
@@ -90,9 +109,7 @@ complete client against a real bitcoind:
    nonce-field bytes (76..80, LE) decode to the same `u32` the
    submitted block's header carries.
 
-**The end-to-end test passed 4/4 in this session's V&V run** — each
-invocation advanced the regtest chain by exactly one block. To
-reproduce:
+To reproduce:
 
 ```bash
 ~/bin/bitcoind -datadir=$HOME/regtest-data -daemon
@@ -109,7 +126,7 @@ cargo test -p prism-btc-node --release -- --ignored --nocapture
 just vv
 ```
 
-`just vv` runs §1 fmt + clippy, §2 unit + integration + V&V tests
+`just vv` runs §1 fmt + clippy + unit + integration + V&V tests
 (release), §3 Lean proofs, and §4 regtest end-to-end (auto-skipped
 when `PRISM_RPC_URL` is unset). The complete suite is the normative
 acceptance gate for prism-btc; CI runs the same flow.

@@ -1,21 +1,20 @@
 //! `PrismBtcBounds` — prism-btc's `HostBounds` selection
-//! (wiki ADR-018, ADR-037; architecture §3, §9.3).
+//! (wiki ADR-018, ADR-037; architecture §3, §9.4).
 //!
-//! Foundation 0.4.4 widened `HostBounds` to a 24-constant capacity
-//! profile (the original 4 plus ADR-037's 20 additions that surface the
-//! catamorphism's per-ψ-stage output ceilings, the route input/output
-//! buffer sizes, the nerve/Betti/Jacobian array caps, and the
-//! constraint-conjunction/affine-coefficient ceilings as
-//! `HostBounds`-parametric). This closes architecture §9.3.
+//! ADR-037 makes the catamorphism's 24-constant capacity profile
+//! `HostBounds`-parametric: the per-ψ-stage output ceilings, the route
+//! input/output buffer sizes, the nerve/Betti/Jacobian array caps, and
+//! the constraint-conjunction/affine-coefficient ceilings. This module
+//! declares prism-btc's binding ceiling.
 
 use uor_foundation::HostBounds;
 
 /// prism-btc's capacity profile.
 ///
-/// The first four are prism-btc-specific selections (architecture §3.2);
+/// The first four are prism-btc-specific selections (architecture §3);
 /// the remainder are ADR-037 ceilings that prism-btc tracks the
 /// foundation defaults on. As prism-btc's hierarchical feature
-/// decomposition grows (architecture §9.3), the nerve / chain-complex /
+/// decomposition grows (architecture §9.4), the nerve / chain-complex /
 /// resolver-output ceilings rise here without changing the verb body or
 /// the model declaration.
 ///
@@ -29,25 +28,19 @@ use uor_foundation::HostBounds;
 pub struct PrismBtcBounds;
 
 impl HostBounds for PrismBtcBounds {
-    // prism-btc-specific (architecture §3.2):
+    // prism-btc-specific (architecture §3):
     const FINGERPRINT_MIN_BYTES: usize = 32;
     const FINGERPRINT_MAX_BYTES: usize = 32;
     const TRACE_MAX_EVENTS: usize = 64;
     const WITT_LEVEL_MAX_BITS: u32 = 32;
 
     // ADR-037 catamorphism ceilings — track foundation defaults except
-    // where prism-btc's algebraic-closure target (architecture §2.3
+    // where prism-btc's algebraic-closure encoding (architecture §2.3,
     // IT_7d: χ(N(C)) = SITE_COUNT, β_k = 0) demands a wider constraint
     // geometry. The wire-format Bitcoin header's 80-site `MiningResult`
     // implies a constraint nerve over up to 80 vertices; the algebraic-
-    // closure expressibility scales with these caps. Foundation 0.4.5's
-    // `primitive_simplicial_nerve_betti<T>` currently consults
-    // `DefaultHostBounds`'s `NERVE_CONSTRAINTS_MAX = NERVE_SITES_MAX =
-    // 8` directly (the primitive is not yet `HostBounds`-parametric);
-    // raising prism-btc's caps here is the application-side declaration
-    // of the algebraic-closure target. When foundation's nerve
-    // primitive becomes `HostBounds`-parametric, this declaration is
-    // the binding ceiling.
+    // closure expressibility scales with these caps. This declaration
+    // is the application-side binding ceiling.
     const TERM_VALUE_MAX_BYTES: usize = 4096;
     const AXIS_OUTPUT_BYTES_MAX: usize = 4096;
     const FOLD_UNROLL_THRESHOLD: usize = 8;
@@ -79,7 +72,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bounds_constants_match_architecture_3_2() {
+    fn bounds_constants_match_architecture_section_3() {
         assert_eq!(<PrismBtcBounds as HostBounds>::FINGERPRINT_MIN_BYTES, 32);
         assert_eq!(<PrismBtcBounds as HostBounds>::FINGERPRINT_MAX_BYTES, 32);
         assert_eq!(<PrismBtcBounds as HostBounds>::TRACE_MAX_EVENTS, 64);

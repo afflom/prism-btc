@@ -4,10 +4,9 @@
 //! 1. The host assembles a [`MiningTask`] from a [`BlockHeader`] and a
 //!    [`Target`] (76-byte `TemplatePrefix` + 32-byte `Target`).
 //! 2. [`BitcoinMiningModel::forward`] invokes the ψ-chain verb
-//!    ([`crate::verbs::mining_inference`]) end-to-end via foundation
-//!    0.4.5's catamorphism. The catamorphism dispatches each
-//!    resolver-bound ψ-Term through
-//!    [`crate::resolvers::BitcoinResolverTuple`].
+//!    ([`crate::verbs::mining_inference`]) end-to-end via foundation's
+//!    catamorphism. The catamorphism dispatches each resolver-bound
+//!    ψ-Term through [`crate::resolvers::BitcoinResolverTuple`].
 //! 3. The terminal ψ_9 resolver
 //!    ([`crate::resolvers::BitcoinKInvariantResolver`]) implements the
 //!    framework's iterative-resolution discipline (wiki

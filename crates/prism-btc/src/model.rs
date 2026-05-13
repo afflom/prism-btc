@@ -1,13 +1,14 @@
 //! `BitcoinMiningModel` — prism-btc's `PrismModel<H, B, A, R>` declaration
 //! (wiki ADR-020 + ADR-036; architecture §5).
 //!
-//! The mining inference is end-to-end prism: foundation 0.4.5's
-//! catamorphism evaluates the ψ-chain verb arena
+//! The mining inference is end-to-end prism: foundation's catamorphism
+//! evaluates the ψ-chain verb arena
 //! ([`crate::verbs::mining_inference`]) dispatching each resolver-bound
 //! ψ-Term through [`crate::resolvers::BitcoinResolverTuple`]. There is
 //! no σ-enumeration, no FirstAdmit-shaped search, no algorithmic body
-//! in prism-btc; the model declares the typed feature hierarchy and the
-//! parametric tensor-algebra composition that observes it.
+//! in prism-btc's verb arena; the model declares the typed feature
+//! hierarchy and the parametric tensor-algebra composition that
+//! observes it.
 //!
 //! ## Typed feature hierarchy (architecture §2)
 //!
@@ -15,8 +16,8 @@
 //!   MerkleRoot, Timestamp, Bits)` (76 W8 sites).
 //! - [`MiningTask`] — `partition_product(TemplatePrefix, Target)`
 //!   (108 W8 sites). The PrismModel's `Input` type.
-//! - [`MiningResult`] — the ψ-pipeline label (32 W8 sites). The
-//!   PrismModel's `Output` type.
+//! - [`MiningResult`] — the ψ-pipeline label (80 W8 sites — the
+//!   wire-format Bitcoin header width). The PrismModel's `Output` type.
 
 use uor_foundation::enforcement::ShapeViolation;
 use uor_foundation::pipeline::{
@@ -189,21 +190,20 @@ impl PartitionProductFields for MiningTask {
 // header by construction (architecture §6 bit-identicality contract).
 //
 // `MiningResult::CONSTRAINTS` algebraically encodes the wire-format
-// Bitcoin header's structural admission relation using foundation
-// 0.4.5's closed `ConstraintRef` catalog (architecture §2.3). The
-// encoding is **template-invariant**: a compile-time
-// `&'static [ConstraintRef]` declaring the algebraic shape of valid
-// Bitcoin headers; the runtime `(prefix, target)` parameterize specific
-// values that the ψ-pipeline's resolver chain materializes into the
-// κ-label.
+// Bitcoin header's structural admission relation using foundation's
+// closed `ConstraintRef` catalog (architecture §2.3). The encoding is
+// **template-invariant**: a compile-time `&'static [ConstraintRef]`
+// declaring the algebraic shape of valid Bitcoin headers; the runtime
+// `(prefix, target)` parameterize specific values that the ψ-pipeline's
+// resolver chain materializes into the κ-label.
 //
-// **Algebraic-closure target — realized** (architecture §2.3, IT_7d):
-// the framework's canonical completeness criterion is
-// χ(N(C)) = SITE_COUNT and β_k = 0 for k ≥ 1. `MiningResult` declares
-// 80 disjoint `Site` constraints — one per wire-format-header byte
-// position. Each constraint pins exactly one site; site supports are
-// pairwise disjoint; the constraint nerve N(C) is 80 isolated
-// vertices with no higher simplices. Therefore:
+// **Algebraic-closure encoded** (architecture §2.3, IT_7d): the
+// framework's canonical completeness criterion is χ(N(C)) = SITE_COUNT
+// and β_k = 0 for k ≥ 1. `MiningResult` declares 80 disjoint `Site`
+// constraints — one per wire-format-header byte position. Each
+// constraint pins exactly one site; site supports are pairwise
+// disjoint; the constraint nerve N(C) is 80 isolated vertices with no
+// higher simplices. Therefore:
 //
 //   β_0 = 80,    β_k = 0 for k ≥ 1
 //   χ(N(C)) = β_0 - β_1 + … = 80 = SITE_COUNT
@@ -215,16 +215,6 @@ impl PartitionProductFields for MiningTask {
 // the iterative-resolution loop in the resolver chain materializes
 // the pinned values (template-supplied for sites 0..76, κ-derived
 // via the ψ_9 W32 walk for sites 76..80).
-//
-// **Foundation surface vs application declaration.** Foundation 0.4.5's
-// `primitive_simplicial_nerve_betti<T>` consults `DefaultHostBounds`'s
-// `NERVE_CONSTRAINTS_MAX = NERVE_SITES_MAX = 8` directly — the
-// primitive is not yet `HostBounds`-parametric (the gap named in
-// `crates/prism-btc/src/shapes/bounds.rs`'s prism-btc-cap
-// declarations). prism-btc's CONSTRAINTS declaration here is the
-// reference data the foundation amendment consumes: when foundation
-// lands the parametric surface, the 80-Site nerve is computable from
-// this declaration alone.
 output_shape! {
     pub struct MiningResult;
     impl ConstrainedTypeShape for MiningResult {

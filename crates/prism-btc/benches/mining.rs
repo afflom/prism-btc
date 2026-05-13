@@ -22,9 +22,6 @@ fn bench_mine_easy(c: &mut Criterion) {
     g.throughput(Throughput::Elements(1));
     g.bench_function("mine_easy_target", |b| {
         b.iter(|| {
-            // Under the pure-prism architecture, mine() either returns
-            // a MiningOutcome or a named foundation gap; bench the
-            // full hot path regardless of outcome.
             let _ = mine(black_box(&genesis_header()), black_box(easy_target));
         })
     });

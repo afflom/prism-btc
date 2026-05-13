@@ -1,13 +1,15 @@
 //! prism-mine — drive `prism_btc::mine` against a real bitcoind.
 //!
-//! Each invocation evaluates the `nonce_fiber_traversal` verb (wiki
-//! ADR-024) over a (template prefix, target) pair via foundation
-//! 0.4.1's catamorphism (ADR-029, ADR-034 Mechanism 2). On admission,
-//! `BitcoinMiningModel::forward` mints the foundation-sealed
-//! `Grounded<MiningResult, MiningTag>` carrying the `(disc, nonce)`
-//! coproduct on `output_bytes`; this binary then assembles the
-//! wire-format block from `(prefix, nonce)` and submits via
-//! `submitblock`.
+//! Each invocation evaluates the `mining_inference` verb (wiki
+//! ADR-024) — the ψ-pipeline's k-invariant branch
+//! (ψ_1 → ψ_7 → ψ_8 → ψ_9) — over a `(template prefix, target)` pair
+//! via foundation's catamorphism. On admission, ψ_9's
+//! iterative-resolution loop pins the four nonce-byte sites and emits
+//! the wire-format Bitcoin header; `BitcoinMiningModel::forward`
+//! returns the foundation-sealed `Grounded<MiningResult, MiningTag>`
+//! whose `output_bytes` are the 80-byte wire-format header. This
+//! binary assembles the wire-format block from that header + the
+//! template's transactions and submits via `submitblock`.
 
 use anyhow::{bail, Context, Result};
 use bitcoin::Network;

@@ -7,7 +7,7 @@
 //! and submit via `submitblock` (architecture §7).
 //!
 //! prism-btc owns the mining inference (the typed-iso surface
-//! foundation 0.4.5's catamorphism evaluates); rust-bitcoin owns the
+//! foundation's catamorphism evaluates); rust-bitcoin owns the
 //! transaction / script / block container; this crate is the wiring.
 
 use anyhow::{bail, Context, Result};

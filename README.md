@@ -5,24 +5,23 @@ application of the [UOR Foundation](https://github.com/UOR-Foundation/UOR-Framew
 prism-btc declares Bitcoin's typed feature primitives, composes them
 hierarchically via foundation's tensor algebras, and lets the ψ-pipeline
 generate the wire-format-valid block bytes as the structural label.
-No σ-enumeration anywhere; mining is not an algorithm.
+No σ-enumeration in the verb body; mining is not an algorithm.
 
 > **Normative architecture:** see [ARCHITECTURE.md](ARCHITECTURE.md). The
 > repository is reconciled to it; ARCHITECTURE.md is the pure-prism
 > specification.
 >
 > **Substrate:** [UOR-Framework wiki](https://github.com/UOR-Foundation/UOR-Framework/wiki)
-> (ADR-035 ψ-chain Term variants + ψ-residuals discipline,
-> ADR-036 `ResolverTuple`, ADR-037 `HostBounds`-parametric capacity
-> ceilings, ADR-041 typed-coordinate resolver carriers) +
-> [foundation 0.4.5 release artifacts](https://github.com/UOR-Foundation/UOR-Framework/releases/tag/v0.4.5)
-> (`uor.foundation.{ttl,jsonld,owl,nt}`, `uor.shapes.ttl`, `uor.term.ebnf`).
-> Foundation 0.4.3's SDK enforces the ψ-residuals discipline at
-> proc-macro expansion: `<=` / `<` / `>=` / `>` / `concat(...)` /
-> `first_admit(...)` / `hash(...)` are rejected in verb bodies with
-> error messages naming `k_invariants(homotopy_groups(postnikov_tower(
-> nerve(input))))` as the canonical compiled form. prism-btc's verb body
-> is exactly that — the discipline is substrate-enforced.
+> (ADR-024 verb declarations, ADR-030 canonical hash axis, ADR-035
+> ψ-chain Term variants + ψ-residuals discipline, ADR-036 `ResolverTuple`,
+> ADR-037 `HostBounds`-parametric capacity ceilings, ADR-041
+> typed-coordinate resolver carriers). Foundation's SDK enforces the
+> ψ-residuals discipline at proc-macro expansion: `<=` / `<` / `>=` /
+> `>` / `concat(...)` / `first_admit(...)` / `hash(...)` are rejected
+> in verb bodies with error messages naming `k_invariants(homotopy_groups(
+> postnikov_tower(nerve(input))))` as the canonical compiled form.
+> prism-btc's verb body is exactly that — the discipline is
+> substrate-enforced.
 
 ## The architectural commitment
 
@@ -32,8 +31,8 @@ declare Bitcoin's typed primitives (`Version`, `PrevHash`, `MerkleRoot`,
 typed feature shapes (`TemplatePrefix`, `Header`, `MiningTask`,
 `MiningResult`) via foundation's tensor algebras (`partition:PartitionProduct`,
 `operad:OperadComposition`, `monoidal:MonoidalProduct`), and apply the
-ψ-pipeline transform (`nerve → postnikov_tower → homotopy_groups →
-k_invariants`) to derive the structural label.
+ψ-pipeline transform's k-invariant branch (`nerve → postnikov_tower →
+homotopy_groups → k_invariants`) to derive the structural label.
 
 What's *not* in prism-btc: σ-enumeration, FirstAdmit-shaped search,
 hash-rate metrics, "CPU mining time" framing. Those are algorithmic
@@ -52,10 +51,14 @@ verb! {
 
 The verb body lowers to the ψ-Term variants `Term::Nerve` (ψ_1) →
 `Term::PostnikovTower` (ψ_7) → `Term::HomotopyGroups` (ψ_8) →
-`Term::KInvariants` (ψ_9). Foundation 0.4.2's catamorphism evaluates the
-chain end-to-end, dispatching each ψ-stage through prism-btc's
-`BitcoinResolverTuple`. The terminal ψ_9 output is the label — the
-wire-format Bitcoin block bytes by construction (architecture §4, §6).
+`Term::KInvariants` (ψ_9) — the **k-invariant branch** of the ψ-pipeline.
+Foundation's catamorphism evaluates the chain end-to-end, dispatching
+each ψ-stage through prism-btc's `BitcoinResolverTuple`. The terminal
+ψ_9 resolver implements the wiki's iterative-resolution discipline
+(`iterative-resolution.md`): walks the W32 nonce ring until the
+structural admission relation lands, pins the four nonce-byte sites,
+and emits the κ-label — 80 bytes that ARE the wire-format Bitcoin
+header by construction (architecture §4, §6).
 
 ## The mining model
 
@@ -91,72 +94,62 @@ the typed inference admits; its `output_bytes()` carry the label.
 | [`prism-btc`](crates/prism-btc/) | The pure-prism domain layer. Declares Bitcoin's typed feature hierarchy, the ψ-chain verb, `BitcoinMiningModel`, `BitcoinResolverTuple`, and the public `mine()` entry point. Pure-Rust SHA-256 for the canonical hash axis. |
 | [`prism-btc-node`](crates/prism-btc-node/) | bitcoind RPC boundary. `getblocktemplate → BitcoinMiningModel::forward → submitblock`. `prism-mine` CLI binary. |
 | [`prism-btc-wasm`](crates/prism-btc-wasm/) | `wasm-bindgen` JS surface around `prism_btc::mine`. |
-| [`prism-btc-lean/`](prism-btc-lean/) | Lean 4 formal proofs: ring identity (W8/W32), triadic coordinates, FreeRank protocol, shape-constraint monotonicity. |
+| [`prism-btc-lean/`](prism-btc-lean/) | Lean 4 formal proofs: ring identity (W8/W32), triadic coordinates, FreeRank protocol, shape-constraint monotonicity, convergence protocol. |
 
 ## Substitution axes
 
 | Axis | prism-btc selection |
 |---|---|
 | `HostTypes` | `DefaultHostTypes` (foundation default) |
-| `HostBounds` | [`PrismBtcBounds`](crates/prism-btc/src/shapes/bounds.rs) — `WITT_LEVEL_MAX_BITS = 32`, `FINGERPRINT_{MIN,MAX}_BYTES = 32`, `TRACE_MAX_EVENTS = 64` |
+| `HostBounds` | [`PrismBtcBounds`](crates/prism-btc/src/shapes/bounds.rs) — `WITT_LEVEL_MAX_BITS = 32`, `FINGERPRINT_{MIN,MAX}_BYTES = 32`, `TRACE_MAX_EVENTS = 64`, `NERVE_SITES_MAX = 80`, `NERVE_CONSTRAINTS_MAX = 128`, `BETTI_DIMENSION_MAX = 80` |
 | `Hasher` | [`Sha256dHasher`](crates/prism-btc/src/shapes/hasher.rs) — pure-Rust SHA-256-then-SHA-256. The canonical hash axis is a **content-addressing primitive**, not an algorithm prism-btc runs. |
 | `ResolverTuple` | [`BitcoinResolverTuple`](crates/prism-btc/src/resolvers.rs) — Bitcoin-specific realization of the eight resolver-bound ψ-stages (ψ_1, ψ_2, ψ_3, ψ_5, ψ_6, ψ_7, ψ_8, ψ_9; ψ_4 Betti is resolver-free). |
 
 ## Bit-identicality + fail-closed contract (architecture §6)
 
-`BitcoinMiningModel::forward(task)` always returns a
-`Grounded<MiningResult>` whose `output_bytes()` are exactly 80 bytes —
-the wire-format Bitcoin header. The host-boundary entry point
-`mine(header, target)` verifies that the κ-derived header's SHA-256d
-digest is lex-≤ `target` and only returns `Ok(MiningOutcome)` when
-admission holds; otherwise it returns `Err(MiningFailure::DidNotAdmit)`.
+`BitcoinMiningModel::forward(task)` returns a `Grounded<MiningResult>`
+whose `output_bytes()` are exactly 80 bytes — the wire-format Bitcoin
+header. The host-boundary entry point `mine(header, target)` only
+returns `Ok(MiningOutcome)` when the κ-derived header's SHA-256d digest
+genuinely satisfies the host-supplied `target` — the ψ_9 resolver's
+convergence guarantee. The W32 ring walked to exhaustion without
+admission surfaces as `Err(MiningFailure::PipelineFailure)`, carrying
+the canonical `proof:InhabitanceImpossibilityWitness`; the host boundary
+varies the template (extranonce roll → distinct `MiningTask` → fresh
+W32 ring) and retries.
 
-**Valid input either produces a valid mined-block header or surfaces a
-`DidNotAdmit` for the host to handle.** `mine()` never returns a
-non-admitting outcome dressed as success.
+**Valid input either produces a valid mined-block header or surfaces an
+`InhabitanceImpossibilityWitness` for the host to handle.** `mine()`
+never returns a non-admitting outcome dressed as success.
 
-prism-btc's transform is structural (the ψ-pipeline); a traditional
-miner's transform is algorithmic (enumerate nonces, double-SHA-256,
-compare to target). The two paths arrive at byte-for-byte equivalent
-wire-format output because both are determined by the same wire-format
-protocol — prism-btc declares the protocol structurally; the traditional
-miner discovers it by enumeration. The label is the same artifact.
+prism-btc's transform is structural (the ψ-pipeline + the resolver's
+iterative-resolution loop); a traditional miner's transform is
+algorithmic (enumerate nonces, double-SHA-256, compare to target). The
+two paths arrive at byte-for-byte equivalent wire-format output because
+both are determined by the same wire-format protocol — prism-btc
+declares the protocol structurally; the traditional miner discovers it
+by enumeration. The label is the same artifact.
 
 **Network-invariant.** Same `BitcoinMiningModel`, same ψ-pipeline verb
 body, same `BitcoinResolverTuple` across regtest, signet, testnet,
 testnet4, and mainnet. The network-dependent value is the runtime byte
 threshold from the template's `Bits` field; the host boundary
 (`prism-btc-node`) iterates over template-derived `MiningTask`
-variations (extranonce roll) until the deterministic ψ-pipeline lands
-on an admitting κ-derived header. The ψ-pipeline runs **once per
-`MiningTask` variation**, not per nonce.
+variations (extranonce roll) when the ψ-pipeline returns the
+`InhabitanceImpossibilityWitness`. From outside, `forward()` is **one
+structural inference per `MiningTask`**.
 
-## Foundation gaps the implementation surfaces
+## Algebraic-closure encoding
 
-Foundation 0.4.2 ships the ψ-chain substrate and the resolver-tuple
-dispatch surface. The remaining gaps to close for the full
-bit-identicality contract (per architecture §9):
-
-1. **`AxisProjectionObservable` + `LexicographicLessEqBound`** —
-   constraint-algebra additions that name "axis-realized projection of
-   typed sites" and "32-byte lexicographic ≤". Without these, the
-   structural admission relation on `MiningResult::CONSTRAINTS` is
-   architecture-named but not yet expressible as a closed-`ConstraintRef`
-   variant.
-2. **Resolver realizations of each ψ-stage for Bitcoin's typed surface**
-   — prism-btc's `BitcoinResolverTuple` currently ships structural
-   stubs that fold input bytes through the canonical hash axis. The
-   wire-format-correct realizations are application-author code per
-   ADR-036 and are tracked in the architecture document.
-3. **Capacity ceilings** — `NERVE_CONSTRAINTS_CAP = 8` and
-   `NERVE_SITES_CAP = 8` need to grow if Bitcoin's hierarchical feature
-   decomposition produces a constraint nerve exceeding these caps.
-
-These gaps are named architectural commitments, not implementation
-shortcuts. The implementation declares the pure-prism architecture; the
-runtime fails honestly (`MiningFailure::LabelDoesNotDecodeToWireFormat`)
-when the label produced by the stub resolvers doesn't decode to a
-wire-format-valid block.
+`MiningResult::CONSTRAINTS` declares 80 disjoint `ConstraintRef::Site`
+instances — one per wire-format-header byte. The constraint nerve has
+80 isolated vertices with no higher simplices; β_0 = 80, β_k = 0 for
+k ≥ 1, χ = 80 = SITE_COUNT — the UOR Index Theorem IT_7d
+algebraic-closure criterion is satisfied at the declaration level
+(architecture §2.3). Sites 0..76 are template-pinned (host-supplied
+prefix bytes); sites 76..80 are κ-pinned (ψ_9 resolver's W32 walk
+materializes the admitting nonce bytes). Both mechanisms terminate at
+the same fixed point: 80 sites pinned ⇒ `FreeRank = 0` ⇒ convergence.
 
 ## Quick start
 

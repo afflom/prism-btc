@@ -13,8 +13,9 @@
 //! ```
 //!
 //! Verifies the full pipeline: get template → mine via prism-btc
-//! (foundation 0.4.1's catamorphism evaluates the
-//! `nonce_fiber_traversal` verb's term arena per ADR-034 Mechanism 2)
+//! (foundation's catamorphism evaluates the `mining_inference` verb's
+//! ψ-chain term arena, ψ_1 → ψ_7 → ψ_8 → ψ_9; ψ_9's
+//! iterative-resolution loop lands the admitting wire-format header)
 //! → assemble block → submit → chain height advances → block we
 //! minted appears at the new tip.
 

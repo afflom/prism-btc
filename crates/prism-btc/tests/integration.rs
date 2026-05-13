@@ -8,8 +8,8 @@
 //! - `BitcoinResolverTuple` realizes the eight resolver-bound ψ-stages
 //!   (architecture §3, §4).
 //! - `BitcoinMiningModel::forward(task)` drives the ψ-pipeline end-to-end
-//!   through foundation 0.4.5's catamorphism dispatching each ψ-Term
-//!   through the application's resolver tuple.
+//!   through foundation's catamorphism dispatching each ψ-Term through
+//!   the application's resolver tuple.
 //! - The κ-label (`Grounded<MiningResult>::output_bytes()`) is exactly
 //!   80 bytes — the wire-format Bitcoin header by construction
 //!   (architecture §6 bit-identicality contract).

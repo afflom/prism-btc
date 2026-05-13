@@ -8,16 +8,15 @@
 //! `BitcoinMiningModel` declaration site directly. `ResolverTuple`
 //! lives in [`crate::resolvers`] as `BitcoinResolverTuple`.
 //!
-//! The architecture's atomic Bitcoin feature primitives
-//! (`Version`, `PrevHash`, `MerkleRoot`, `Timestamp`, `Bits`, `Nonce`,
-//! `Target` — see ARCHITECTURE.md §2.1) are conceptual; the runtime
-//! carrier for `MiningTask` is the flat `[u8; 108]` byte payload that
-//! [`crate::model::MiningTask`]'s `PartitionProductFields` impl
-//! indexes via the host-supplied template, with the 80-byte wire-
-//! format `MiningResult` site count matching the canonical header
-//! width. No per-primitive `ConstrainedTypeShape` impls are declared
-//! today — the composition lives at the byte-range level on
-//! `TemplatePrefix` / `MiningTask` directly.
+//! The atomic Bitcoin feature primitives (`Version`, `PrevHash`,
+//! `MerkleRoot`, `Timestamp`, `Bits`, `Nonce`, `Target` — see
+//! ARCHITECTURE.md §2.1) are realized at the byte-range level on the
+//! composite shapes [`crate::model::TemplatePrefix`] (76-byte
+//! `partition_product`) and [`crate::model::MiningTask`] (108-byte
+//! `partition_product`): each composite declares its
+//! `PartitionProductFields` table naming the per-factor byte offsets
+//! and lengths. The 80-byte wire-format `MiningResult` site count
+//! matches the canonical header width.
 
 pub mod bounds;
 pub mod hasher;

@@ -1,12 +1,12 @@
 //! prism-btc — the prism implementor for Bitcoin proof-of-work.
 //!
-//! Mining inference end-to-end through prism's typed-iso surface
-//! (foundation 0.4.5). The mining transform is the ψ-pipeline
+//! Mining inference end-to-end through prism's typed-iso surface. The
+//! mining transform is the k-invariant branch of the ψ-pipeline
 //! (wiki ADR-035) applied to Bitcoin's typed feature hierarchy
-//! (architecture §2); the catamorphism dispatches each resolver-bound
-//! ψ-stage through [`resolvers::BitcoinResolverTuple`] (ADR-036). No
-//! σ-enumeration anywhere — see [`ARCHITECTURE.md`] for the normative
-//! pure-prism specification.
+//! (architecture §2, §4); foundation's catamorphism dispatches each
+//! resolver-bound ψ-stage through [`resolvers::BitcoinResolverTuple`]
+//! (ADR-036). No σ-enumeration in the verb body — see
+//! [`ARCHITECTURE.md`] for the normative pure-prism specification.
 //!
 //! ## Quick reference
 //!
@@ -16,7 +16,8 @@
 //!   ResolverTuple>` whose route is `mining_inference(input)`.
 //! - [`MiningTask`] — `partition_product(TemplatePrefix, Target)`,
 //!   108 W8 sites.
-//! - [`MiningResult`] — the ψ-pipeline label (32 W8 sites).
+//! - [`MiningResult`] — the ψ-pipeline label (80 W8 sites — the
+//!   wire-format Bitcoin header width).
 //! - [`Sha256dHasher`] — the canonical hash axis (content-addressing
 //!   primitive).
 //! - [`PrismBtcBounds`] — the `HostBounds` profile (`WITT_LEVEL_MAX_BITS = 32`).
