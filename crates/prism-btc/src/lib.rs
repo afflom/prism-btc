@@ -44,8 +44,8 @@ pub mod verbs;
 // Public façade — typed surface.
 pub use diagnostics::{take_resolution_state, ResolutionState};
 pub use domain::{
-    ultrametric_valuation, walsh_hadamard_parity_at, Bits, BlockHash, BlockHeader, MerkleRoot,
-    MiningTag, MiningWitness, Target, Timestamp, TriadicCoords, Version,
+    p_adic_valuation, ultrametric_valuation, walsh_hadamard_parity_at, Bits, BlockHash,
+    BlockHeader, MerkleRoot, MiningTag, MiningWitness, Target, Timestamp, TriadicCoords, Version,
 };
 pub use model::{BitcoinMiningModel, BitcoinMiningRoute, MiningResult, MiningTask, TemplatePrefix};
 pub use pipeline::{mine, MiningFailure, MiningOutcome};

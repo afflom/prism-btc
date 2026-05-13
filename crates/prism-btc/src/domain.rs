@@ -179,6 +179,44 @@ pub fn ultrametric_valuation(a: &[u8; 32], b: &[u8; 32]) -> u32 {
     TriadicCoords::from_hash(&xor).stratum
 }
 
+/// `p`-adic valuation of a 256-bit content-address.
+///
+/// Returns the largest `k` such that `p^k` divides the digest viewed
+/// as a 256-bit big-endian integer. For `p = 2` this coincides with
+/// [`TriadicCoords::stratum`]; for `p ∈ {3, 5, 7, …}` it
+/// generalizes the ultrametric stratification to other prime-indexed
+/// hierarchies of the address space.
+///
+/// Computed via repeated modular reduction against `p^(k+1)`, capped
+/// at the largest `k` for which `p^(k+1)` fits in `u128`. For
+/// realistic primes (`p ∈ {3, 5, 7}`) and SHA-256d-distributed
+/// inputs the cap is far above any practically observed valuation
+/// (`P(v_p ≥ 32) ≈ p^-32`, vanishing).
+///
+/// Panics if `p < 2`.
+#[must_use]
+pub fn p_adic_valuation(d: &[u8; 32], p: u64) -> u32 {
+    assert!(p >= 2, "p-adic valuation requires p ≥ 2");
+    let p_u128 = p as u128;
+    let mut k = 0u32;
+    let mut p_pow = p_u128; // p^(k+1)
+    loop {
+        let r = d
+            .iter()
+            .fold(0u128, |acc, &b| (acc * 256 + b as u128) % p_pow);
+        if r != 0 {
+            return k;
+        }
+        match p_pow.checked_mul(p_u128) {
+            Some(v) => {
+                p_pow = v;
+                k += 1;
+            }
+            None => return k + 1, // p^(k+1) | d but p^(k+2) overflows u128
+        }
+    }
+}
+
 /// Walsh–Hadamard parity at the bit-mask frequency `omega`.
 ///
 /// Computes `popcount(d AND omega) mod 2` — the inner product of `d`
@@ -307,6 +345,44 @@ mod tests {
         let s = TriadicCoords::from_hash(&d).spectrum;
         assert_eq!(p, s);
         assert_eq!(p, 1);
+    }
+
+    #[test]
+    fn p_adic_valuation_p2_matches_stratum() {
+        // For p = 2 the p-adic valuation equals the stratum
+        // (2-adic valuation of the digest viewed as 256-bit BE).
+        let mut d = [0u8; 32];
+        d[31] = 0b1000; // bit 3 set, low bits zero → v_2 = 3.
+        assert_eq!(p_adic_valuation(&d, 2), 3);
+        assert_eq!(TriadicCoords::from_hash(&d).stratum, 3);
+    }
+
+    #[test]
+    fn p_adic_valuation_p3_basic() {
+        // 9 = 3^2, so v_3(9) = 2.
+        let mut d = [0u8; 32];
+        d[31] = 9;
+        assert_eq!(p_adic_valuation(&d, 3), 2);
+    }
+
+    #[test]
+    fn p_adic_valuation_not_divisible() {
+        // 7 is coprime to 3 and 5; v_3(7) = v_5(7) = 0.
+        let mut d = [0u8; 32];
+        d[31] = 7;
+        assert_eq!(p_adic_valuation(&d, 3), 0);
+        assert_eq!(p_adic_valuation(&d, 5), 0);
+    }
+
+    #[test]
+    fn p_adic_valuation_zero_digest_caps_at_u128_limit() {
+        // 0 is divisible by every p^k; the implementation caps at
+        // the largest k for which p^(k+1) fits in u128, then returns
+        // k + 1.
+        let d = [0u8; 32];
+        let v = p_adic_valuation(&d, 3);
+        // 3^80 < 2^128 < 3^81, so cap is around k = 80.
+        assert!(v >= 80);
     }
 
     #[test]

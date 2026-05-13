@@ -1,25 +1,29 @@
-//! Broader UOR-specific cryptanalysis of SHA-256d.
+//! UOR-and-prism-informed cryptanalysis of SHA-256d.
 //!
-//! Tests multiple UOR-structural observables on the content-
-//! addressed semantic manifold for exploitable non-uniform-random
-//! structure (ANALYSIS.md):
+//! Tests UOR-structural observables on the content-addressed semantic
+//! manifold for exploitable non-uniform-random structure (ANALYSIS.md):
 //!
 //! - §A — Triadic coordinate uniformity (stratum, spectrum,
 //!   independence, admission orthogonality).
 //! - §B — Ultrametric avalanche distribution (single-bit input
 //!   perturbation ↦ ultrametric distance between digests).
-//! - §C — Walsh–Hadamard spectrum at random non-trivial frequencies.
+//! - §C — Walsh–Hadamard spectrum at non-trivial frequencies.
 //! - §D — Stratum autocorrelation under sequential inputs.
 //! - §E — κ-derivation autocorrelation under sequential `MiningTask`
-//!   inputs (mining-specific: does template variation produce
-//!   predictable κ-nonces?).
+//!   inputs (mining-specific).
+//! - §F — `p`-adic stratification uniformity for `p ∈ {3, 5, 7}`
+//!   (generalizes the 2-adic stratum to other primes).
+//! - §G — Joint admission independence for sequential digest pairs
+//!   (pairwise independence of admission events).
+//! - §H — Differential cryptanalysis via the ultrametric (digest
+//!   distance distribution under fixed input differences).
 //!
 //! Run: `cargo run --release --example uor_cryptanalysis`
 //! (optionally `-- --samples N`; defaults to 1,000,000).
 
 use prism_btc::{
-    sha256d_display, sha256d_internal, ultrametric_valuation, walsh_hadamard_parity_at, Target,
-    TriadicCoords,
+    p_adic_valuation, sha256d_display, sha256d_internal, ultrametric_valuation,
+    walsh_hadamard_parity_at, Target, TriadicCoords,
 };
 
 const DEFAULT_SAMPLES: usize = 1_000_000;
@@ -38,6 +42,9 @@ fn main() {
     section_c_walsh_hadamard_spectrum(samples);
     section_d_stratum_autocorrelation(samples);
     section_e_kappa_derivation_autocorrelation(samples);
+    section_f_p_adic_stratification(samples);
+    section_g_joint_admission_independence(samples);
+    section_h_differential_via_ultrametric(samples);
 
     println!();
     println!("════════════════════════════════════════════════════════");
@@ -406,6 +413,238 @@ fn section_e_kappa_derivation_autocorrelation(samples: usize) {
     );
 }
 
+// ─── §F. p-adic stratification ─────────────────────────────────────────
+
+fn section_f_p_adic_stratification(samples: usize) {
+    println!();
+    println!("─── §F. p-adic stratification uniformity ──────────────");
+    println!();
+    println!("Generalizes the 2-adic stratum observable to primes");
+    println!("p ∈ {{3, 5, 7}}. Under the random-oracle model:");
+    println!("    P(v_p = k) = (p − 1) / p^(k+1)   for k ≥ 0.");
+    println!();
+
+    let primes: &[u64] = &[3, 5, 7];
+    let mut counts: Vec<Vec<u64>> = primes.iter().map(|_| vec![0u64; 96]).collect();
+
+    let mut input = [0u8; 80];
+    input[0] = 0x01;
+    for i in 0..(samples as u32) {
+        input[76..80].copy_from_slice(&i.to_le_bytes());
+        let digest = sha256d_display(&input);
+        for (j, &p) in primes.iter().enumerate() {
+            let v = p_adic_valuation(&digest, p) as usize;
+            let idx = v.min(95);
+            counts[j][idx] += 1;
+        }
+    }
+
+    let n = samples as f64;
+    for (j, &p) in primes.iter().enumerate() {
+        let p_f = p as f64;
+        let mut chi_sq = 0.0;
+        let mut df_used = 0usize;
+        // Group cells until expected ≥ 5 (rule of thumb for χ²).
+        let mut tail_obs = 0u64;
+        let mut tail_exp = 0.0;
+        let mut last_k_used = 0;
+        for (k, &c) in counts[j].iter().enumerate() {
+            let observed = c as f64;
+            let expected = n * (p_f - 1.0) / p_f.powi(k as i32 + 1);
+            if expected < 5.0 {
+                tail_obs += c;
+                tail_exp += expected;
+            } else {
+                chi_sq += (observed - expected).powi(2) / expected;
+                df_used += 1;
+                last_k_used = k;
+            }
+        }
+        if tail_exp >= 1.0 {
+            chi_sq += ((tail_obs as f64) - tail_exp).powi(2) / tail_exp;
+            df_used += 1;
+        }
+        let df = df_used.saturating_sub(1);
+        println!(
+            "  p = {}: χ² = {:.3} (df = {}; tail merged from k > {})  crit α=0.001 ≈ {:.1}",
+            p,
+            chi_sq,
+            df,
+            last_k_used,
+            chi_sq_critical_001(df),
+        );
+
+        // Show the per-k breakdown for the low cells.
+        println!("    k    observed    expected    obs/exp");
+        for (k, &c) in counts[j].iter().enumerate().take(6) {
+            let observed = c as f64;
+            let expected = n * (p_f - 1.0) / p_f.powi(k as i32 + 1);
+            if expected < 1.0 {
+                break;
+            }
+            println!(
+                "    {:3}  {:>9}    {:>9.0}    {:.4}",
+                k,
+                c,
+                expected,
+                observed / expected
+            );
+        }
+    }
+}
+
+// ─── §G. Joint admission independence ──────────────────────────────────
+
+fn section_g_joint_admission_independence(samples: usize) {
+    println!();
+    println!("─── §G. Joint admission independence (seq. pairs) ─────");
+    println!();
+    println!("For sequential 80-byte inputs (x_i, x_{{i+1}}), tests");
+    println!("whether admission events are pairwise independent under");
+    println!("the regtest target 0x{:08x}:", REGTEST_NBITS);
+    println!("    H₀:  P(admit(x_i) ∧ admit(x_{{i+1}})) = P(admit)².");
+    println!("If non-independent, sequential templates would carry");
+    println!("exploitable admission correlation.");
+    println!();
+
+    let target = Target::new(REGTEST_NBITS);
+    let mut both = 0u64;
+    let mut only_left = 0u64;
+    let mut only_right = 0u64;
+    let mut neither = 0u64;
+
+    let mut input = [0u8; 80];
+    input[0] = 0x01;
+    let mut prev_admit: Option<bool> = None;
+
+    for i in 0..(samples as u32) {
+        input[76..80].copy_from_slice(&i.to_le_bytes());
+        let digest = sha256d_display(&input);
+        let admit = target.is_satisfied_by_bytes(&digest);
+        if let Some(prev) = prev_admit {
+            match (prev, admit) {
+                (true, true) => both += 1,
+                (true, false) => only_left += 1,
+                (false, true) => only_right += 1,
+                (false, false) => neither += 1,
+            }
+        }
+        prev_admit = Some(admit);
+    }
+
+    let n_pairs = (both + only_left + only_right + neither) as f64;
+    let admit_left = (both + only_left) as f64;
+    let admit_right = (both + only_right) as f64;
+    let p_admit_left = admit_left / n_pairs;
+    let p_admit_right = admit_right / n_pairs;
+    let p_both_obs = (both as f64) / n_pairs;
+    let p_both_indep = p_admit_left * p_admit_right;
+
+    // χ² independence test on the 2×2 contingency table.
+    // Cell (a, b) expected count = row_a_total × col_b_total / N.
+    let row_left_admit = admit_left;
+    let row_left_reject = (only_right + neither) as f64;
+    let col_right_admit = admit_right;
+    let col_right_reject = (only_left + neither) as f64;
+    let expected = |row_total: f64, col_total: f64| row_total * col_total / n_pairs;
+    let cells = [
+        (both as f64, expected(row_left_admit, col_right_admit)),
+        (only_left as f64, expected(row_left_admit, col_right_reject)),
+        (
+            only_right as f64,
+            expected(row_left_reject, col_right_admit),
+        ),
+        (neither as f64, expected(row_left_reject, col_right_reject)),
+    ];
+    let chi_sq: f64 = cells
+        .iter()
+        .map(|(o, e)| if *e > 0.0 { (o - e).powi(2) / e } else { 0.0 })
+        .sum();
+
+    println!("  P(admit x_i)         = {:.6}", p_admit_left);
+    println!("  P(admit x_{{i+1}})     = {:.6}", p_admit_right);
+    println!("  P(both admit, obs)   = {:.6}", p_both_obs);
+    println!("  P(both admit, indep) = {:.6}", p_both_indep);
+    println!(
+        "  Observed − Independent = {:+.6}",
+        p_both_obs - p_both_indep
+    );
+    println!();
+    println!(
+        "  2×2 contingency χ² = {:.3} (df=1; crit α=0.001 ≈ 10.83)",
+        chi_sq
+    );
+}
+
+// ─── §H. Differential cryptanalysis via the ultrametric ────────────────
+
+fn section_h_differential_via_ultrametric(samples: usize) {
+    println!();
+    println!("─── §H. Differential cryptanalysis via ultrametric ────");
+    println!();
+    println!("For fixed input differences Δ of various Hamming");
+    println!("weights, measures the distribution of");
+    println!("    v_2(SHA-256d(x) ⊕ SHA-256d(x ⊕ Δ))");
+    println!("under the random-oracle model. For any Δ ≠ 0 the");
+    println!("distribution should be Geometric(1/2). A biased");
+    println!("distribution at any specific Δ would expose a");
+    println!("differential characteristic.");
+    println!();
+
+    let deltas: &[(&str, [u8; 80])] = &[
+        ("Δ weight 1 (single bit)", make_delta(80, 1)),
+        ("Δ weight 4", make_delta(80, 4)),
+        ("Δ weight 16", make_delta(80, 16)),
+        ("Δ weight 64", make_delta(80, 64)),
+        ("Δ weight 320 (half)", make_delta(80, 320)),
+        ("Δ weight 639 (all but 1)", make_delta(80, 639)),
+    ];
+
+    let per_delta = samples / deltas.len();
+    let n_per = per_delta as f64;
+
+    for (label, delta) in deltas {
+        let mut counts = vec![0u64; 257];
+        let mut input = [0u8; 80];
+        input[0] = 0x01;
+
+        for i in 0..(per_delta as u32) {
+            input[76..80].copy_from_slice(&i.to_le_bytes());
+            let d0 = sha256d_display(&input);
+            let mut x_xor = input;
+            for (b, &m) in x_xor.iter_mut().zip(delta.iter()) {
+                *b ^= m;
+            }
+            let d1 = sha256d_display(&x_xor);
+            let v = ultrametric_valuation(&d0, &d1);
+            counts[v as usize] += 1;
+        }
+        let chi_sq = chi_sq_geometric(&counts, n_per);
+        println!(
+            "  {:32}  χ² = {:.3}  (df=16; crit α=0.001 ≈ 39.2)",
+            label, chi_sq
+        );
+    }
+}
+
+/// Build an 80-byte mask of approximate Hamming weight `target_weight`
+/// by setting the low `target_weight` bits in low-to-high byte order.
+/// Exact weight if `target_weight ≤ 640`.
+fn make_delta(byte_len: usize, target_weight: usize) -> [u8; 80] {
+    assert!(byte_len == 80);
+    let mut delta = [0u8; 80];
+    let mut remaining = target_weight;
+    for b in delta.iter_mut() {
+        if remaining == 0 {
+            break;
+        }
+        let bits = remaining.min(8);
+        *b = ((1u16 << bits) - 1) as u8;
+        remaining -= bits;
+    }
+    delta
+}
+
 // ─── Helpers ───────────────────────────────────────────────────────────
 
 fn chi_sq_geometric(counts: &[u64], n: f64) -> f64 {
@@ -441,18 +680,32 @@ fn parse_samples() -> Option<usize> {
 }
 
 fn chi_sq_critical_001(df: usize) -> f64 {
-    // α = 0.001 critical χ² for low df. Hard-coded table.
+    // α = 0.001 critical χ² values for df ∈ [1, 40]. Standard table.
     match df {
         1 => 10.83,
         2 => 13.82,
+        3 => 16.27,
         4 => 18.47,
+        5 => 20.52,
+        6 => 22.46,
+        7 => 24.32,
         8 => 26.12,
+        9 => 27.88,
         10 => 29.59,
+        11 => 31.26,
+        12 => 32.91,
+        13 => 34.53,
+        14 => 36.12,
         15 => 37.70,
         16 => 39.25,
+        17 => 40.79,
+        18 => 42.31,
+        19 => 43.82,
         20 => 45.32,
+        25 => 52.62,
         30 => 59.70,
         32 => 62.49,
+        40 => 73.40,
         _ => 100.0,
     }
 }

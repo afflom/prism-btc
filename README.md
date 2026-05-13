@@ -201,17 +201,19 @@ end-to-end. `just vv` reproduces it.
 
 ## Analyses
 
-[ANALYSIS.md](ANALYSIS.md) — **UOR-specific cryptanalysis of
-SHA-256d on the prism-btc semantic manifold**. Frames UOR as an
-ultrametric framework and Prism as a causal-semantic transport
-field on a content-addressed manifold, then tests five families of
-UOR-structural observables (triadic coordinates, ultrametric
-avalanche, Walsh–Hadamard spectrum at 32 non-trivial frequencies,
-stratum autocorrelation, κ-derivation autocorrelation) for
-exploitable non-uniform-random structure. Empirical results at 10⁷
-samples per test: every observable passes its α=0.001 test;
-nothing exposes admission-relevant structure. Reproducible via
-`cargo run --release --example uor_cryptanalysis`.
+[ANALYSIS.md](ANALYSIS.md) — **UOR-and-prism-informed
+cryptanalysis of SHA-256d**. UOR as ultrametric framework; Prism
+as causal-semantic transport field on a content-addressed
+semantic manifold; eight empirical tests at 10⁷ samples each
+covering triadic coordinates, ultrametric avalanche, Walsh–Hadamard
+spectrum at 32 non-trivial frequencies, stratum / κ-derivation
+autocorrelation, generalized p-adic stratification for
+`p ∈ {3, 5, 7}`, pairwise admission independence, and differential
+cryptanalysis at six Δ-weights. All pass α=0.001. Extrapolates to a
+framework-level **σ-Projection Hardening Principle**, a proposed
+**UOR Cryptanalysis Battery** as a substrate primitive, a bridge to
+traditional cryptanalysis, and ADR-style framework contributions.
+Reproducible via `cargo run --release --example uor_cryptanalysis`.
 
 ## Real-network mining (`prism-btc-node`)
 
