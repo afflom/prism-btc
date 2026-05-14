@@ -11,16 +11,18 @@
 //! * **CS-1 … CS-6** — structural invariants (the implementation must
 //!   not drift back to dynamic dispatch / runtime allocation).
 //! * **CD-1 … CD-3** — per-input runtime invariants the model demands.
-//! * **CP-1 … CP-3** — empirical scaling of the cost identity over K
-//!   and α. (CP-4, CP-5 are witnessed by the cryptanalysis battery and
-//!   cross-referenced from CONFORMANCE.md.)
+//! * **CP-1 … CP-4** — empirical scaling of the cost identity over K
+//!   and α, including the unified `TargetCommitment × PayloadCommitment`
+//!   composition (CP-4). CP-5/CP-6 (per-Predicate-variant U1/U2
+//!   calibration) are witnessed by the cryptanalysis battery and
+//!   cross-referenced from CONFORMANCE.md.
 //!
 //! Run: `cargo test -p prism-btc --release --test conformance`
 
 use prism_btc::{
-    mine, mine_with, p_adic_valuation, sha256d_display, Bits, BlockHeader, EmptyCommitment,
-    KappaObservables, MerkleRoot, MiningFailure, PayloadCommitment, Predicate, Target, Timestamp,
-    TriadicCoords, TypedCommitment, Version, CANONICAL_PRIMES,
+    mine, mine_with, p_adic_valuation, sha256d_display, AndCommitment, Bits, BlockHeader,
+    EmptyCommitment, KappaObservables, MerkleRoot, MiningFailure, PayloadCommitment, Predicate,
+    Target, TargetCommitment, Timestamp, TriadicCoords, TypedCommitment, Version, CANONICAL_PRIMES,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -517,6 +519,64 @@ fn cp3_compound_k_alpha_scaling_is_multiplicative() {
         (mean_of_means / (PRODUCT as f64) - 1.0).abs() < CP_TOLERANCE,
         "CP-3 product: mean-of-configurations {mean_of_means:.1} must match \
          target product {PRODUCT}"
+    );
+}
+
+#[test]
+fn cp4_target_commitment_admission_orthogonal_to_payload_predicates() {
+    // CP-4: the typed admission gate introduced by `mine_with` is
+    // `AndCommitment<TargetCommitment, PayloadCommitment<K>>`. For the
+    // prism cost contract to apply *at equality* over the unified
+    // K + B bound (not as an upper bound), the base admission relation
+    // carried by `TargetCommitment` must be admission-orthogonal to
+    // the payload predicates (σ-Projection Hardening Principle U3,
+    // ANALYSIS.md §3; bandwidth-additivity U6, §4).
+    //
+    // This test witnesses the orthogonality empirically: with `lz`
+    // leading-zero admission bits (α = 2^-lz) and a K-bit payload, the
+    // composed gate should land an admitting + committed digest in
+    // ~2^(lz + K) synthetic trials. If TargetCommitment-admission and
+    // the payload parity predicates were *not* independent, the
+    // observed count would diverge from the product.
+    let cases: &[(u32, u32, u64)] = &[
+        (4, 4, 0b1010),  // lz=4, K=4 — product 2^8
+        (6, 2, 0b01),    // lz=6, K=2 — product 2^8
+        (3, 5, 0b10110), // lz=3, K=5 — product 2^8
+    ];
+    for &(lz, k, payload) in cases {
+        let predicted = (1u64 << (lz + k)) as f64;
+        let max_per_trial = (predicted as u64) * 64 + 1024;
+        let observed = average_trials(lz, k, payload, CP_N_TRIALS, max_per_trial);
+        let ratio = observed / predicted;
+        assert!(
+            (ratio - 1.0).abs() < CP_TOLERANCE,
+            "CP-4 (lz={lz}, K={k}): observed {observed:.1} vs predicted {predicted:.1} \
+             (ratio {ratio:.3}); TargetCommitment admission must be orthogonal to \
+             the payload predicates for AndCommitment bandwidth to be tight"
+        );
+    }
+
+    // Surface cross-check: AndCommitment<TargetCommitment, _> reports
+    // the sum of component bandwidths; EmptyCommitment is the
+    // composition identity (mine == mine_with at B = 0).
+    let target_c = TargetCommitment::from(Target::new(REGTEST_NBITS));
+    let payload = PayloadCommitment::<6>::from_bits([true, false, true, true, false, true]);
+    let composed: AndCommitment<TargetCommitment, PayloadCommitment<6>> = target_c.and(payload);
+    let sum = target_c.bandwidth_bits() + payload.bandwidth_bits();
+    assert!(
+        (composed.bandwidth_bits() - sum).abs() < 1e-9,
+        "CP-4: AndCommitment bandwidth must equal the sum of component bandwidths"
+    );
+    assert_eq!(
+        composed.predicate_count(),
+        target_c.predicate_count() + payload.predicate_count(),
+        "CP-4: AndCommitment predicate_count must be additive"
+    );
+    let identity = target_c.and(EmptyCommitment);
+    assert!(
+        (identity.bandwidth_bits() - target_c.bandwidth_bits()).abs() < 1e-9,
+        "CP-4: TargetCommitment.and(EmptyCommitment) must equal TargetCommitment — \
+         mine is mine_with at B = 0"
     );
 }
 

@@ -29,6 +29,7 @@
 use uor_foundation::pipeline::PrismModel;
 use uor_foundation::DefaultHostTypes;
 
+use crate::commitment::TypedCommitment as _;
 use crate::diagnostics::{take_resolution_state, ResolutionState};
 use crate::domain::{
     p_adic_valuation, ultrametric_valuation, walsh_hadamard_parity_at, BlockHeader, MiningTag,
@@ -119,6 +120,44 @@ pub enum MiningFailure {
 /// - [`MiningFailure::PipelineFailure`] — defensive variant for
 ///   substrate-level shape violations; unreachable in normal flow.
 pub fn mine(header: &BlockHeader, target: Target) -> Result<MiningOutcome, MiningFailure> {
+    // mine() is the degenerate case of mine_with() at zero application
+    // payload: the single typed admission gate is TargetCommitment.
+    // Bare-target semantics are preserved exactly —
+    // TargetCommitment::evaluate is Target::is_satisfied_by_bytes — and
+    // the prism cost model now attributes admission as a typed
+    // observable at L_inference rather than as a separate host-boundary
+    // gate. See `mine_with` for the full composed entry.
+    forward_and_check(
+        header,
+        target,
+        crate::commitment::TargetCommitment::from(target),
+    )
+}
+
+/// Run the ψ-pipeline on a [`BlockHeader`], κ-derive the wire-format
+/// header at ψ_9, and admit iff the digest satisfies the typed
+/// commitment `gate`.
+///
+/// This is the unified admission path: both [`mine`] (gate =
+/// [`crate::commitment::TargetCommitment`]) and [`mine_with`] (gate =
+/// `TargetCommitment` composed via
+/// [`crate::commitment::AndCommitment`] with the application's typed
+/// payload) flow through here, so the cost-model attribution is
+/// uniform: admission is **one `TypedCommitment::evaluate` call** at
+/// L_inference, not a separate boundary check sitting outside the
+/// typed surface.
+///
+/// `target` is still threaded through because ψ_9 reads the target
+/// bytes from the `MiningTask` carrier as part of the κ-derivation
+/// input. The commitment-parametric `PrismModel` ADR (upstream
+/// foundation work) will remove this redundancy by giving ψ_9 the
+/// typed gate directly; the cost-model attribution then collapses
+/// entirely into the ψ-pipeline.
+fn forward_and_check<C: crate::commitment::TypedCommitment>(
+    header: &BlockHeader,
+    target: Target,
+    gate: C,
+) -> Result<MiningOutcome, MiningFailure> {
     let prefix = crate::ops::header::serialize_prefix(header);
     let target_bytes = target.to_bytes();
     let task = MiningTask::new(prefix, target_bytes);
@@ -149,12 +188,13 @@ pub fn mine(header: &BlockHeader, target: Target) -> Result<MiningOutcome, Minin
     header_array.copy_from_slice(header_bytes);
     let digest = sha256d_display(&header_array);
 
-    // Host-boundary admission relation: ψ_9 produced this κ-candidate
-    // structurally; the boundary checks whether σ(header) ≤ target.
-    // Fail-closed: mine() returns Ok only when admission genuinely
-    // holds. On non-admission the candidate's typed property
-    // landscape is propagated so the receiver-side lens stays total.
-    if !target.is_satisfied_by_bytes(&digest) {
+    // Single typed admission gate. The cost model attributes admission
+    // to one `TypedCommitment::evaluate` invocation at L_inference,
+    // covering both the base admission relation (carried by
+    // TargetCommitment) and any composed application payload
+    // (carried by AndCommitment). Fail-closed: forward_and_check()
+    // returns Ok only when the unified commitment admits.
+    if !gate.evaluate(&digest) {
         return Err(MiningFailure::DidNotAdmit {
             observables: crate::observables::KappaObservables::from_digest(&digest),
             nonce,
@@ -460,11 +500,15 @@ fn low_bits_mask(n: u32) -> [u8; 32] {
 
 /// Mine with a typed `TypedCommitment` on the κ-label.
 ///
-/// Returns `Ok(MiningOutcome)` iff the structural κ-derivation:
-///
-/// 1. produces a wire-format header satisfying the admission
-///    relation `σ(header) ≤ target`, AND
-/// 2. satisfies the typed commitment `c`.
+/// Returns `Ok(MiningOutcome)` iff the structural κ-derivation
+/// produces a wire-format header that satisfies the **single typed
+/// admission gate**
+/// `TargetCommitment::from(target).and(commitment)`. The gate
+/// composes the base admission relation `σ(header) ≤ target` (now
+/// represented as a typed commitment) with the application's
+/// declared payload `commitment`, so the prism cost model attributes
+/// admission uniformly: K + B bits of declared bandwidth at L_inference,
+/// one `TypedCommitment::evaluate` invocation per ψ-pipeline traversal.
 ///
 /// **Zero-cost contract.** This entry is monomorphized per concrete
 /// `C: TypedCommitment` at every call site — there is no `Vec<Predicate>`
@@ -474,15 +518,18 @@ fn low_bits_mask(n: u32) -> [u8; 32] {
 /// the `TypedCommitment` impl, so the Lean theorem
 /// `Commitment.prf_prob_tight_wellFormed` applies at equality:
 /// expected template variations to land an admitting+committed κ-label
-/// is exactly `α^-1 × 2^c.bandwidth_bits()` where α is the bare
-/// admission probability.
+/// is exactly `2^(K + B)` where `K = TargetCommitment.bandwidth_bits()`
+/// and `B = commitment.bandwidth_bits()` — assuming the supports are
+/// admission-orthogonal (cryptanalysis-confirmed for the §14
+/// predicate families; `ARCHITECTURE.md` §14, `ANALYSIS.md` §3).
 ///
 /// # Errors
 ///
 /// - [`MiningFailure::DidNotAdmit`] — the structural κ-candidate
-///   either failed the admission relation or failed the typed
-///   commitment. The host should vary the template (extranonce roll,
-///   timestamp bump) and retry.
+///   failed the unified admission gate (either the base target,
+///   the typed commitment, or both — the gate evaluates them as one).
+///   The host should vary the template (extranonce roll, timestamp
+///   bump) and retry.
 /// - [`MiningFailure::PipelineFailure`] — defensive variant for
 ///   substrate-level shape violations; unreachable for well-formed
 ///   `MiningTask` inputs.
@@ -491,20 +538,12 @@ pub fn mine_with<C: crate::commitment::TypedCommitment>(
     target: Target,
     commitment: C,
 ) -> Result<MiningOutcome, MiningFailure> {
-    let outcome = mine(header, target)?;
-    if !commitment.evaluate(&outcome.digest) {
-        // Admission held but the typed commitment did not. Re-package
-        // as DidNotAdmit so the host loop's view is uniform — the
-        // receiver-side lens carries the κ-label's full property
-        // landscape regardless of which gate (admission or commitment)
-        // rejected the candidate.
-        return Err(MiningFailure::DidNotAdmit {
-            observables: outcome.observables,
-            nonce: outcome.nonce,
-            digest: outcome.digest,
-        });
-    }
-    Ok(outcome)
+    // The unified typed admission gate: base target + application
+    // payload composed via `AndCommitment`. One `evaluate()` call
+    // covers both. The prism contract `operational = declared at
+    // equality` applies to the full K + B bandwidth at this gate.
+    let gate = crate::commitment::TargetCommitment::from(target).and(commitment);
+    forward_and_check(header, target, gate)
 }
 
 #[cfg(test)]

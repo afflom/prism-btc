@@ -497,7 +497,8 @@ pub use pipeline::{mine, MiningOutcome, MiningFailure};
 
 // UOR-optimal mining: prism's zero-cost typed commitment surface (architecture §14)
 pub use pipeline::{mine_with, Predicate, Support};
-pub use commitment::{TypedCommitment, EmptyCommitment, PayloadCommitment};
+pub use commitment::{TypedCommitment, EmptyCommitment, PayloadCommitment,
+                     TargetCommitment, AndCommitment};
 pub use observables::{KappaObservables, ExtendedObservables, CANONICAL_PRIMES};
 
 // Session-level aggregate observatory — receiver-side typed lens at scale.
@@ -518,32 +519,61 @@ pub use domain::{MiningTag, MiningWitness, TriadicCoords};
 `mine(header: &BlockHeader, target: Target) → Result<MiningOutcome, MiningFailure>`
 builds a `MiningTask` from the host-side `BlockHeader` + `Target`,
 invokes `BitcoinMiningModel::forward` (which always produces a
-κ-label candidate for well-formed inputs), and enforces the boundary
-admission relation `σ(header) ≤ target`. On `Ok`, `MiningOutcome`
-carries the foundation-sealed `Grounded<MiningResult>`, the
-display-order digest, and `resolution: ResolutionState` (the κ-
-derived nonce + the `free_rank = 0` convergence observable). On
+κ-label candidate for well-formed inputs), and enforces the
+admission relation `σ(header) ≤ target`. Admission is represented
+as a `TypedCommitment` — `TargetCommitment` — so `mine` is exactly
+`mine_with` at zero application payload (`B = 0`): the single typed
+admission gate is `TargetCommitment::from(target)`. On `Ok`,
+`MiningOutcome` carries the foundation-sealed `Grounded<MiningResult>`,
+the display-order digest, and `resolution: ResolutionState` (the
+κ-derived nonce + the `free_rank = 0` convergence observable). On
 `Err(MiningFailure::DidNotAdmit)`, [`take_resolution_state`] returns
 ψ_9's `ResolutionState` so the host can inspect the κ-derivation
 that didn't admit.
 
 `mine_with<C: TypedCommitment>(header, target, commitment) → Result<MiningOutcome, MiningFailure>`
-is the UOR-optimal mining entry point (architecture §14): the
-host-boundary admission gate is augmented with a typed commitment.
-Returns `Ok` iff the κ-label satisfies both admission and the typed
-commitment; expected cost = `α^-1 × 2^B` template variations per
-ANALYSIS.md §5.5 (U6 Joint-Probability Multiplicativity), where
-`B = commitment.bandwidth_bits()`.
+is the UOR-optimal mining entry point (architecture §14). The
+admission gate is the **single composed typed commitment**
+`TargetCommitment::from(target).and(commitment)` — an
+`AndCommitment` conjoining the base admission relation (now itself
+a `TypedCommitment`) with the application's declared payload. Both
+`mine` and `mine_with` route through one internal `forward_and_check`
+path, so admission is **one `TypedCommitment::evaluate` invocation**
+attributed at L_inference in the semantic-field cost model (§1.0),
+not a host-boundary gate sitting outside the typed surface. Returns
+`Ok` iff the κ-label satisfies the composed gate; expected cost =
+`2^(K + B)` template variations, where `K = TargetCommitment.
+bandwidth_bits()` (≈77 at mainnet) and `B = commitment.
+bandwidth_bits()` — assuming the supports are admission-orthogonal
+(cryptanalysis-confirmed for the §14 predicate families and
+witnessed for the `TargetCommitment × PayloadCommitment` composition
+by conformance test CP-4).
 
 The function is **monomorphized per concrete `C`** — no `Vec`, no
 dynamic dispatch, no runtime disjointness check. `wellFormed`
 (Lean: `Commitment.wellFormed`) is discharged at the type level by
 the `TypedCommitment` impl's invariants, so the Lean tight-bound
 theorem `Commitment.prf_prob_tight_wellFormed` applies at equality
-(declared bandwidth = operational PRF cost; not an upper bound).
-Every `MiningOutcome` additionally carries a `KappaObservables`
-decoding of the κ-label's canonical UOR property landscape — the
-receiver-side typed lens to the sender-side commitment surface.
+over the full `K + B` bound (declared bandwidth = operational PRF
+cost; not an upper bound). Every `MiningOutcome` additionally
+carries a `KappaObservables` decoding of the κ-label's canonical UOR
+property landscape — the receiver-side typed lens to the
+sender-side commitment surface.
+
+> **Cost-model attribution and the residual upstream move.** Routing
+> admission through the typed-commitment surface attributes it at
+> L_inference: the prism contract `operational = declared at
+> equality` now ranges over the unified `K + B` commitment rather
+> than only the `B` increment. The κ-label's *evaluation* against
+> the gate still happens in prism-btc's `forward_and_check` wrapper,
+> immediately after the foundation catamorphism returns the κ-label
+> — not *inside* the catamorphism's terminal ψ-stage. Pulling
+> admission fully inside the ψ-pipeline (so `BitcoinMiningModel::
+> forward` itself is gate-aware) requires `PrismModel` to carry the
+> commitment as a substitution-axis-adjacent type parameter — a
+> foundation-side change to the trait arity and the catamorphism's
+> ψ_9 dispatch. That is upstream ADR work; the typed feature
+> hierarchy and verb body in this repository are unchanged by it.
 
 ## 9. Substrate surface
 
@@ -790,6 +820,15 @@ pub struct EmptyCommitment;              // bandwidth 0, accept_prob 1
 pub struct PayloadCommitment<const K: usize> {
     expected: [u32; K],                  // K bits at K low single-bit positions
 }
+
+pub struct TargetCommitment {            // base admission σ(header) ≤ target,
+    target_bytes: [u8; 32],              //   as a TypedCommitment.
+}                                        //   bandwidth ≈ −log₂(target/2²⁵⁶)
+
+pub struct AndCommitment<A, B> {         // conjunction: admits iff both admit.
+    pub a: A,                            //   bandwidth additive, accept_prob
+    pub b: B,                            //   multiplicative (tight when the
+}                                        //   supports are admission-orthogonal)
 ```
 
 `crates/prism-btc/src/pipeline.rs`:
@@ -803,9 +842,18 @@ pub fn mine_with<C: TypedCommitment>(
 ```
 
 `mine_with` is monomorphized per concrete `C` at every call site.
-Calling `mine_with(_, _, EmptyCommitment)` is identical to bare
-`mine`; `PayloadCommitment<K>` instantiates a separate compile unit
-per K with the loop bounded by the const generic.
+Internally it composes the **single typed admission gate**
+`TargetCommitment::from(target).and(commitment)` and routes it
+through one `forward_and_check` path shared with `mine`. Calling
+`mine_with(_, _, EmptyCommitment)` is identical to bare `mine`
+(the gate reduces to `TargetCommitment` alone — `B = 0`);
+`PayloadCommitment<K>` instantiates a separate compile unit per K
+with the loop bounded by the const generic. Because the base
+admission relation is itself a `TypedCommitment` (`TargetCommitment`),
+the prism cost contract `operational = declared at equality` ranges
+over the full `K + B` bandwidth of the composed gate, not only the
+`B` increment — admission is attributed at L_inference in the
+semantic-field cost model (§1.0, §8).
 
 The primitive [`Predicate`] enum names the four UOR observable
 families the cryptanalysis battery (ANALYSIS.md §3) confirmed

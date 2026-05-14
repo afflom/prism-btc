@@ -79,8 +79,9 @@ make the cost-model claim verifiable rather than aspirational.
 | **CP-1** | At fixed α (admission_lz = 1, α = 1/2), expected trial count matches `α⁻¹ × 2^K` for K ∈ {0, 2, 4, 8, 12} within ±30% (≈ 4σ) at N=200 trials per K. The doubling holds across four decades in K. | empirical (synthetic mining loop over SHA-256d) | `tests/conformance.rs::cp1_k_scaling_holds_across_two_decades` |
 | **CP-2** | At fixed K=2, expected trial count scales as `α⁻¹` across admission probabilities α ∈ {2⁻¹, 2⁻⁴, 2⁻⁸, 2⁻¹²} within ±30% at N=200. The `α⁻¹` factor holds independently of K. | empirical (synthetic mining loop, varying admission stringency) | `tests/conformance.rs::cp2_alpha_scaling_holds_at_fixed_k` |
 | **CP-3** | The compound cost `α⁻¹ × 2^K` factors multiplicatively: trial count at (K=4, α=2⁻⁴), (K=2, α=2⁻⁶), and (K=0, α=2⁻⁸) — all targeting product 2⁸ = 256 trials — agree on the product within ±30%. The model's product structure is empirically realized. | empirical | `tests/conformance.rs::cp3_compound_k_alpha_scaling_is_multiplicative` |
-| **CP-4** | U1 (marginal-uniformity) holds per Predicate variant at α = 0.001 confidence: empirical acceptance rate of each variant matches its `accept_prob_rational()` at 10⁶ samples (χ² < 10.83, df=1). | empirical | `examples/uor_cryptanalysis.rs::section_i_u1_marginal_calibration` (cross-reference) |
-| **CP-5** | U2 (joint-independence) holds for disjoint-support Predicate pairs at α = 0.001 confidence across BitSet⊥BitSet / BitSet⊥Modular / Modular⊥Modular regimes. | empirical | `examples/uor_cryptanalysis.rs::section_j_u2_joint_independence` (cross-reference) |
+| **CP-4** | **`TargetCommitment` admission is orthogonal to `PayloadCommitment` predicates.** The composed gate `AndCommitment<TargetCommitment, PayloadCommitment<K>>` lands an admitting+committed digest in exactly `2^(lz + K)` synthetic trials at lz leading-zero admission bits, within ±30%. Witnesses that the Lean tight-bound theorem `prf_prob_tight_wellFormed` applies at equality over the unified K + B bandwidth, not just the B increment. | empirical | `tests/conformance.rs::cp4_target_commitment_admission_orthogonal_to_payload_predicates` |
+| **CP-5** | U1 (marginal-uniformity) holds per Predicate variant at α = 0.001 confidence: empirical acceptance rate of each variant matches its `accept_prob_rational()` at 10⁶ samples (χ² < 10.83, df=1). | empirical | `examples/uor_cryptanalysis.rs::section_i_u1_marginal_calibration` (cross-reference) |
+| **CP-6** | U2 (joint-independence) holds for disjoint-support Predicate pairs at α = 0.001 confidence across BitSet⊥BitSet / BitSet⊥Modular / Modular⊥Modular regimes. | empirical | `examples/uor_cryptanalysis.rs::section_j_u2_joint_independence` (cross-reference) |
 
 ## CM — Mainnet readiness
 
@@ -158,7 +159,7 @@ this aggregate is the operator's typed window onto the search space.
   what bounds throughput.
 - **Cryptographic security** of the σ-projection beyond what U1–U5
   empirical witnessing covers. The Lean theorem is conditional on
-  U1+U2; per-variant calibration witnesses them (CP-4, CP-5). Proving
+  U1+U2; per-variant calibration witnesses them (CP-5, CP-6). Proving
   SHA-256d is a PRF is an open cryptographic problem.
 - **Operational invariants** outside prism-btc's surface — stale
   templates over long mining sessions, network reorganizations, RPC

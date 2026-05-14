@@ -25,14 +25,23 @@
 //!   surface for ψ_9's structural κ-derivation
 //!   ([`diagnostics`] module).
 //! - [`mine_with`] / [`TypedCommitment`] / [`EmptyCommitment`] /
-//!   [`PayloadCommitment`] — UOR-optimal mining: prism's **zero-cost
-//!   typed commitment surface** (architecture §14). Every commitment
-//!   is monomorphized per use site — no `Vec`, no dynamic dispatch,
-//!   no runtime allocation, no runtime disjointness check.
-//!   `wellFormed` is discharged at the type level by the typed
-//!   commitment's invariants; the Lean theorem
+//!   [`PayloadCommitment`] / [`TargetCommitment`] / [`AndCommitment`]
+//!   — UOR-optimal mining: prism's **zero-cost typed commitment
+//!   surface** (architecture §14). Every commitment is monomorphized
+//!   per use site — no `Vec`, no dynamic dispatch, no runtime
+//!   allocation, no runtime disjointness check. `wellFormed` is
+//!   discharged at the type level by the typed commitment's
+//!   invariants; the Lean theorem
 //!   `Commitment.prf_prob_tight_wellFormed` applies at equality
 //!   (declared bandwidth = operational PRF cost, not an upper bound).
+//!   The base admission relation `σ(header) ≤ target` is itself a
+//!   `TypedCommitment` ([`TargetCommitment`]); [`mine_with`]
+//!   composes it with the application payload via
+//!   [`AndCommitment`], so the cost model attributes admission as
+//!   one typed observable at L_inference rather than as a separate
+//!   host-boundary gate. (The substrate move — commitment-parametric
+//!   ψ_9 — requires an upstream `PrismModel` arity bump and is
+//!   foundation-side ADR work.)
 //! - [`Predicate`] / [`Support`] — the primitive typed-predicate
 //!   enum (Parity, StratumEq, PAdicEq, UltrametricCloseTo) and its
 //!   algebraic-support type. Used by [`TypedCommitment`] implementors
@@ -75,7 +84,9 @@ pub mod verbs;
 
 // Public façade — typed surface.
 pub use campaign::{CampaignStats, PADIC_BINS, STRATUM_BINS};
-pub use commitment::{EmptyCommitment, PayloadCommitment, TypedCommitment};
+pub use commitment::{
+    AndCommitment, EmptyCommitment, PayloadCommitment, TargetCommitment, TypedCommitment,
+};
 pub use diagnostics::{take_resolution_state, ResolutionState};
 pub use domain::{
     p_adic_valuation, ultrametric_valuation, walsh_hadamard_parity_at, Bits, BlockHash,
