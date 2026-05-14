@@ -560,20 +560,27 @@ carries a `KappaObservables` decoding of the κ-label's canonical UOR
 property landscape — the receiver-side typed lens to the
 sender-side commitment surface.
 
-> **Cost-model attribution and the residual upstream move.** Routing
-> admission through the typed-commitment surface attributes it at
-> L_inference: the prism contract `operational = declared at
-> equality` now ranges over the unified `K + B` commitment rather
-> than only the `B` increment. The κ-label's *evaluation* against
-> the gate still happens in prism-btc's `forward_and_check` wrapper,
-> immediately after the foundation catamorphism returns the κ-label
-> — not *inside* the catamorphism's terminal ψ-stage. Pulling
-> admission fully inside the ψ-pipeline (so `BitcoinMiningModel::
-> forward` itself is gate-aware) requires `PrismModel` to carry the
-> commitment as a substitution-axis-adjacent type parameter — a
-> foundation-side change to the trait arity and the catamorphism's
-> ψ_9 dispatch. That is upstream ADR work; the typed feature
-> hierarchy and verb body in this repository are unchanged by it.
+> **Cost-model attribution: closed at the substrate.** Foundation
+> v0.4.6 (ADR-048) carries the cost-model commitment as `PrismModel`'s
+> 5th type parameter `C: TypedCommitment`. The catamorphism
+> (`run_route`) evaluates `commitment.evaluate(kappa_label)`
+> immediately after the resolver chain emits the κ-label and
+> short-circuits to `PipelineFailure::ShapeViolation` on rejection;
+> the `CommitmentEvaluated` trace event records the result. Bitcoin's
+> protocol admission `σ(header) ≤ target` is not a foundation-side
+> `ObservablePredicate` (the closed catalog is stratum / parity /
+> ultrametric closeness / affine parity — target-comparison isn't an
+> observable), so it stays at the prism-btc boundary in
+> `forward_and_check` as the host-protocol gate. Application-tier
+> payload commitments — built from prism-btc's open `TypedCommitment`
+> surface (`PayloadCommitment<K>`, `TargetCommitment`, the
+> `AndCommitment` composer) — compose through the same wrapper. The
+> prism contract `operational = declared at equality` applies over
+> the full `K + B` bound at the prism-btc boundary; the substrate
+> mirror is available for downstream uses through the re-exports of
+> `uor_foundation::pipeline::{EmptyCommitment, SingletonCommitment,
+> AndCommitment, TypedCommitment, ObservablePredicate, Stratum,
+> WalshHadamardParity, UltrametricCloseTo, AffineParity}`.
 
 ## 9. Substrate surface
 

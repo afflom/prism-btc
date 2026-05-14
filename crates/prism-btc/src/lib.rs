@@ -38,10 +38,17 @@
 //!   `TypedCommitment` ([`TargetCommitment`]); [`mine_with`]
 //!   composes it with the application payload via
 //!   [`AndCommitment`], so the cost model attributes admission as
-//!   one typed observable at L_inference rather than as a separate
-//!   host-boundary gate. (The substrate move — commitment-parametric
-//!   ψ_9 — requires an upstream `PrismModel` arity bump and is
-//!   foundation-side ADR work.)
+//!   one typed observable at L_inference. Foundation v0.4.6
+//!   (ADR-048) carries the substrate-level cost-model commitment as
+//!   `PrismModel`'s 5th type parameter — [`BitcoinMiningModel`]
+//!   pins it at `EmptyCommitment` because Bitcoin's protocol
+//!   target-comparison is not a foundation `ObservablePredicate`,
+//!   and the prism-btc-side `forward_and_check` does the gate
+//!   evaluation. The foundation surface is re-exported via the
+//!   `uor_foundation::pipeline::{Stratum, WalshHadamardParity,
+//!   UltrametricCloseTo, AffineParity, SingletonCommitment}` types
+//!   for downstream consumers that build typed commitments against
+//!   the substrate directly.
 //! - [`Predicate`] / [`Support`] — the primitive typed-predicate
 //!   enum (Parity, StratumEq, PAdicEq, UltrametricCloseTo) and its
 //!   algebraic-support type. Used by [`TypedCommitment`] implementors

@@ -162,11 +162,20 @@ fn forward_and_check<C: crate::commitment::TypedCommitment>(
     let target_bytes = target.to_bytes();
     let task = MiningTask::new(prefix, target_bytes);
 
+    // Foundation 0.4.6 (ADR-048): PrismModel's 5-position form. The
+    // 5th parameter is `C: TypedCommitment`, the substrate-level
+    // cost-model commitment slot the catamorphism evaluates against
+    // the κ-label inside `run_route`. BitcoinMiningModel pins
+    // C = EmptyCommitment because Bitcoin's protocol admission
+    // (digest ≤ target byte threshold) is not a foundation-side
+    // `ObservablePredicate` — it's checked at the prism-btc boundary
+    // by `forward_and_check`'s `gate.evaluate(&digest)` call.
     let grounded = <BitcoinMiningModel as PrismModel<
         DefaultHostTypes,
         PrismBtcBounds,
         Sha256dHasher,
         BitcoinResolverTuple<Sha256dHasher>,
+        uor_foundation::pipeline::EmptyCommitment,
     >>::forward(task)
     .map_err(|_| MiningFailure::PipelineFailure)?;
 

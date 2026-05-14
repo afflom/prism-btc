@@ -320,6 +320,20 @@ output_shape! {
 
 // ─── The PrismModel ─────────────────────────────────────────────────────
 
+// Foundation 0.4.6 (ADR-048) extends `PrismModel` with a 5th type
+// parameter `C: TypedCommitment` — the substrate-level cost-model
+// commitment slot the catamorphism evaluates against the κ-label
+// immediately after the resolver chain emits it. We pin
+// `C = EmptyCommitment` here: the base admission relation
+// `σ(header) ≤ target` is *Bitcoin protocol*, not a foundation-side
+// observable predicate (target-comparison is not an
+// `ObservablePredicate` — the closed catalog covers stratum, parity,
+// ultrametric closeness, affine parity), so it lives in
+// `pipeline::forward_and_check`'s wrapper. Application-tier payload
+// commitments compose via prism-btc's open `TypedCommitment` (see
+// `crate::commitment`). This 5-position form pins the substrate
+// acknowledgment that ψ_9 is now commitment-aware upstream — the
+// previously-documented residual upstream move is closed.
 prism_model! {
     pub struct BitcoinMiningModel;
     pub struct BitcoinMiningRoute;
@@ -327,7 +341,8 @@ prism_model! {
         DefaultHostTypes,
         PrismBtcBounds,
         Sha256dHasher,
-        BitcoinResolverTuple<Sha256dHasher>
+        BitcoinResolverTuple<Sha256dHasher>,
+        uor_foundation::pipeline::EmptyCommitment
     > for BitcoinMiningModel {
         type Input = MiningTask;
         type Output = MiningResult;
