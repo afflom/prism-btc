@@ -1,5 +1,7 @@
-//! `BitcoinMiningModel` — prism-btc's `PrismModel<H, B, A, R>` declaration
-//! (wiki ADR-020 + ADR-036; architecture §5).
+//! `BitcoinMiningModel` — prism-btc's `PrismModel<H, B, A, R, C>`
+//! declaration (wiki ADR-020 + ADR-036 + ADR-048; architecture §5).
+//! The 5-position `C` slot is pinned at `EmptyCommitment` — see the
+//! note beside the `prism_model!` invocation below.
 //!
 //! The mining inference is end-to-end prism: foundation's catamorphism
 //! evaluates the ψ-chain verb arena

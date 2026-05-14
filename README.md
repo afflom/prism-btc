@@ -85,9 +85,10 @@ prism_model! {
 ```
 
 `BitcoinMiningModel::forward(task: MiningTask) -> Result<Grounded<MiningResult>, _>`
-is the canonical typed-iso surface (ADR-020 + ADR-036 4-position form).
-The `Grounded<MiningResult>` is the foundation-sealed certificate that
-the typed inference admits; its `output_bytes()` carry the label.
+is the canonical typed-iso surface (ADR-020 + ADR-036 + ADR-048
+5-position form, foundation 0.4.6). The `Grounded<MiningResult>` is
+the foundation-sealed certificate that the typed inference admits;
+its `output_bytes()` carry the label.
 
 ## Workspace
 

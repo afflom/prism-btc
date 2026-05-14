@@ -196,9 +196,10 @@ spanning [0, 80) exactly.
 
 ## 3. Substitution axes
 
-Foundation's `PrismModel<HostTypes, HostBounds, Hasher, ResolverTuple>`
-fixes prism-btc's four substitution axes (ADR-007, ADR-010, ADR-018,
-ADR-030, ADR-036):
+Foundation's `PrismModel<HostTypes, HostBounds, Hasher, ResolverTuple,
+TypedCommitment>` fixes prism-btc's four substitution axes plus the
+substrate-level cost-model commitment slot (ADR-007, ADR-010, ADR-018,
+ADR-030, ADR-036, ADR-048):
 
 | Axis | prism-btc selection | Role |
 |---|---|---|
@@ -206,6 +207,7 @@ ADR-030, ADR-036):
 | `HostBounds` | `PrismBtcBounds` | `WITT_LEVEL_MAX_BITS = 32`, `FINGERPRINT_{MIN,MAX}_BYTES = 32`, `TRACE_MAX_EVENTS = 64`, `NERVE_SITES_MAX = 80`, `NERVE_CONSTRAINTS_MAX = 128`, `BETTI_DIMENSION_MAX = 80`, `AFFINE_COEFFS_MAX = 80`, `CONJUNCTION_TERMS_MAX = 128` |
 | `Hasher` | `Sha256dHasher` | Canonical hash axis (axis_index=0, kernel_id=0). Pure-Rust SHA-256-then-SHA-256. Content-addressing bijection for double-SHA-256-bound Bitcoin types. **Not the mining transform** — the σ-projection is a content-addressing primitive, not an algorithm prism-btc runs. |
 | `ResolverTuple` | `BitcoinResolverTuple<Sha256dHasher>` | Bitcoin-specific realization of the 8 resolver-bound ψ-stages. Each resolver names what the parametric tensor-algebra functor computes for Bitcoin's typed feature hierarchy. |
+| `TypedCommitment` | `uor_foundation::pipeline::EmptyCommitment` | Substrate-level cost-model commitment slot (ADR-048). Foundation's catamorphism evaluates this on the κ-label inside `run_route`. Pinned at `EmptyCommitment` because Bitcoin's protocol admission (`digest ≤ target` byte comparison) is not a foundation-side `ObservablePredicate` — the closed catalog covers structural-observable predicates; target-comparison stays at the prism-btc boundary in `forward_and_check`. The application-tier typed-commitment surface (`crate::commitment`) carries `TargetCommitment` + `PayloadCommitment<K>` + composition. |
 
 `PrismBtcBounds`' `WITT_LEVEL_MAX_BITS = 32` matches Bitcoin's `Nonce`
 field exactly. Higher Witt levels are not required — the typed surface's

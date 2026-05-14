@@ -13,7 +13,8 @@
 //! - [`mine`] — the public entry point: builds a [`MiningTask`] and
 //!   invokes [`BitcoinMiningModel`]'s `PrismModel::forward` impl.
 //! - [`BitcoinMiningModel`] — `PrismModel<HostTypes, HostBounds, Hasher,
-//!   ResolverTuple>` whose route is `mining_inference(input)`.
+//!   ResolverTuple, EmptyCommitment>` (foundation 0.4.6 5-position
+//!   form, ADR-048) whose route is `mining_inference(input)`.
 //! - [`MiningTask`] — `partition_product(TemplatePrefix, Target)`,
 //!   108 W8 sites.
 //! - [`MiningResult`] — the ψ-pipeline label (80 W8 sites — the
