@@ -7,7 +7,7 @@
 //! `PrimitiveOp` generators (`Add`, `Xor`, `And`, `Or`, plus right-rotate
 //! built from `Succ`/`Pred` over `WittLevel::W32`). The composition is
 //! recorded structurally at the type level via `Term::Application` in
-//! `uor_foundation::term`; the per-call evaluation is the function below.
+//! `prism::operation`; the per-call evaluation is the function below.
 
 const K: [u32; 64] = [
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -31,7 +31,7 @@ pub const SHA256_INITIAL_STATE: [u32; 8] = [
 /// Public so the streaming hasher in [`crate::shapes::hasher::Sha256dHasher`]
 /// can reuse it without code duplication. This is the runtime evaluation of
 /// the `Sha256Compression` operation; the structural identity in foundation
-/// `PrimitiveOp` vocabulary is declared in `uor_foundation::term`.
+/// `PrimitiveOp` vocabulary is declared in `prism::operation`.
 #[inline]
 pub fn compress(state: &mut [u32; 8], block: &[u8; 64]) {
     let mut w = [0u32; 64];

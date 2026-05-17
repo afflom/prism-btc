@@ -12,49 +12,51 @@
 //!
 //! - [`mine`] — the public entry point: builds a [`MiningTask`] and
 //!   invokes [`BitcoinMiningModel`]'s `PrismModel::forward` impl.
+//!   Admission (`digest ≤ target` under big-endian unsigned
+//!   comparison) is evaluated **inside foundation's `run_route`** via
+//!   the model's pinned [`TargetCommitment`].
 //! - [`BitcoinMiningModel`] — `PrismModel<HostTypes, HostBounds, Hasher,
-//!   ResolverTuple, EmptyCommitment>` (foundation 0.4.6 5-position
-//!   form, ADR-048) whose route is `mining_inference(input)`.
+//!   ResolverTuple, TargetCommitment>` (wiki ADR-048 5-position form;
+//!   foundation 0.4.12). The 5th slot is the cost-model commitment
+//!   surface; pinning it at [`TargetCommitment`] = foundation alias
+//!   `SingletonCommitment<LexicographicLessEqThreshold>` (wiki
+//!   ADR-040) makes Bitcoin's admission relation a typed predicate
+//!   evaluated inside the catamorphism per wiki QS-06.
 //! - [`MiningTask`] — `partition_product(TemplatePrefix, Target)`,
 //!   108 W8 sites.
-//! - [`MiningResult`] — the ψ-pipeline label (80 W8 sites — the
-//!   wire-format Bitcoin header width).
+//! - [`MiningResult`] — the ψ-pipeline label (32 W8 sites — the
+//!   SHA-256d digest, the natural cost-model κ-label per wiki
+//!   ADR-048/049).
 //! - [`Sha256dHasher`] — the canonical hash axis (content-addressing
 //!   primitive).
 //! - [`PrismBtcBounds`] — the `HostBounds` profile (`WITT_LEVEL_MAX_BITS = 32`).
 //! - [`ResolutionState`] / [`take_resolution_state`] — diagnostic
 //!   surface for ψ_9's structural κ-derivation
 //!   ([`diagnostics`] module).
-//! - [`mine_with`] / [`TypedCommitment`] / [`EmptyCommitment`] /
-//!   [`PayloadCommitment`] / [`TargetCommitment`] / [`AndCommitment`]
-//!   — UOR-optimal mining: prism's **zero-cost typed commitment
-//!   surface** (architecture §14). Every commitment is monomorphized
-//!   per use site — no `Vec`, no dynamic dispatch, no runtime
-//!   allocation, no runtime disjointness check. `wellFormed` is
-//!   discharged at the type level by the typed commitment's
-//!   invariants; the Lean theorem
+//! - **Cost-model commitment surface** —
+//!   [`TypedCommitment`] / [`EmptyCommitment`] / [`SingletonCommitment`] /
+//!   [`AndCommitment`] / [`TargetCommitment`] (wiki ADR-048) and the five
+//!   canonical [`ObservablePredicate`] impls
+//!   [`Stratum`] / [`WalshHadamardParity`] / [`UltrametricCloseTo`] /
+//!   [`AffineParity`] / [`LexicographicLessEqThreshold`] (wiki ADR-049)
+//!   are re-exported from foundation. Every commitment shape is
+//!   `Copy + Sealed`, monomorphized per use site — no `Vec`, no
+//!   dynamic dispatch, no runtime allocation. The Lean theorem
 //!   `Commitment.prf_prob_tight_wellFormed` applies at equality
 //!   (declared bandwidth = operational PRF cost, not an upper bound).
-//!   The base admission relation `σ(header) ≤ target` is itself a
-//!   `TypedCommitment` ([`TargetCommitment`]); [`mine_with`]
-//!   composes it with the application payload via
-//!   [`AndCommitment`], so the cost model attributes admission as
-//!   one typed observable at L_inference. Foundation v0.4.6
-//!   (ADR-048) carries the substrate-level cost-model commitment as
-//!   `PrismModel`'s 5th type parameter — [`BitcoinMiningModel`]
-//!   pins it at `EmptyCommitment` because Bitcoin's protocol
-//!   target-comparison is not a foundation `ObservablePredicate`,
-//!   and the prism-btc-side `forward_and_check` does the gate
-//!   evaluation. The foundation surface is re-exported via the
-//!   `uor_foundation::pipeline::{Stratum, WalshHadamardParity,
-//!   UltrametricCloseTo, AffineParity, SingletonCommitment}` types
-//!   for downstream consumers that build typed commitments against
-//!   the substrate directly.
-//! - [`Predicate`] / [`Support`] — the primitive typed-predicate
-//!   enum (Parity, StratumEq, PAdicEq, UltrametricCloseTo) and its
-//!   algebraic-support type. Used by [`TypedCommitment`] implementors
-//!   as the building blocks and by individual-predicate cryptanalysis
-//!   (`examples/uor_cryptanalysis.rs` §I + §J).
+//!   Application authors who want K-fold typed payload commitments
+//!   compose them with prism-btc's [`payload_commitment_k2`] /
+//!   [`payload_commitment_k4`] / [`payload_commitment_k8`] helpers
+//!   (each producing an [`AndCommitment`] tree of
+//!   `SingletonCommitment<AffineParity>` leaves per wiki QS-06's
+//!   K-fold exemplar) and declare a derived [`prism::pipeline::PrismModel`]
+//!   with the composed `C` shape.
+//! - [`leak_target`] / [`leak_reference`] / [`leak_frequency`] —
+//!   helpers that promote runtime-derived 32-byte buffers to
+//!   `&'static [u8]` (foundation's predicate fields require `'static`
+//!   bytes since predicates are `Copy`). The registry deduplicates;
+//!   repeated calls with the same bytes return the same pinned
+//!   reference.
 //! - [`KappaObservables`] / [`ExtendedObservables`] — the **receiver-
 //!   side** typed lens (architecture §14, ANALYSIS.md §5). The lens is
 //!   **total**: every [`MiningOutcome`] carries one, and every
@@ -92,8 +94,19 @@ pub mod verbs;
 
 // Public façade — typed surface.
 pub use campaign::{CampaignStats, PADIC_BINS, STRATUM_BINS};
+
+// Cost-model commitment surface — foundation's canonical
+// `TypedCommitment` (wiki ADR-048) plus the five `ObservablePredicate`
+// impls (wiki ADR-049), all re-exported through prism-btc for
+// applications that want to declare derived `PrismModel<…, C>`s
+// composing `TargetCommitment` with additional typed payload
+// predicates.
 pub use commitment::{
-    AndCommitment, EmptyCommitment, PayloadCommitment, TargetCommitment, TypedCommitment,
+    decode_payload, leak_frequency, leak_reference, leak_target, payload_bit,
+    payload_commitment_k2, payload_commitment_k4, payload_commitment_k8, target_commitment,
+    AffineParity, AndCommitment, EmptyCommitment, LexicographicLessEqThreshold,
+    ObservablePredicate, PayloadK2, PayloadK4, PayloadK8, SingletonCommitment, Stratum,
+    TargetCommitment, TypedCommitment, UltrametricCloseTo, WalshHadamardParity,
 };
 pub use diagnostics::{take_resolution_state, ResolutionState};
 pub use domain::{
@@ -102,7 +115,10 @@ pub use domain::{
 };
 pub use model::{BitcoinMiningModel, BitcoinMiningRoute, MiningResult, MiningTask, TemplatePrefix};
 pub use observables::{ExtendedObservables, KappaObservables, CANONICAL_PRIMES};
-pub use pipeline::{mine, mine_with, MiningFailure, MiningOutcome, Predicate, Support};
+pub use pipeline::{
+    current_thread_target, mine, set_thread_target, set_thread_target_bytes, MiningFailure,
+    MiningOutcome,
+};
 pub use resolvers::{
     BitcoinChainComplexResolver, BitcoinCochainComplexResolver, BitcoinCohomologyGroupResolver,
     BitcoinHomologyGroupResolver, BitcoinHomotopyGroupResolver, BitcoinKInvariantResolver,

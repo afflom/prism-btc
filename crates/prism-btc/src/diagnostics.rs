@@ -9,10 +9,9 @@
 //!
 //! - **`free_rank`** — count of unpinned [`crate::model::MiningResult`]
 //!   sites after the ψ-pipeline. Always `0` for well-formed
-//!   `MiningTask` inputs: the leading 76 sites are template-pinned;
-//!   the four nonce-byte sites (positions 76..80) pin simultaneously
-//!   to ψ_9's κ-derivation. `FreeRank = 0` is convergence at the
-//!   terminal ψ-stage.
+//!   `MiningTask` inputs: all 32 digest sites pin simultaneously to
+//!   ψ_9's `SHA-256d` evaluation over the reconstructed wire-format
+//!   header. `FreeRank = 0` is convergence at the terminal ψ-stage.
 //!
 //! - **`derived_nonce`** — the κ-derived nonce. The canonical hash
 //!   axis projects the typed `MiningTask` to a 32-byte content-
@@ -28,7 +27,7 @@
 //! `Err` path, call [`take_resolution_state`] to drain the diagnostic
 //! state from the most recent ψ_9 invocation on this thread.
 //!
-//! Direct [`uor_foundation::pipeline::PrismModel::forward`] callers
+//! Direct [`prism::pipeline::PrismModel::forward`] callers
 //! (without going through `mine()`) read via `take_resolution_state`
 //! in either case — `forward()` does not drain the channel itself.
 //!
@@ -47,15 +46,18 @@
 pub struct ResolutionState {
     /// Count of unpinned [`crate::model::MiningResult`] sites after
     /// the ψ-pipeline. Always `0` for well-formed `MiningTask`
-    /// inputs — the structural κ-derivation pins the four nonce-byte
-    /// sites simultaneously and the leading 76 sites are template-
-    /// pinned.
+    /// inputs — the structural κ-derivation pins all 32 digest sites
+    /// simultaneously by computing `SHA-256d` over the reconstructed
+    /// wire-format header.
     pub free_rank: u32,
 
     /// The κ-derived nonce — `u32::from_le_bytes(H(task)[..4])`
     /// where `H` is the canonical hash axis ([`crate::Sha256dHasher`])
     /// and `task` is the threaded `MiningTask` bytes
-    /// (TemplatePrefix‖Target).
+    /// (TemplatePrefix‖Target). Used by [`crate::pipeline::mine`] to
+    /// reconstruct the 80-byte wire-format Bitcoin header from
+    /// `(template_prefix, derived_nonce)` after the ψ-pipeline seals
+    /// the digest κ-label.
     pub derived_nonce: u32,
 }
 
@@ -109,7 +111,7 @@ pub(crate) fn record(state: ResolutionState) {
 /// [`crate::pipeline::mine`] drains the channel and includes the
 /// state in `MiningOutcome::resolution`; use `take_resolution_state`
 /// directly on the `Err` path or after a direct
-/// [`uor_foundation::pipeline::PrismModel::forward`] call.
+/// [`prism::pipeline::PrismModel::forward`] call.
 #[must_use]
 pub fn take_resolution_state() -> Option<ResolutionState> {
     channel::take()

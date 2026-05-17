@@ -48,8 +48,9 @@ pub const PADIC_BINS: usize = 8;
 pub struct CampaignStats {
     /// Total ψ-pipeline inferences recorded — admitted + not-admitted.
     pub attempts: u64,
-    /// Subset of attempts that admitted (passed both target and any
-    /// typed commitment, if a campaign uses [`crate::mine_with`]).
+    /// Subset of attempts that admitted (`mine()`'s Ok arm — foundation's
+    /// `run_route` evaluated the model's pinned `TargetCommitment` and
+    /// returned a sealed `Grounded<MiningResult>`).
     pub admissions: u64,
     /// Stratum histogram: `stratum_hist[k]` counts attempts whose
     /// κ-label has 2-adic valuation `min(k, STRATUM_BINS - 1)`.

@@ -7,7 +7,7 @@
 //! the constraint-conjunction/affine-coefficient ceilings. This module
 //! declares prism-btc's binding ceiling.
 
-use uor_foundation::HostBounds;
+use prism::vocabulary::HostBounds;
 
 /// prism-btc's capacity profile.
 ///
@@ -37,20 +37,21 @@ impl HostBounds for PrismBtcBounds {
     // ADR-037 catamorphism ceilings — track foundation defaults except
     // where prism-btc's algebraic-closure encoding (architecture §2.3,
     // IT_7d: χ(N(C)) = SITE_COUNT, β_k = 0) demands a wider constraint
-    // geometry. The wire-format Bitcoin header's 80-site `MiningResult`
-    // implies a constraint nerve over up to 80 vertices; the algebraic-
-    // closure expressibility scales with these caps. This declaration
-    // is the application-side binding ceiling.
+    // geometry. The 32-site `MiningResult` (the SHA-256d κ-label per
+    // wiki ADR-048/049) implies a constraint nerve over up to 32
+    // vertices; the algebraic-closure expressibility scales with
+    // these caps. This declaration is the application-side binding
+    // ceiling.
     const TERM_VALUE_MAX_BYTES: usize = 4096;
     const AXIS_OUTPUT_BYTES_MAX: usize = 4096;
     const FOLD_UNROLL_THRESHOLD: usize = 8;
-    const BETTI_DIMENSION_MAX: usize = 80;
+    const BETTI_DIMENSION_MAX: usize = 32;
     const NERVE_CONSTRAINTS_MAX: usize = 128;
-    const NERVE_SITES_MAX: usize = 80;
-    const JACOBIAN_SITES_MAX: usize = 80;
+    const NERVE_SITES_MAX: usize = 32;
+    const JACOBIAN_SITES_MAX: usize = 32;
     const RECURSION_TRACE_DEPTH_MAX: usize = 16;
     const OP_CHAIN_DEPTH_MAX: usize = 8;
-    const AFFINE_COEFFS_MAX: usize = 80;
+    const AFFINE_COEFFS_MAX: usize = 32;
     const CONJUNCTION_TERMS_MAX: usize = 128;
     const ROUTE_INPUT_BUFFER_BYTES: usize = 4096;
     const ROUTE_OUTPUT_BUFFER_BYTES: usize = 4096;

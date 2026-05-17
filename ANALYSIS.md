@@ -296,7 +296,12 @@ takes U1 + U2 as axioms **per typed Predicate** the runtime admits.
 §I closes the calibration loop by directly testing U1
 (`PRF.prob_predicate`) at each variant: sample 10⁶ uniform digests,
 compare observed acceptance to the variant's
-`Predicate::accept_prob_rational()` via χ² goodness-of-fit
+`ObservablePredicate::accept_prob()` (foundation 0.4.12 surface per
+wiki ADR-049; the predicate publishes an `f64` accept probability —
+the rational-domain correspondence that historically lived in
+prism-btc as `Predicate::accept_prob_rational()` has moved upstream
+to foundation per wiki ADR-049's proposed `axis::cryptanalyze` test
+primitive) via χ² goodness-of-fit
 (df = 1, crit α = 0.001 = 10.83).
 
 | Predicate | claimed Pr | observed Pr | χ² | crit | Pass |

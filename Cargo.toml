@@ -7,8 +7,14 @@ members = [
 ]
 
 [workspace.dependencies]
-uor-foundation     = { version = "0.4.6" }
-uor-foundation-sdk = { version = "0.4.6" }
+# `uor-prism` is the standard-library façade (ADR-031): use `prism::*`
+# in source code for the curated re-export surface. `uor-foundation`
+# and `uor-foundation-sdk` remain direct deps because the SDK macros
+# (`verb!`, `resolver!`, `prism_model!`, `output_shape!`) expand to
+# absolute `::uor_foundation::*` paths that the linker must resolve.
+uor-prism          = { version = "0.1.1", default-features = false }
+uor-foundation     = { version = "0.4.12" }
+uor-foundation-sdk = { version = "0.4.12" }
 wasm-bindgen       = { version = "0.2" }
 js-sys             = { version = "0.3" }
 

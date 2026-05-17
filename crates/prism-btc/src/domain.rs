@@ -122,12 +122,14 @@ pub struct MiningTag;
 /// The grounded mining witness — `Grounded<MiningResult, MiningTag>`
 /// produced by `prism_btc::mine` via foundation's `PrismModel::forward`.
 ///
-/// Carries the κ-label on `output_bytes` (80 bytes — the wire-format
-/// Bitcoin header by construction, architecture §4 + §6) and the
-/// typed-iso path attestation on `content_fingerprint` /
-/// `unit_address`.
-pub type MiningWitness =
-    uor_foundation::enforcement::Grounded<crate::model::MiningResult, MiningTag>;
+/// Carries the κ-label on `output_bytes` (32 bytes — the SHA-256d
+/// digest of the reconstructed wire-format header, the natural
+/// cost-model κ-label per wiki ADR-048/049) and the typed-iso path
+/// attestation on `content_fingerprint` / `unit_address`. The
+/// 80-byte wire-format header is materialised on the side by
+/// [`crate::pipeline::mine`] for the bitcoind boundary path
+/// (architecture §7).
+pub type MiningWitness = prism::seal::Grounded<crate::model::MiningResult, MiningTag>;
 
 /// PRISM triadic coordinates of a 32-byte block-hash digest.
 ///

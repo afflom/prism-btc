@@ -12,7 +12,7 @@
 //! compute the `ContentFingerprint` over the canonical CompileUnit
 //! byte layout.
 
-use uor_foundation::enforcement::Hasher;
+use prism::vocabulary::Hasher;
 
 use crate::ops::sha256::{sha256, SHA256_INITIAL_STATE};
 

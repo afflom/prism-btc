@@ -18,15 +18,20 @@
 //!   MerkleRoot, Timestamp, Bits)` (76 W8 sites).
 //! - [`MiningTask`] — `partition_product(TemplatePrefix, Target)`
 //!   (108 W8 sites). The PrismModel's `Input` type.
-//! - [`MiningResult`] — the ψ-pipeline label (80 W8 sites — the
-//!   wire-format Bitcoin header width). The PrismModel's `Output` type.
+//! - [`MiningResult`] — the ψ-pipeline label (32 W8 sites — the
+//!   SHA-256d digest of the wire-format Bitcoin header). The
+//!   PrismModel's `Output` type. The 32-byte width is the natural
+//!   cost-model κ-label per wiki ADR-048/049: foundation's
+//!   `LexicographicLessEqThreshold` predicate (re-exported through
+//!   [`crate::commitment`]) compares the κ-label's byte sequence to
+//!   the target, so `MiningResult` is the digest the admission
+//!   relation evaluates — not the 80-byte wire form.
 
-use uor_foundation::enforcement::ShapeViolation;
-use uor_foundation::pipeline::{
-    ConstrainedTypeShape, ConstraintRef, IntoBindingValue, PartitionProductFields,
+use prism::pipeline::{
+    output_shape, prism_model, ConstrainedTypeShape, ConstraintRef, IntoBindingValue,
+    PartitionProductFields, ShapeViolation, ViolationKind,
 };
-use uor_foundation::{DefaultHostTypes, ViolationKind};
-use uor_foundation_sdk::{output_shape, prism_model};
+use prism::vocabulary::DefaultHostTypes;
 
 use crate::resolvers::BitcoinResolverTuple;
 use crate::shapes::bounds::PrismBtcBounds;
@@ -87,7 +92,7 @@ impl ConstrainedTypeShape for TemplatePrefix {
     const CYCLE_SIZE: u64 = u64::MAX;
 }
 
-impl uor_foundation::pipeline::__sdk_seal::Sealed for TemplatePrefix {}
+impl prism::uor_foundation::pipeline::__sdk_seal::Sealed for TemplatePrefix {}
 
 impl IntoBindingValue for TemplatePrefix {
     const MAX_BYTES: usize = 76;
@@ -164,7 +169,7 @@ impl ConstrainedTypeShape for MiningTask {
     const CYCLE_SIZE: u64 = u64::MAX;
 }
 
-impl uor_foundation::pipeline::__sdk_seal::Sealed for MiningTask {}
+impl prism::uor_foundation::pipeline::__sdk_seal::Sealed for MiningTask {}
 
 impl IntoBindingValue for MiningTask {
     const MAX_BYTES: usize = 108;
@@ -184,58 +189,61 @@ impl PartitionProductFields for MiningTask {
 
 // ─── Output shape: MiningResult ─────────────────────────────────────────
 
-// The ψ-pipeline label (architecture §4). Site count = 80 — exactly
-// the wire-format Bitcoin header byte width
-// (`version‖prev_hash‖merkle_root‖timestamp‖bits‖nonce`).
-// The terminal ψ_9 resolver ([`crate::resolvers::BitcoinKInvariantResolver`])
-// emits an 80-byte κ-label whose bytes ARE the wire-format Bitcoin
-// header by construction (architecture §6 bit-identicality contract).
+// The ψ-pipeline label (architecture §4). Site count = 32 — the
+// SHA-256d digest width (the natural cost-model κ-label per wiki
+// ADR-048/049). The terminal ψ_9 resolver
+// ([`crate::resolvers::BitcoinKInvariantResolver`]) emits a 32-byte
+// κ-label that IS `SHA-256d(wire_format_header)` in Bitcoin display
+// order — exactly the byte sequence foundation's
+// `LexicographicLessEqThreshold` predicate compares against the
+// target.
 //
-// `MiningResult::CONSTRAINTS` algebraically encodes the wire-format
-// Bitcoin header's structural admission relation using foundation's
-// closed `ConstraintRef` catalog (architecture §2.3). The encoding is
+// `MiningResult::CONSTRAINTS` algebraically encodes the digest's
+// structural admission relation using foundation's closed
+// `ConstraintRef` catalog (architecture §2.3). The encoding is
 // **template-invariant**: a compile-time `&'static [ConstraintRef]`
-// declaring the algebraic shape of valid Bitcoin headers; the runtime
+// declaring the algebraic shape of valid digests; the runtime
 // `(prefix, target)` parameterize specific values that the ψ-pipeline's
 // resolver chain materializes into the κ-label.
 //
 // **Algebraic-closure encoded** (architecture §2.3, IT_7d): the
 // framework's canonical completeness criterion is χ(N(C)) = SITE_COUNT
-// and β_k = 0 for k ≥ 1. `MiningResult` declares 80 disjoint `Site`
-// constraints — one per wire-format-header byte position. Each
-// constraint pins exactly one site; site supports are pairwise
-// disjoint; the constraint nerve N(C) is 80 isolated vertices with no
-// higher simplices. Therefore:
+// and β_k = 0 for k ≥ 1. `MiningResult` declares 32 disjoint `Site`
+// constraints — one per digest byte position. Each constraint pins
+// exactly one site; site supports are pairwise disjoint; the
+// constraint nerve N(C) is 32 isolated vertices with no higher
+// simplices. Therefore:
 //
-//   β_0 = 80,    β_k = 0 for k ≥ 1
-//   χ(N(C)) = β_0 - β_1 + … = 80 = SITE_COUNT
+//   β_0 = 32,    β_k = 0 for k ≥ 1
+//   χ(N(C)) = β_0 - β_1 + … = 32 = SITE_COUNT
 //
 // — the IT_7d algebraic-closure criterion is satisfied at the
 // declaration level. The wiki's iterative-resolution discipline
 // (`iterative-resolution.md`) converges in n - χ(N(C)) = 0 residual
-// rank: each ψ-stage's progression pins free sites, and at the
-// terminal ψ_9 stage all 80 sites are pinned — the leading 76 by
-// the host-supplied template, the trailing 4 by ψ_9's structural
-// κ-derivation via the canonical hash axis.
+// rank: ψ_9 pins all 32 digest sites simultaneously by computing
+// `SHA-256d(reconstructed_wire_format_header)` over the typed input
+// (the 4-byte nonce is structurally κ-derived from the canonical hash
+// axis; the resulting 80-byte wire-format header is hashed to yield
+// the 32-byte κ-label).
 output_shape! {
     pub struct MiningResult;
     impl ConstrainedTypeShape for MiningResult {
         const IRI: &'static str = "https://prism.btc/shape/MiningResult";
-        const SITE_COUNT: usize = 80;
+        const SITE_COUNT: usize = 32;
         const CONSTRAINTS: &'static [ConstraintRef] = &[
-            // 80 disjoint Site constraints — one per wire-format header
-            // byte position (positions 0..80). Each constraint pins
-            // exactly its site; the nerve is 80 isolated vertices
-            // (β_0 = 80, β_k = 0 for k ≥ 1, χ = 80 = SITE_COUNT —
+            // 32 disjoint Site constraints — one per digest byte
+            // position (positions 0..32). Each constraint pins exactly
+            // its site; the nerve is 32 isolated vertices
+            // (β_0 = 32, β_k = 0 for k ≥ 1, χ = 32 = SITE_COUNT —
             // IT_7d algebraic-closure satisfied).
             //
-            // Sites 0..76 are template-pinned (the host-supplied
-            // prefix bytes); sites 76..80 are κ-pinned (the ψ_9
-            // resolver's structural κ-derivation via the canonical
-            // hash axis projects the typed MiningTask and pins the
-            // four nonce bytes). Both mechanisms terminate at the
-            // same fixed point: 80 sites pinned ⇒ FreeRank = 0 ⇒
-            // convergence.
+            // All 32 sites are κ-pinned by the ψ_9 resolver's
+            // structural κ-derivation: the typed `MiningTask`
+            // reconstructs an 80-byte wire-format header internally
+            // (via the canonical hash axis to derive the 4-byte
+            // nonce), then `SHA-256d` over that wire-format header
+            // simultaneously pins all 32 digest bytes. FreeRank drops
+            // from 32 to 0 in this single terminal stage.
             ConstraintRef::Site { position: 0 },
             ConstraintRef::Site { position: 1 },
             ConstraintRef::Site { position: 2 },
@@ -268,74 +276,33 @@ output_shape! {
             ConstraintRef::Site { position: 29 },
             ConstraintRef::Site { position: 30 },
             ConstraintRef::Site { position: 31 },
-            ConstraintRef::Site { position: 32 },
-            ConstraintRef::Site { position: 33 },
-            ConstraintRef::Site { position: 34 },
-            ConstraintRef::Site { position: 35 },
-            ConstraintRef::Site { position: 36 },
-            ConstraintRef::Site { position: 37 },
-            ConstraintRef::Site { position: 38 },
-            ConstraintRef::Site { position: 39 },
-            ConstraintRef::Site { position: 40 },
-            ConstraintRef::Site { position: 41 },
-            ConstraintRef::Site { position: 42 },
-            ConstraintRef::Site { position: 43 },
-            ConstraintRef::Site { position: 44 },
-            ConstraintRef::Site { position: 45 },
-            ConstraintRef::Site { position: 46 },
-            ConstraintRef::Site { position: 47 },
-            ConstraintRef::Site { position: 48 },
-            ConstraintRef::Site { position: 49 },
-            ConstraintRef::Site { position: 50 },
-            ConstraintRef::Site { position: 51 },
-            ConstraintRef::Site { position: 52 },
-            ConstraintRef::Site { position: 53 },
-            ConstraintRef::Site { position: 54 },
-            ConstraintRef::Site { position: 55 },
-            ConstraintRef::Site { position: 56 },
-            ConstraintRef::Site { position: 57 },
-            ConstraintRef::Site { position: 58 },
-            ConstraintRef::Site { position: 59 },
-            ConstraintRef::Site { position: 60 },
-            ConstraintRef::Site { position: 61 },
-            ConstraintRef::Site { position: 62 },
-            ConstraintRef::Site { position: 63 },
-            ConstraintRef::Site { position: 64 },
-            ConstraintRef::Site { position: 65 },
-            ConstraintRef::Site { position: 66 },
-            ConstraintRef::Site { position: 67 },
-            ConstraintRef::Site { position: 68 },
-            ConstraintRef::Site { position: 69 },
-            ConstraintRef::Site { position: 70 },
-            ConstraintRef::Site { position: 71 },
-            ConstraintRef::Site { position: 72 },
-            ConstraintRef::Site { position: 73 },
-            ConstraintRef::Site { position: 74 },
-            ConstraintRef::Site { position: 75 },
-            ConstraintRef::Site { position: 76 },
-            ConstraintRef::Site { position: 77 },
-            ConstraintRef::Site { position: 78 },
-            ConstraintRef::Site { position: 79 },
         ];
     }
 }
 
 // ─── The PrismModel ─────────────────────────────────────────────────────
 
-// Foundation 0.4.6 (ADR-048) extends `PrismModel` with a 5th type
-// parameter `C: TypedCommitment` — the substrate-level cost-model
-// commitment slot the catamorphism evaluates against the κ-label
-// immediately after the resolver chain emits it. We pin
-// `C = EmptyCommitment` here: the base admission relation
-// `σ(header) ≤ target` is *Bitcoin protocol*, not a foundation-side
-// observable predicate (target-comparison is not an
-// `ObservablePredicate` — the closed catalog covers stratum, parity,
-// ultrametric closeness, affine parity), so it lives in
-// `pipeline::forward_and_check`'s wrapper. Application-tier payload
-// commitments compose via prism-btc's open `TypedCommitment` (see
-// `crate::commitment`). This 5-position form pins the substrate
-// acknowledgment that ψ_9 is now commitment-aware upstream — the
-// previously-documented residual upstream move is closed.
+// Foundation 0.4.12 (ADR-048) pins `PrismModel`'s 5th type parameter
+// to the cost-model commitment surface. `BitcoinMiningModel` binds
+// `C = TargetCommitment` — the foundation-canonical alias for
+// `SingletonCommitment<LexicographicLessEqThreshold>` realizing
+// Bitcoin's `digest ≤ target` admission relation per ADR-040.
+//
+// Foundation's [`run_route`] evaluates the commitment immediately
+// after ψ_9 emits the κ-label: if the κ-label fails admission,
+// run_route returns `PipelineFailure::ShapeViolation` and the
+// catamorphism does not seal a `Grounded<MiningResult>`. Bitcoin's
+// admission relation is therefore evaluated **inside the typed-iso
+// surface**, not at the host boundary — closing the cost-model gap
+// flagged in foundation ≤ 0.4.11.
+//
+// The per-call target bytes come from a thread-local set by
+// [`crate::pipeline::set_thread_target`] before each `forward()`
+// invocation. Foundation's [`LexicographicLessEqThreshold::target`]
+// requires `&'static [u8]` (the predicate is `Copy`), so target
+// bytes are leaked into a process-lifetime registry by
+// [`crate::commitment::leak_target`]. Bitcoin's difficulty
+// retarget every 2016 blocks bounds the registry size to O(epochs).
 prism_model! {
     pub struct BitcoinMiningModel;
     pub struct BitcoinMiningRoute;
@@ -344,13 +311,16 @@ prism_model! {
         PrismBtcBounds,
         Sha256dHasher,
         BitcoinResolverTuple<Sha256dHasher>,
-        uor_foundation::pipeline::EmptyCommitment
+        crate::commitment::TargetCommitment
     > for BitcoinMiningModel {
         type Input = MiningTask;
         type Output = MiningResult;
         type Route = BitcoinMiningRoute;
         fn route(input: Self::Input) -> Self::Output {
             mining_inference(input)
+        }
+        fn commitment() -> crate::commitment::TargetCommitment {
+            crate::commitment::target_commitment(crate::pipeline::current_thread_target())
         }
     }
 }
@@ -401,20 +371,22 @@ mod tests {
     }
 
     #[test]
-    fn mining_result_site_count_matches_wire_format_header_width() {
-        // Architecture §2.2: MiningResult's 80 W8 sites are exactly the
-        // wire-format Bitcoin header width.
-        assert_eq!(<MiningResult as ConstrainedTypeShape>::SITE_COUNT, 80);
+    fn mining_result_site_count_matches_digest_width() {
+        // Architecture §2.2: MiningResult's 32 W8 sites are exactly the
+        // SHA-256d digest width — the natural cost-model κ-label per
+        // wiki ADR-048/049 (foundation's LexicographicLessEqThreshold
+        // compares the κ-label byte sequence to the target).
+        assert_eq!(<MiningResult as ConstrainedTypeShape>::SITE_COUNT, 32);
     }
 
     #[test]
-    fn mining_result_carries_eighty_disjoint_site_constraints() {
-        // Architecture §2.3 + IT_7d algebraic-closure: 80 disjoint
-        // `Site` constraints, one per wire-format header byte. The
-        // constraint nerve N(C) has 80 isolated vertices (β_0 = 80,
-        // β_k = 0 for k ≥ 1, χ = 80 = SITE_COUNT — IT_7d satisfied).
+    fn mining_result_carries_thirty_two_disjoint_site_constraints() {
+        // Architecture §2.3 + IT_7d algebraic-closure: 32 disjoint
+        // `Site` constraints, one per digest byte. The constraint
+        // nerve N(C) has 32 isolated vertices (β_0 = 32, β_k = 0 for
+        // k ≥ 1, χ = 32 = SITE_COUNT — IT_7d satisfied).
         let cs = <MiningResult as ConstrainedTypeShape>::CONSTRAINTS;
-        assert_eq!(cs.len(), 80, "80 Site constraints (algebraic-closure)");
+        assert_eq!(cs.len(), 32, "32 Site constraints (algebraic-closure)");
         for c in cs {
             assert!(
                 matches!(c, ConstraintRef::Site { .. }),
@@ -424,11 +396,11 @@ mod tests {
     }
 
     #[test]
-    fn mining_result_constraints_pin_every_wire_format_site() {
+    fn mining_result_constraints_pin_every_digest_site() {
         // Architecture §2.3: each Site constraint pins exactly one
-        // wire-format-header byte position; positions span [0, 80)
-        // disjointly so site supports are pairwise disjoint and the
-        // nerve has no 1-simplices.
+        // digest byte position; positions span [0, 32) disjointly so
+        // site supports are pairwise disjoint and the nerve has no
+        // 1-simplices.
         let cs = <MiningResult as ConstrainedTypeShape>::CONSTRAINTS;
         let positions: Vec<u32> = cs
             .iter()
@@ -437,7 +409,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(positions.len(), 80, "80 Site constraints");
+        assert_eq!(positions.len(), 32, "32 Site constraints");
         for (i, &p) in positions.iter().enumerate() {
             assert_eq!(p, i as u32, "Site_{i} pins position {i}");
         }

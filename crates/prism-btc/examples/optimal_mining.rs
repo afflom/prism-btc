@@ -1,240 +1,175 @@
-//! UOR-optimal mining via prism's zero-cost typed commitment surface.
+//! UOR-optimal mining: composing foundation's canonical commitment
+//! shapes on the κ-label of a freshly mined regtest block.
 //!
-//! Exercises [`prism_btc::mine_with`] across two typed-commitment
-//! demonstrations:
+//! Demonstrates the cost-model commitment surface foundation publishes
+//! per wiki ADR-048 + ADR-049:
 //!
-//! 1. **K-bit `PayloadCommitment<K>` sweep** — K ∈ [0, MAX_K] parity
-//!    constraints on K disjoint single-bit ω-frequencies. Each
-//!    commitment is a separate monomorphization; the K-sweep is a
-//!    compile-time macro expansion (no `Vec`, no dynamic dispatch).
-//!    Bandwidth = K bits; PRF cost = `α^-1 × 2^K`.
+//! 1. **Bare admission.** `mine()` goes through foundation's `run_route`
+//!    with the model's pinned `C = TargetCommitment`. The returned
+//!    `MiningOutcome` carries a κ-label digest that, by construction,
+//!    satisfies `LexicographicLessEqThreshold` (regtest target).
 //!
-//! 2. **User-defined typed commitment** — a custom `StratumWithParity`
-//!    type implementing [`prism_btc::TypedCommitment`] directly. Shows
-//!    the extension pattern: applications that need a commitment
-//!    shape outside the substrate-provided typed forms implement the
-//!    trait themselves. Bandwidth is type-level; no `Vec`.
+//! 2. **K-fold payload composition.** Build `AndCommitment` trees of
+//!    `SingletonCommitment<AffineParity>` leaves via
+//!    [`prism_btc::payload_commitment_k2`] /
+//!    [`prism_btc::payload_commitment_k4`] /
+//!    [`prism_btc::payload_commitment_k8`] and evaluate them on the
+//!    mined digest. Each shape is monomorphized per use site — no
+//!    `Vec`, no dynamic dispatch.
+//!
+//! 3. **Stratum composition.** A `SingletonCommitment<Stratum<2>>`
+//!    over the 2-adic valuation of the κ-label.
+//!
+//! 4. **Composite admission ⊗ payload.** Combine `TargetCommitment`
+//!    with a payload via foundation's `AndCommitment`; show that
+//!    `bandwidth_bits()` is additive and `accept_prob()` is
+//!    multiplicative.
+//!
+//! Note: this example does not mine *through* a custom
+//! `PrismModel<…, C>` because foundation's `TypedCommitment` is sealed
+//! and the model declaration is out of scope for examples. Mining
+//! through a composed `C` requires a derived `prism_model!` declaration
+//! per wiki ADR-048; the spirit "evaluate composed commitments on the
+//! cost-model κ-label" is preserved by acting on the digest directly.
 //!
 //! Run: `cargo run --release --example optimal_mining`.
-//!
-//! Every typed commitment is monomorphized per use site — there is
-//! no runtime allocation or dynamic dispatch anywhere in this example.
-
-use std::time::Instant;
 
 use prism_btc::{
-    mine_with, walsh_hadamard_parity_at, Bits, BlockHeader, MerkleRoot, PayloadCommitment, Target,
-    Timestamp, TriadicCoords, TypedCommitment, Version,
+    decode_payload, leak_target, mine, payload_commitment_k2, payload_commitment_k4,
+    payload_commitment_k8, target_commitment, AndCommitment, Bits, BlockHeader, MerkleRoot,
+    SingletonCommitment, Stratum, Target, Timestamp, TypedCommitment, Version,
 };
 
-/// Regtest nBits — the bare-admission baseline (α ≈ 1/2).
 const REGTEST_NBITS: u32 = 0x207fffff;
-/// Independent trials per K — averaged for the empirical estimate.
-const N_TRIALS: usize = 50;
-/// Per-trial cap on template variations.
-const MAX_VARIATIONS: u32 = 1_000_000;
 
-/// Build a permissive regtest-style header parameterized by a seed.
-fn build_header(trial_seed: u32) -> BlockHeader {
-    let prev = trial_seed.to_le_bytes();
-    let merkle = trial_seed.wrapping_mul(0x9E37_79B1).to_le_bytes();
-    let mut prev32 = [0u8; 32];
-    let mut merkle32 = [0u8; 32];
-    for i in 0..32 {
-        prev32[i] = prev[i % 4] ^ (i as u8);
-        merkle32[i] = merkle[i % 4] ^ (i as u8).wrapping_mul(7);
-    }
+fn permissive_header(timestamp: u32) -> BlockHeader {
     BlockHeader {
         version: Version(1),
-        prev_hash: prev32,
-        merkle_root: MerkleRoot::from_bytes(merkle32),
-        timestamp: Timestamp(1_700_000_000),
+        prev_hash: [0u8; 32],
+        merkle_root: MerkleRoot::from_bytes([0xaa; 32]),
+        timestamp: Timestamp(timestamp),
         bits: Bits(REGTEST_NBITS),
     }
 }
 
-/// Roll the timestamp until [`mine_with`] returns `Ok`, up to
-/// [`MAX_VARIATIONS`]. Monomorphized per `C: TypedCommitment`.
-fn find_committed_block<C: TypedCommitment>(trial_seed: u32, commitment: C) -> Option<u32> {
+fn mine_one_admitting_block() -> ([u8; 32], u32) {
     let target = Target::new(REGTEST_NBITS);
-    let base = build_header(trial_seed);
-    for variation in 0..MAX_VARIATIONS {
-        let mut header = base.clone();
-        header.timestamp = Timestamp(base.timestamp.0.wrapping_add(variation));
-        if let Ok(outcome) = mine_with(&header, target, commitment) {
-            assert!(target.is_satisfied_by_bytes(&outcome.digest));
-            assert!(commitment.evaluate(&outcome.digest));
-            return Some(variation + 1);
+    for ts in 0u32..512 {
+        let header = permissive_header(1_700_000_000_u32.wrapping_add(ts));
+        if let Ok(outcome) = mine(&header, target) {
+            return (outcome.digest, outcome.nonce);
         }
     }
-    None
-}
-
-/// Run one row of the K-sweep at compile-time-known `K`. Monomorphized
-/// per K; the loop bound `K` is part of the type, not runtime data.
-fn sweep_row<const K: usize>() -> (f64, f64, f64) {
-    let bits = [true; K];
-    let commitment = PayloadCommitment::<K>::from_bits(bits);
-    let bandwidth = commitment.bandwidth_bits();
-    let pred = 2.0_f64.powf(bandwidth + 1.0); // baseline 2 × 2^K at α ≈ 1/2
-
-    let mut variations = [0.0_f64; N_TRIALS];
-    for (trial, slot) in variations.iter_mut().enumerate() {
-        match find_committed_block::<PayloadCommitment<K>>(trial as u32, commitment) {
-            Some(v) => *slot = v as f64,
-            None => panic!("Failed at K={K}, trial={trial}"),
-        }
-    }
-    let mean: f64 = variations.iter().sum::<f64>() / (N_TRIALS as f64);
-    (bandwidth, pred, mean)
+    panic!("permissive regtest target must admit within 512 template variations");
 }
 
 fn main() {
-    println!("=== UOR-optimal mining: zero-cost typed commitment ===");
+    println!("=== UOR-optimal mining (cost-model conformance per ADR-048/049) ===");
     println!();
+    println!("σ-projection: SHA-256d. Admission via TargetCommitment");
+    println!("(`SingletonCommitment<LexicographicLessEqThreshold>`).");
+    println!("Regtest nBits = 0x{REGTEST_NBITS:08x} (α ≈ 1/2).");
+    println!();
+
+    let (digest, nonce) = mine_one_admitting_block();
     println!(
-        "σ-projection: SHA-256d. Admission: regtest target 0x{:08x} (α ≈ 1/2).",
-        REGTEST_NBITS
+        "── §1. Bare admission ──────────────────────────────────"
     );
-    println!("PRF prediction (U6, tight): variations = α^-1 × 2^B");
-    println!("where B = commitment.bandwidth_bits(). Every commitment below");
-    println!("is monomorphized — no Vec, no dynamic dispatch.");
+    println!("  κ-derived nonce      : 0x{nonce:08x}");
+    println!("  κ-label digest (hex) : {}", hex32(&digest));
     println!();
 
-    sweep_payload();
-    demo_user_defined_typed_commitment();
+    demo_payload_commitments(&digest);
+    demo_stratum_commitment(&digest);
+    demo_composed_target_and_payload(&digest);
 
     println!();
-    println!("Each mined block is a wire-format-valid Bitcoin κ-label that ALSO");
-    println!("commits to B bits of application-declared structural information.");
-    println!("Bitcoin Core sees a normal block; an application-layer verifier");
-    println!("reads the typed predicates off the published digest.");
+    println!("Every commitment above is a foundation-sealed `TypedCommitment`,");
+    println!("monomorphized per use site. No Vec, no dynamic dispatch.");
 }
 
-fn sweep_payload() {
-    println!("── §1. PayloadCommitment<K> sweep (zero-cost) ──────────");
-    println!();
-    println!("K-bit payload as K disjoint single-bit parities. Each K is a");
-    println!("separate monomorphization; the table below is compile-time");
-    println!("expanded via macro.");
-    println!();
-    println!("  K   bandwidth      PRF pred       observed       ratio");
-    println!("  --  ----------     ----------     ----------     -------");
-
-    let started = Instant::now();
-
-    // Compile-time macro expansion of the K-sweep. Each row is a
-    // distinct monomorphization of `sweep_row::<K>()` — no runtime
-    // dispatch on K.
-    macro_rules! sweep {
-        ($($k:literal),*) => {
-            $({
-                let (bandwidth, pred, mean) = sweep_row::<$k>();
-                let bandwidth_display = if bandwidth == 0.0 { 0.0_f64 } else { bandwidth };
-                println!(
-                    "  {:2}  {:>4.1} bits      {:>10.0}     {:>10.1}     {:>4.2}x",
-                    $k,
-                    bandwidth_display,
-                    pred,
-                    mean,
-                    mean / pred,
-                );
-            })*
-        };
-    }
-    sweep!(0, 1, 2, 3, 4, 5, 6);
-
-    println!();
+fn print_payload_row<C: TypedCommitment>(k: usize, cmt: &C, digest: &[u8; 32], rt: bool) {
     println!(
-        "Payload sweep wall-clock: {:.2}s",
-        started.elapsed().as_secs_f64()
+        "  {k}   {:>5.2} bits   {:>10.6}    {:>5}      {:>5}",
+        cmt.bandwidth_bits(),
+        cmt.accept_prob(),
+        cmt.evaluate(digest),
+        rt,
     );
 }
 
-/// **§2 user-defined typed commitment.** A custom `TypedCommitment`
-/// composing a 1-bit parity (at a high-byte ω) and a stratum-equality
-/// constraint (at the low bytes). The two predicates have disjoint
-/// algebraic supports by *type-level* construction — the parity reads
-/// byte 8, the stratum reads byte 31's low bits — so `wellFormed` is
-/// discharged at the type level (the Lean theorem's hypothesis is
-/// dispatched by the user-side type invariant, not by a runtime
-/// check). Bandwidth = 1 + (k + 1) = `k + 2` bits.
-#[derive(Debug, Clone, Copy)]
-struct StratumWithParity<const K: u32> {
-    parity_omega_byte8: u8, // single bit set in byte 8 — disjoint from byte-31 low bits
-    parity_expected: u32,
+fn demo_payload_commitments(digest: &[u8; 32]) {
+    println!("── §2. K-fold AffineParity payload composition ─────────");
+    println!();
+    println!("Decode K=2/4/8 payload bits off the digest's low bit positions");
+    println!("(AffineParity convention: bit_idx/8 is byte index, bit_idx%8 is bit position),");
+    println!("build the matching SingletonCommitment-tree, and check `evaluate` agrees.");
+    println!();
+    println!("  K   bandwidth    accept_prob    evaluate   decode_payload matches");
+    println!("  --  ---------    -----------    --------   ----------------------");
+
+    let b2 = decode_payload::<2>(digest);
+    print_payload_row(2, &payload_commitment_k2(b2), digest, decode_payload::<2>(digest) == b2);
+    let b4 = decode_payload::<4>(digest);
+    print_payload_row(4, &payload_commitment_k4(b4), digest, decode_payload::<4>(digest) == b4);
+    let b8 = decode_payload::<8>(digest);
+    print_payload_row(8, &payload_commitment_k8(b8), digest, decode_payload::<8>(digest) == b8);
+
+    println!();
+    println!("Bandwidth is additive over the AndCommitment tree;");
+    println!("accept_prob is multiplicative (per ADR-048 + U2 axiom).");
 }
 
-impl<const K: u32> TypedCommitment for StratumWithParity<K> {
-    fn bandwidth_bits(&self) -> f64 {
-        1.0 + (K as f64 + 1.0)
-    }
-
-    fn accept_prob(&self) -> f64 {
-        0.5_f64 * (2.0_f64).powi(-(K as i32 + 1))
-    }
-
-    fn evaluate(&self, digest: &[u8; 32]) -> bool {
-        // Parity at byte-8 single bit.
-        let mut omega = [0u8; 32];
-        omega[8] = self.parity_omega_byte8;
-        if walsh_hadamard_parity_at(digest, &omega) != self.parity_expected {
-            return false;
-        }
-        // StratumEq{K} = digest's 2-adic valuation equals K.
-        TriadicCoords::from_hash(digest).stratum == K
-    }
-
-    fn predicate_count(&self) -> usize {
-        2
-    }
+fn demo_stratum_commitment(digest: &[u8; 32]) {
+    println!();
+    println!("── §3. Stratum<2> single-observable commitment ─────────");
+    println!();
+    // Pick k = the 2-adic valuation actually observed on this digest, so
+    // the predicate accepts; show the type-level shape regardless.
+    let k = prism_btc::p_adic_valuation(digest, 2).min(31);
+    let cmt = SingletonCommitment { predicate: Stratum::<2> { k } };
+    println!("  Stratum<P=2> {{ k = {k} }}  (ν_2(κ-label) over the BE-integer view)");
+    println!(
+        "  bandwidth = {:.3} bits, accept_prob = {:.6}, evaluate = {}",
+        cmt.bandwidth_bits(), cmt.accept_prob(), cmt.evaluate(digest),
+    );
 }
 
-fn demo_user_defined_typed_commitment() {
+fn demo_composed_target_and_payload(digest: &[u8; 32]) {
     println!();
-    println!("── §2. User-defined typed commitment ───────────────────");
+    println!("── §4. Composite admission ⊗ payload ───────────────────");
     println!();
-    println!("Applications outside the substrate-provided typed forms");
-    println!("implement `TypedCommitment` directly. `wellFormed` is the");
-    println!("implementor's invariant (typically at the type level) —");
-    println!("no runtime disjointness check, zero allocation.");
-    println!();
+    // TargetCommitment against the regtest target — same bytes mine() used.
+    let target_static = leak_target(Target::new(REGTEST_NBITS).to_bytes());
+    let target_c = target_commitment(target_static);
+    let payload = payload_commitment_k4(decode_payload::<4>(digest));
+    let composed = AndCommitment { left: target_c, right: payload };
 
-    // K = 2 stratum: bit 2 of byte 31 set, bits 0..1 = 0 → 3 bits.
-    let commitment = StratumWithParity::<2> {
-        parity_omega_byte8: 0b0000_0001,
-        parity_expected: 1,
-    };
-    let bandwidth = commitment.bandwidth_bits();
-    let pred = 2.0_f64.powf(bandwidth + 1.0);
-
+    let sum_b = target_c.bandwidth_bits() + payload.bandwidth_bits();
+    let prod_a = target_c.accept_prob() * payload.accept_prob();
     println!(
-        "  Commitment: StratumWithParity<K=2> ({} predicates, bandwidth = {:.3} bits)",
-        commitment.predicate_count(),
-        bandwidth
+        "  AndCommitment<TargetCommitment, PayloadK4>: predicate_count = {}",
+        composed.predicate_count(),
+    );
+    println!("  bandwidth(left)       = {:>7.4} bits", target_c.bandwidth_bits());
+    println!("  bandwidth(right)      = {:>7.4} bits", payload.bandwidth_bits());
+    println!(
+        "  bandwidth(composed)   = {:>7.4} bits   (= left + right ⇒ {})",
+        composed.bandwidth_bits(),
+        (composed.bandwidth_bits() - sum_b).abs() < 1e-9,
     );
     println!(
-        "  PRF prediction: {:.0} variations (= 2 × 2^{:.3})",
-        pred, bandwidth
+        "  accept_prob(composed) = {:>10.6}      (= left·right ⇒ {})",
+        composed.accept_prob(),
+        (composed.accept_prob() - prod_a).abs() < 1e-12,
     );
-    println!();
+    println!("  evaluate(κ-label)     = {}", composed.evaluate(digest));
+}
 
-    let started = Instant::now();
-    let mut variations = [0.0_f64; N_TRIALS];
-    for (trial, slot) in variations.iter_mut().enumerate() {
-        match find_committed_block::<StratumWithParity<2>>(trial as u32, commitment) {
-            Some(v) => *slot = v as f64,
-            None => panic!("StratumWithParity trial {trial} failed"),
-        }
+fn hex32(d: &[u8; 32]) -> String {
+    let mut s = String::with_capacity(64);
+    for b in d {
+        s.push_str(&format!("{b:02x}"));
     }
-    let mean: f64 = variations.iter().sum::<f64>() / (N_TRIALS as f64);
-    println!(
-        "  Observed mean variations: {:.0} (ratio {:.2}x)",
-        mean,
-        mean / pred,
-    );
-    println!(
-        "  StratumWithParity wall-clock: {:.2}s",
-        started.elapsed().as_secs_f64()
-    );
+    s
 }

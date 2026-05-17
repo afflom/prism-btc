@@ -12,6 +12,7 @@ keywords      = ["bitcoin", "mining", "uor", "prism", "no-std"]
 categories    = ["cryptography::cryptocurrencies", "mathematics", "no-std"]
 
 [dependencies]
+uor-prism          = { workspace = true }
 uor-foundation     = { workspace = true }
 uor-foundation-sdk = { workspace = true }
 
@@ -24,4 +25,4 @@ harness = false
 
 [features]
 default = ["std"]
-std     = []
+std     = ["uor-prism/std"]

@@ -5,7 +5,7 @@
 //!
 //! Structural identity: the layout is a `Term::Application` chain of
 //! `depth-projection` insertions over fixed byte ranges; the
-//! foundation-vocabulary form lives in `uor_foundation::term`.
+//! foundation-vocabulary form lives in `prism::operation`.
 
 use crate::domain::{BlockHeader, MerkleRoot};
 

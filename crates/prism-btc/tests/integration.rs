@@ -3,23 +3,31 @@
 //! See [ARCHITECTURE.md](../../../../ARCHITECTURE.md) for the normative
 //! specification. The tests pin the **architectural commitment**:
 //!
-//! - `BitcoinMiningModel` is a 4-position `PrismModel<HostTypes,
-//!   HostBounds, Hasher, ResolverTuple>` (architecture §5).
+//! - `BitcoinMiningModel` is a 5-position `PrismModel<HostTypes,
+//!   HostBounds, Hasher, ResolverTuple, TargetCommitment>`
+//!   (architecture §5; wiki ADR-048).
 //! - `BitcoinResolverTuple` realizes the eight resolver-bound ψ-stages
 //!   (architecture §3, §4).
 //! - `BitcoinMiningModel::forward(task)` drives the ψ-pipeline end-to-end
-//!   through foundation's catamorphism dispatching each ψ-Term through
-//!   the application's resolver tuple.
+//!   through foundation's catamorphism (`prism::pipeline::run_route`)
+//!   dispatching each ψ-Term through the application's resolver tuple
+//!   and evaluating the model's pinned `TargetCommitment` on the κ-label
+//!   before sealing.
 //! - The κ-label (`Grounded<MiningResult>::output_bytes()`) is exactly
 //!   80 bytes — the wire-format Bitcoin header by construction
 //!   (architecture §6 bit-identicality contract).
 
+use prism::pipeline::PrismModel;
+use prism::vocabulary::DefaultHostTypes;
 use prism_btc::{
-    mine, BitcoinMiningModel, BitcoinResolverTuple, Bits, BlockHeader, MerkleRoot, MiningTask,
-    PrismBtcBounds, Sha256dHasher, Target, Timestamp, Version,
+    mine, set_thread_target_bytes, BitcoinMiningModel, BitcoinResolverTuple, Bits, BlockHeader,
+    MerkleRoot, MiningTask, PrismBtcBounds, Sha256dHasher, TargetCommitment, Target, Timestamp,
+    Version,
 };
-use uor_foundation::pipeline::PrismModel;
-use uor_foundation::DefaultHostTypes;
+
+/// Permissive target: every digest admits. Used for tests that
+/// exercise the ψ-pipeline shape rather than the admission relation.
+const PERMISSIVE_TARGET_BYTES: [u8; 32] = [0xffu8; 32];
 
 fn easy_header() -> BlockHeader {
     let merkle: [u8; 32] = [
@@ -36,39 +44,43 @@ fn easy_header() -> BlockHeader {
     }
 }
 
-#[test]
-fn forward_emits_an_eighty_byte_wire_format_header() {
-    // The terminal ψ_9 resolver emits 80 bytes: the wire-format
-    // Bitcoin header (architecture §2.2 + §6).
-    let mut prefix = [0u8; 76];
-    prefix[0] = 0x01;
-    let target = [0xffu8; 32];
-    let task = MiningTask::new(prefix, target);
-
-    let grounded = <BitcoinMiningModel as PrismModel<
+/// Invoke `BitcoinMiningModel::forward` after ensuring the thread-local
+/// target slot is set to a permissive value — the model's pinned
+/// `C = TargetCommitment` reads the target from this slot at every
+/// invocation per wiki ADR-048.
+fn forward_permissive(
+    task: MiningTask,
+) -> prism::seal::Grounded<prism_btc::MiningResult> {
+    set_thread_target_bytes(PERMISSIVE_TARGET_BYTES);
+    <BitcoinMiningModel as PrismModel<
         DefaultHostTypes,
         PrismBtcBounds,
         Sha256dHasher,
         BitcoinResolverTuple<Sha256dHasher>,
+        TargetCommitment,
     >>::forward(task)
-    .expect("ψ-pipeline must run end-to-end");
+    .expect("ψ-pipeline must run end-to-end on permissive target")
+}
+
+#[test]
+fn forward_emits_a_thirty_two_byte_digest_kappa_label() {
+    // The terminal ψ_9 resolver emits 32 bytes: the SHA-256d digest
+    // of the reconstructed wire-format Bitcoin header. This is the
+    // natural cost-model κ-label per wiki ADR-048/049 — foundation's
+    // `LexicographicLessEqThreshold` predicate compares this byte
+    // sequence against the target.
+    let mut prefix = [0u8; 76];
+    prefix[0] = 0x01;
+    let task = MiningTask::new(prefix, PERMISSIVE_TARGET_BYTES);
+
+    let grounded = forward_permissive(task);
 
     let kappa_label = grounded.output_bytes();
     assert_eq!(
         kappa_label.len(),
-        80,
-        "κ-label is exactly the wire-format Bitcoin header width"
+        32,
+        "κ-label is exactly the 32-byte SHA-256d digest"
     );
-
-    // The leading 76 bytes are MiningTask.prefix.
-    assert_eq!(&kappa_label[..76], &prefix[..]);
-    // The trailing 4 bytes are the resolved nonce (LE).
-    let _nonce = u32::from_le_bytes([
-        kappa_label[76],
-        kappa_label[77],
-        kappa_label[78],
-        kappa_label[79],
-    ]);
 
     // Witt level pinned through forward().
     assert_eq!(grounded.witt_level_bits(), 32);
@@ -79,24 +91,11 @@ fn forward_kappa_label_is_deterministic_in_the_typed_input() {
     // The ψ-pipeline is parametric: same MiningTask → same κ-label.
     let mut prefix = [0u8; 76];
     prefix[0] = 0x42;
-    let target = [0xffu8; 32];
-    let task_a = MiningTask::new(prefix, target);
-    let task_b = MiningTask::new(prefix, target);
+    let task_a = MiningTask::new(prefix, PERMISSIVE_TARGET_BYTES);
+    let task_b = MiningTask::new(prefix, PERMISSIVE_TARGET_BYTES);
 
-    let grounded_a = <BitcoinMiningModel as PrismModel<
-        DefaultHostTypes,
-        PrismBtcBounds,
-        Sha256dHasher,
-        BitcoinResolverTuple<Sha256dHasher>,
-    >>::forward(task_a)
-    .expect("a");
-    let grounded_b = <BitcoinMiningModel as PrismModel<
-        DefaultHostTypes,
-        PrismBtcBounds,
-        Sha256dHasher,
-        BitcoinResolverTuple<Sha256dHasher>,
-    >>::forward(task_b)
-    .expect("b");
+    let grounded_a = forward_permissive(task_a);
+    let grounded_b = forward_permissive(task_b);
 
     assert_eq!(grounded_a.output_bytes(), grounded_b.output_bytes());
 }
@@ -115,22 +114,9 @@ fn forward_kappa_label_is_distinct_for_distinct_inputs() {
     p_a[0] = 0x01;
     let mut p_b = [0u8; 76];
     p_b[0] = 0x02;
-    let target = [0xffu8; 32];
 
-    let ga = <BitcoinMiningModel as PrismModel<
-        DefaultHostTypes,
-        PrismBtcBounds,
-        Sha256dHasher,
-        BitcoinResolverTuple<Sha256dHasher>,
-    >>::forward(MiningTask::new(p_a, target))
-    .expect("a");
-    let gb = <BitcoinMiningModel as PrismModel<
-        DefaultHostTypes,
-        PrismBtcBounds,
-        Sha256dHasher,
-        BitcoinResolverTuple<Sha256dHasher>,
-    >>::forward(MiningTask::new(p_b, target))
-    .expect("b");
+    let ga = forward_permissive(MiningTask::new(p_a, PERMISSIVE_TARGET_BYTES));
+    let gb = forward_permissive(MiningTask::new(p_b, PERMISSIVE_TARGET_BYTES));
 
     assert_ne!(
         ga.output_bytes(),
@@ -149,22 +135,9 @@ fn forward_path_identity_is_input_invariant() {
     p_a[0] = 0x01;
     let mut p_b = [0u8; 76];
     p_b[0] = 0x02;
-    let target = [0xffu8; 32];
 
-    let ga = <BitcoinMiningModel as PrismModel<
-        DefaultHostTypes,
-        PrismBtcBounds,
-        Sha256dHasher,
-        BitcoinResolverTuple<Sha256dHasher>,
-    >>::forward(MiningTask::new(p_a, target))
-    .expect("a");
-    let gb = <BitcoinMiningModel as PrismModel<
-        DefaultHostTypes,
-        PrismBtcBounds,
-        Sha256dHasher,
-        BitcoinResolverTuple<Sha256dHasher>,
-    >>::forward(MiningTask::new(p_b, target))
-    .expect("b");
+    let ga = forward_permissive(MiningTask::new(p_a, PERMISSIVE_TARGET_BYTES));
+    let gb = forward_permissive(MiningTask::new(p_b, PERMISSIVE_TARGET_BYTES));
 
     assert_eq!(ga.content_fingerprint(), gb.content_fingerprint());
     assert_eq!(ga.unit_address(), gb.unit_address());
@@ -174,9 +147,10 @@ fn forward_path_identity_is_input_invariant() {
 #[test]
 fn mine_admits_within_a_few_template_variations_against_permissive_target() {
     // Each mine() call is one structural inference: ψ_9 deterministically
-    // κ-derives a nonce, the boundary checks σ(header) ≤ target. For a
-    // permissive target (regtest's 0x207fffff: ~50% admission probability
-    // per κ-derivation), iterating a small number of template variations
+    // κ-derives a nonce, foundation's `run_route` evaluates the
+    // TargetCommitment on the κ-label. For a permissive target
+    // (regtest's 0x207fffff: ~50% admission probability per
+    // κ-derivation), iterating a small number of template variations
     // (varying the timestamp) finds an admitting κ-candidate.
     let base = easy_header();
     let target = Target::new(0x207fffff);
@@ -190,9 +164,10 @@ fn mine_admits_within_a_few_template_variations_against_permissive_target() {
         .expect("permissive target must admit within a small variation window");
 
     // Fail-closed: mine() returning Ok means the digest genuinely
-    // satisfies the target. Bit-identicality: the wire-format header
-    // is exactly 80 bytes.
+    // satisfies the target (admission was evaluated inside foundation's
+    // `run_route` via the model's pinned `TargetCommitment`).
     assert!(target.is_satisfied_by_bytes(&outcome.digest));
-    assert_eq!(outcome.witness.output_bytes().len(), 80);
+    assert_eq!(outcome.witness.output_bytes().len(), 32);
+    assert_eq!(outcome.wire_format_header.len(), 80);
     assert_eq!(outcome.observables.coords.datum, outcome.digest);
 }

@@ -8,7 +8,7 @@ repository  = "https://github.com/UOR-Foundation/prism-btc"
 publish     = false
 
 [dependencies]
-uor-foundation  = { workspace = true }
+uor-prism       = { workspace = true, features = ["std"] }
 prism-btc       = { path = "../prism-btc", version = "0.1.0" }
 bitcoin         = { version = "0.32",  features = ["serde"] }
 bitcoincore-rpc = { version = "0.19" }

@@ -40,7 +40,7 @@
 //!   composition; the resolvers realize each functor's structural
 //!   transformation for Bitcoin's typed feature hierarchy.
 
-use uor_foundation_sdk::verb;
+use prism::pipeline::verb;
 
 use crate::model::{MiningResult, MiningTask};
 
@@ -53,7 +53,7 @@ verb! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use uor_foundation::enforcement::Term;
+    use prism::operation::{PrimitiveOp, Term};
 
     #[test]
     fn verb_term_arena_is_emitted_and_nonempty() {
@@ -126,11 +126,11 @@ mod tests {
             matches!(
                 t,
                 Term::Application {
-                    operator: uor_foundation::PrimitiveOp::Le
-                        | uor_foundation::PrimitiveOp::Concat
-                        | uor_foundation::PrimitiveOp::Lt
-                        | uor_foundation::PrimitiveOp::Ge
-                        | uor_foundation::PrimitiveOp::Gt,
+                    operator: PrimitiveOp::Le
+                        | PrimitiveOp::Concat
+                        | PrimitiveOp::Lt
+                        | PrimitiveOp::Ge
+                        | PrimitiveOp::Gt,
                     ..
                 }
             )

@@ -28,9 +28,10 @@ unit tests across the prism-btc crate's modules:
 - **`crates/prism-btc/src/model.rs::tests`** (6 tests) — the typed
   feature hierarchy: `TemplatePrefix`'s 76-byte layout
   (`version‖prev_hash‖merkle_root‖timestamp‖bits`); `MiningTask`'s
-  108-byte partition_product layout; `MiningResult`'s 80 W8 sites
-  (wire-format header width); `IntoBindingValue` 108-byte projection;
-  CONSTRAINTS' 80 disjoint Site instances spanning [0, 80).
+  108-byte partition_product layout; `MiningResult`'s 32 W8 sites
+  (the SHA-256d κ-label width per wiki ADR-048/049);
+  `IntoBindingValue` 108-byte projection; CONSTRAINTS' 32 disjoint
+  Site instances spanning [0, 32).
 
 - **`crates/prism-btc/src/shapes/bounds.rs::tests`** (2 tests) —
   `PrismBtcBounds`' prism-btc-specific constants
@@ -55,55 +56,48 @@ unit tests across the prism-btc crate's modules:
   against rust-bitcoin reference; canonical 80-byte header
   serialization round-trip.
 
-- **`crates/prism-btc/src/pipeline.rs::tests`** (14 tests) — the
-  UOR-optimal mining surface (architecture §14):
-  - `mine_with(EmptyCommitment)` ≡ bare `mine` (zero-cost identity
-    on the typed surface).
-  - `mine_with(PayloadCommitment::<K>)` finds an admitting κ-label
-    whose decoded bits round-trip the encoded payload.
-  - Predicate primitives: `Predicate::Parity` reads a single bit
-    (bandwidth 1); `Predicate::StratumEq{k}` matches the 2-adic
-    stratum (bandwidth `k+1`); `Predicate::PAdicEq{p, k}` matches
-    the p-adic valuation (bandwidth `(k+1)·log₂p − log₂(p−1)`);
-    `Predicate::UltrametricCloseTo{r, k}` matches the 2-adic
-    distance (bandwidth `k`).
-  - Acceptance-probability surface (the Lean correspondence):
-    `Predicate::accept_prob_rational` returns the exact rational
-    Pr per variant — `Parity`→`(1,2)`, `StratumEq{k}`→`(1, 2^(k+1))`,
-    `PAdicEq{p,k}`→`(p-1, p^(k+1))`, `UltrametricCloseTo{k}`→`(1, 2^k)`;
-    `accept_prob` (f64) matches `2^(-bandwidth_bits)` to relative
-    1e-12.
-  - Support algebra (§14.2): `PAdicEq{p=2}` canonicalizes to
-    `BitSet`; `BitSet ⊥ BitSet` iff bit-disjoint; same-byte
-    overlap is detected as dependent; distinct-byte `BitSet`s are
-    independent; `Modular{p₁} ⊥ Modular{p₂}` iff `p₁ ≠ p₂`;
-    `Modular{p≥3} ⊥ BitSet(_)` always. (Retained as the
-    diagnostic / cryptanalysis surface — typed commitments
-    discharge `wellFormed` at the type level, not via this check.)
+- **`crates/prism-btc/src/pipeline.rs::tests`** — the public mining
+  entry (`mine`) under foundation 0.4.12's typed-commitment surface
+  (wiki ADR-048):
+  - `mine()` admits within a small variation window for a permissive
+    regtest target — foundation's `run_route` evaluates
+    `TargetCommitment` on the κ-label inside the catamorphism.
+  - On `Ok`, the κ-label is the 32-byte SHA-256d digest (wiki
+    ADR-048/049 cost-model surface); the 80-byte wire-format header
+    is surfaced on the side as `outcome.wire_format_header` for the
+    `submitblock` boundary.
+  - `MiningFailure::DidNotAdmit` carries the receiver-side typed
+    lens (`observables`, `nonce`, `digest`) — total lens, not
+    admission-only.
 
-- **`crates/prism-btc/src/commitment.rs::tests`** (7 tests) — prism's
-  zero-cost typed commitment surface:
-  - `EmptyCommitment` admits every digest; bandwidth 0;
-    `accept_prob` 1.
-  - `PayloadCommitment<K>::from_bits` + `::decode` round-trip on a
-    matching digest; mismatched bits are rejected.
-  - Bandwidth scales as `K`; acceptance probability scales as
-    `2^-K`.
-  - Decomposition into `[Predicate; K]` agrees with the
-    monomorphized `evaluate` (sender ↔ predicate-primitive
-    consistency).
-  - `PayloadCommitment<K>` predicates have pairwise-disjoint
-    supports by *construction* — `wellFormed` discharged at the
-    type level.
+- **`crates/prism-btc/src/commitment.rs::tests`** — foundation's
+  re-exported cost-model surface + prism-btc's K-fold payload
+  helpers:
+  - `target_commitment(...)` (foundation's
+    `SingletonCommitment<LexicographicLessEqThreshold>` alias)
+    admits a 32-byte digest at the threshold neighborhood;
+    `predicate_count() == 1`.
+  - `payload_commitment_k2 / k4 / k8` round-trip: encode K bits at
+    canonical low-bit positions, the commitment admits the
+    synthesized digest, and `decode_payload` returns the encoded
+    bits.
+  - `AndCommitment<TargetCommitment, payload>` is bandwidth-additive
+    and `predicate_count`-additive; `EmptyCommitment` is the
+    composition identity.
+  - `leak_target` deduplicates: repeat calls with the same bytes
+    return the same `&'static` pointer (registry-backed).
 
 - **`crates/prism-btc/src/observables.rs::tests`** (3 tests) — the
   receiver-side typed lens:
   - `KappaObservables::from_digest` decodes the canonical landscape
     (stratum, spectrum, p-adic valuations at `CANONICAL_PRIMES =
     {2, 3, 5, 7}`); `p_adic_at(2)` agrees with `coords.stratum`.
-  - **Round-trip identity**: for every `Predicate` variant,
+  - **Round-trip identity** across each canonical
+    `ObservablePredicate` variant (`Stratum<P>`,
+    `WalshHadamardParity`, `UltrametricCloseTo<P>`, `AffineParity`,
+    `LexicographicLessEqThreshold`):
     `pred.evaluate(d) == ExtendedObservables::from_digest(d, ωs,
-    refs).satisfies(&pred, d)` — the sender ↔ receiver consistency
+    refs).satisfies(&pred, d)` — sender ↔ receiver consistency
     pinned algebraically.
   - `ExtendedObservables::<0, 0>` is a valid instantiation
     (canonical-only lens; the const-generic shape covers
@@ -125,19 +119,19 @@ per-test rationale.
 |---|---|---|
 | 1 | `v_verb_arena_composes_only_psi_stages_no_sigma_residuals` | Pure-prism commitment: verb body contains only ψ-Terms + Variable/Literal scaffolding |
 | 2 | `v_verb_arena_implements_the_k_invariant_branch` | ψ_1 → ψ_7 → ψ_8 → ψ_9 — the canonical mining transform (architecture §4) |
-| 3 | `v_mine_admits_in_one_call_against_a_permissive_target` | Cryptographic re-derivation: `mine()` is one-shot for permissive targets; `outcome.digest` = SHA-256d(wire-format header) and admits |
-| 4 | `v_mine_outcome_digest_actually_satisfies_target_across_inputs` | Fail-closed across the input space: every `Ok` outcome's digest genuinely satisfies the target |
+| 3 | `v_mine_admits_within_a_few_template_variations_for_permissive_target` | `mine()` admits within a small variation window for a permissive regtest target — admission decided by foundation's `run_route` via the model's `TargetCommitment` |
+| 4 | `v_mine_outcome_digest_actually_satisfies_target_when_admitted` | Fail-closed: every `Ok` outcome's digest genuinely satisfies the target (the typed-iso gate is inside `run_route`) |
 | 5 | `v_psi_pipeline_is_pure_function_of_typed_input` | Determinism: 5 repetitions of the same `MiningTask` produce byte-identical κ-labels |
-| 6 | `v_kappa_label_is_distinct_for_distinct_typed_inputs` | Distinctness: 64 distinct inputs produce 64 distinct κ-labels (collision-free in the wire-format header as a whole) |
-| 7 | `v_kappa_label_is_wire_format_header_byte_for_byte` | Bit-identicality: κ-label = `serialize_header(host_header, resolved_nonce)` byte-for-byte |
-| 8 | `v_kappa_label_preserves_the_host_supplied_prefix` | ψ-pipeline preserves the template prefix; only the nonce field is derived |
-| 9 | `v_model_declarations_invariant_across_network_byte_thresholds` | Network-invariance: same model + same verb arena across regtest/signet/testnet/testnet4/mainnet `bits` values |
+| 6 | `v_kappa_label_is_distinct_for_distinct_typed_inputs` | Distinctness: 64 distinct inputs produce 64 distinct κ-labels |
+| 7 | `v_kappa_label_is_sha256d_of_reconstructed_wire_format_header` | The 32-byte κ-label equals `SHA-256d(serialize_header(host_header, resolved_nonce))` byte-for-byte |
+| 8 | `v_wire_format_header_preserves_the_host_supplied_prefix` | ψ-pipeline preserves the template prefix; only the nonce field is derived |
+| 9 | `v_model_declarations_invariant_across_network_byte_thresholds` | Network-invariance: same model + same verb arena + same `TargetCommitment` shape across regtest/signet/testnet/testnet4/mainnet `bits` values |
 | 10 | `v_compile_unit_fingerprint_identifies_the_typed_iso_path` | TC-03 typed-iso path-singularity: distinct inputs share CompileUnit fingerprint (the path, not the input) |
-| 11 | `v_mining_result_constraints_have_eighty_disjoint_site_instances` | Algebraic-closure encoding: 80 disjoint `ConstraintRef::Site` instances (IT_7d) |
-| 12 | `v_constraint_nerve_is_eighty_isolated_vertices_no_higher_simplices` | Constraint-nerve geometry: β_0 = 80, β_k = 0 for k ≥ 1, χ = 80 = SITE_COUNT |
-| 13 | `v_constraint_site_supports_span_the_full_wire_format_header` | Site supports cover [0, 80) — every wire-format-header byte pinned by one Site constraint |
+| 11 | `v_mining_result_constraints_have_thirty_two_disjoint_site_instances` | Algebraic-closure encoding: 32 disjoint `ConstraintRef::Site` instances on `MiningResult` (IT_7d) |
+| 12 | `v_constraint_nerve_is_thirty_two_isolated_vertices_no_higher_simplices` | Constraint-nerve geometry: β_0 = 32, β_k = 0 for k ≥ 1, χ = SITE_COUNT = 32 |
+| 13 | `v_constraint_site_supports_span_the_full_digest` | Site supports cover [0, 32) — every κ-label digest byte pinned by one Site constraint |
 | 14 | `v_prism_btc_bounds_declare_algebraic_closure_target` | `PrismBtcBounds` declares the algebraic-closure ceilings (compile-time assertion) |
-| 15 | `v_mine_outcome_carries_kappa_derivation_state` | `MiningOutcome.resolution` carries `free_rank = 0` (terminal-stage convergence) and `derived_nonce` matching the κ-derived nonce on the wire-format header |
+| 15 | `v_mine_outcome_carries_kappa_derivation_state` | `MiningOutcome.resolution` carries `free_rank = 0` (terminal-stage convergence) and `derived_nonce` matching the κ-derived nonce |
 | 16 | `v_mine_drains_thread_local_diagnostic_channel` | `mine()` drains the thread-local diagnostic channel as part of returning the outcome — a subsequent `take_resolution_state()` returns `None` |
 | 17 | `v_forward_records_resolution_state_for_inspection` | Direct `forward()` callers (not via `mine()`) inspect ψ_9's state via `take_resolution_state()` — ψ_9 records state on every invocation |
 
@@ -153,10 +147,10 @@ statements; tests are ID'd against it.
 
 | Class | Count | What it asserts |
 |---|---|---|
-| **CS** (structural) | 6 | No `Vec<Predicate>` / `dyn TypedCommitment` / `Box<dyn …>` / legacy `MiningCommitment`-era identifiers in `src/`; `TypedCommitment: Copy` enforced; `Predicate` enum fixed at four variants; `MiningOutcome.observables` always present. |
-| **CD** (dynamic) | 3 | `mine_with(EmptyCommitment) ≡ mine` byte-for-byte; `PayloadCommitment<K>` round-trips at K ∈ {0,1,2,4,8}; `MiningOutcome.observables` agrees with the per-primitive `TriadicCoords::from_hash` / `p_adic_valuation` computation. |
-| **CP** (probabilistic scaling) | 3 | `α⁻¹ × 2^K` cost identity holds within ±30% (≈4σ at N=200) across (a) K-sweep over four decades [0..12] at fixed α, (b) α-sweep over four decades [2⁻¹..2⁻¹²] at fixed K=2, (c) compound K × α decompositions of the same product. |
-| **CM** (mainnet readiness) | 6 | `Target::new(nBits)` accepts every mainnet-difficulty value in the chain's history; `mine()` produces well-formed 80-byte κ-labels on synthetic mainnet inputs (`PipelineFailure` unreachable across 400 attempts × 8 difficulty levels); aggregate `CampaignStats` matches PRF baseline at N=10⁴ (χ² goodness-of-fit on stratum + spectrum at α=0.001); empirical α converges to theoretical α at N=10⁴ within ±5%; campaign is consistent under cooperative interruption. |
+| **CS** (structural) | 6 | No `Vec<Predicate>` / `dyn TypedCommitment` / `Box<dyn …>` in `src/`; `TypedCommitment: Copy + Sealed` enforced (foundation supertrait, wiki ADR-048); foundation's five canonical `ObservablePredicate` impls (`Stratum<P>`, `WalshHadamardParity`, `UltrametricCloseTo<P>`, `AffineParity`, `LexicographicLessEqThreshold`) reachable + closed catalog pinned (ADR-049); `MiningOutcome.observables: KappaObservables` always present; no legacy commitment-surface identifiers (`MiningCommitment`, `mine_with(`, `PayloadCommitment<`, `enum Predicate`, `enum Support`, …) in `src/`. |
+| **CD** (dynamic) | 3 | `mine()` returns `Ok` ⇒ digest satisfies the model's pinned `TargetCommitment` (admission was evaluated inside `run_route`); `payload_commitment_k*` helpers round-trip at K ∈ {1, 2, 4, 8}; `MiningOutcome.observables` agrees with the per-primitive `TriadicCoords::from_hash` / `p_adic_valuation` computation. |
+| **CP** (probabilistic scaling) | 4 | `α⁻¹ × 2^K` cost identity holds within ±30% (≈4σ at N=200) across (a) K-sweep over four decades [0..12] at fixed α, (b) α-sweep over four decades [2⁻¹..2⁻¹²] at fixed K=2, (c) compound K × α decompositions of the same product; (d) foundation's `AndCommitment<TargetCommitment, payload>` is bandwidth-additive + `predicate_count`-additive + identity under `EmptyCommitment`, witnessed empirically across (lz, K) combinations. |
+| **CM** (mainnet readiness) | 6 | `Target::new(nBits)` accepts every mainnet-difficulty value in the chain's history; `mine()` produces well-formed 32-byte κ-labels (with reconstructed 80-byte `wire_format_header`) on synthetic mainnet inputs (`PipelineFailure` unreachable across 400 attempts × 8 difficulty levels); aggregate `CampaignStats` matches PRF baseline at N=10⁴ (χ² goodness-of-fit on stratum + spectrum at α=0.001); empirical α converges to theoretical α at N=10⁴ within ±5%; campaign is consistent under cooperative interruption. |
 | **CN** + **CL** | (cross-ref) | Network-invariance (CN-1…4) cross-referenced to V&V §2 + host-loop §5; Lean-formal (CL-1…4) cross-referenced to §4 below. |
 
 Plus 1 negative-conformance witness (`MiningFailure::DidNotAdmit`
@@ -186,7 +180,7 @@ Lean 4 proofs of foundational algebraic identities prism-btc depends on:
 | `ShapeConstraint.lean` | Target satisfaction monotonicity; leading-zeros → stratum bound | proved |
 | `FreeRankProtocol.lean` | FreeRank decreases monotonically under refinement | proved |
 | `ConvergenceProtocol.lean` | σ-projection identity + ψ-vs-σ distinction (load-bearing for ADR-035) | proved |
-| `CommitmentChannel.lean` §1 | U6 Joint-Probability Multiplicativity: Conjunction is monoidal over commitment concatenation; `acceptProb` (multiplicative) and `evaluate` (Boolean AND) distribute over append; `Support.disjoint` symmetry; `Commitment.wellFormed` invariant of the Rust typed-iso surface (architecture §14). The `Predicate.acceptProb : Rat` field faithfully covers all four Rust variants (including `PAdicEq{p≥3}` whose log-space bandwidth is irrational). | proved |
+| `CommitmentChannel.lean` §1 | U6 Joint-Probability Multiplicativity: Conjunction is monoidal over commitment concatenation; `acceptProb` (multiplicative) and `evaluate` (Boolean AND) distribute over append; `Support.disjoint` symmetry; `Commitment.wellFormed` invariant of the foundation `TypedCommitment` catalog (wiki ADR-048 + ADR-049). The Lean `Predicate.acceptProb : Rat` field faithfully covers each canonical `ObservablePredicate` variant (including `Stratum<P>` for primes p ≥ 3 whose log-space bandwidth is irrational). | proved |
 | `CommitmentChannel.lean` §2 | **PRF tight-acceptance theorem** (`prf_prob_tight_wellFormed`): under U1 (marginal-uniformity) + U2 (joint-independence under disjoint supports), a `wellFormed` commitment's PRF acceptance probability equals its declared `acceptProb` at equality, not as an upper bound — the operational form of U6 (ANALYSIS.md §5.5, architecture §14.1). U1 + U2 axioms are empirically witnessed by `examples/uor_cryptanalysis.rs` §I + §J at α=0.001. | proved |
 
 Run: `just verify` (= `cd prism-btc-lean && lake update && lake build`).

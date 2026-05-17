@@ -72,7 +72,8 @@ prism_model! {
         DefaultHostTypes,
         PrismBtcBounds,
         Sha256dHasher,
-        BitcoinResolverTuple<Sha256dHasher>
+        BitcoinResolverTuple<Sha256dHasher>,
+        TargetCommitment                      // ← ADR-048 5th-position
     > for BitcoinMiningModel {
         type Input = MiningTask;
         type Output = MiningResult;
@@ -80,15 +81,24 @@ prism_model! {
         fn route(input: Self::Input) -> Self::Output {
             mining_inference(input)
         }
+        fn commitment() -> TargetCommitment {
+            target_commitment(current_thread_target())
+        }
     }
 }
 ```
 
 `BitcoinMiningModel::forward(task: MiningTask) -> Result<Grounded<MiningResult>, _>`
-is the canonical typed-iso surface (ADR-020 + ADR-036 + ADR-048
-5-position form, foundation 0.4.6). The `Grounded<MiningResult>` is
-the foundation-sealed certificate that the typed inference admits;
-its `output_bytes()` carry the label.
+is the canonical typed-iso surface (wiki ADR-020 + ADR-036 + ADR-048
+5-position form, foundation 0.4.12). The 5th-position
+`C = TargetCommitment` is foundation's alias for
+`SingletonCommitment<LexicographicLessEqThreshold>` (wiki ADR-040 +
+ADR-049): Bitcoin's `digest ≤ target` admission relation is a typed
+predicate that foundation's `run_route` catamorphism evaluates on the
+κ-label **inside** the typed-iso surface — not at a host-boundary
+gate. The `Grounded<MiningResult>` is the foundation-sealed
+certificate that the inference admits; its `output_bytes()` carry
+the 32-byte SHA-256d κ-label.
 
 ## Workspace
 
@@ -110,15 +120,22 @@ its `output_bytes()` carry the label.
 
 ## Bit-identicality + fail-closed contract (architecture §6)
 
-`BitcoinMiningModel::forward(task)` returns a `Grounded<MiningResult>`
-whose `output_bytes()` are exactly 80 bytes — the wire-format Bitcoin
-header. `forward()` always succeeds for well-formed inputs (the
-ψ-pipeline is total over the typed input surface). The host-boundary
-entry point `mine(header, target)` enforces the admission relation
-`σ(header) ≤ target` on the κ-derived header and returns
-`Ok(MiningOutcome)` only when admission holds. When the κ-candidate
-doesn't satisfy the target, `mine()` returns
-`Err(MiningFailure::DidNotAdmit { observables, nonce, digest })`; the
+`mine(header, target)` is the canonical entry. Internally it
+publishes the target on the thread-local commitment slot and invokes
+`BitcoinMiningModel::forward(task)`. Admission is evaluated **inside
+foundation's `run_route` catamorphism** via the model's pinned
+`TargetCommitment` — not at a host-boundary recomputation of the
+σ-projection. Foundation's `Grounded<MiningResult>` carries the
+32-byte SHA-256d κ-label as `output_bytes()`; the 80-byte
+wire-format Bitcoin header is reconstructed for `submitblock` at the
+prism-btc boundary and surfaced on the success path as
+`MiningOutcome.wire_format_header: [u8; 80]`.
+
+When admission fails inside `run_route`, foundation reports
+`PipelineFailure::ShapeViolation` with the
+`commitment/TypedCommitment/VIOLATED` shape IRI and prism-btc
+classifies that as
+`Err(MiningFailure::DidNotAdmit { observables, nonce, digest })`. The
 host boundary varies the template (extranonce roll → distinct
 `MiningTask` → distinct κ-derivation) and retries, folding each
 attempt's typed property landscape into a `CampaignStats` aggregate.
@@ -129,42 +146,45 @@ present on `Ok(MiningOutcome)` and on `DidNotAdmit` alike. Every
 giving the host operator typed visibility into the search at session
 granularity.
 
-**Valid input either produces a valid mined-block header or surfaces
-`DidNotAdmit` for the host to handle.** `mine()` never returns a
-non-admitting outcome dressed as success — the boundary check is the
-fail-closed gate.
+**Valid input either produces an admitting outcome or surfaces
+`DidNotAdmit` for the host to handle.** `mine()` never returns an
+outcome whose κ-label does not admit — the typed-iso gate is inside
+the catamorphism.
 
 prism-btc's transform is structural: the typed-iso surface maps
-`MiningTask → wire-format header` deterministically via the ψ-pipeline;
-the host boundary checks admission at the σ-projection. There is no
-inner search loop, no nonce enumeration, no "hashrate" metric. The
-wire-format output is byte-for-byte what Bitcoin Core's `submitblock`
-accepts because both reach the same canonical serialization — prism-btc
-declares the structure; the wire format is the same artifact.
+`MiningTask → 32-byte κ-label` deterministically via the ψ-pipeline,
+then `TargetCommitment::evaluate` decides admission inside
+`run_route`. There is no inner search loop, no nonce enumeration, no
+"hashrate" metric. The reconstructed wire-format header
+(`outcome.wire_format_header`) is byte-for-byte what Bitcoin Core's
+`submitblock` accepts because both reach the same canonical
+serialization.
 
 **Network-invariant.** Same `BitcoinMiningModel`, same ψ-pipeline verb
-body, same `BitcoinResolverTuple`, same κ-derivation across regtest,
-signet, testnet, testnet4, and mainnet. The network-dependent value is
-the byte threshold from the template's `Bits` field; the host boundary
-(`prism-btc-node`) varies template-derived `MiningTask` inputs when
-`mine()` returns `DidNotAdmit`. From outside, `forward()` is **one
-structural inference per `MiningTask`** at constant cost — the
-network-dependent quantity is the number of template variations the
-host attempts, not the cost per attempt.
+body, same `BitcoinResolverTuple`, same κ-derivation, same
+`TargetCommitment` shape across regtest, signet, testnet, testnet4,
+and mainnet. The network-dependent value is the byte threshold from
+the template's `Bits` field; that threshold pins the
+`LexicographicLessEqThreshold::target` for the call. From outside,
+`forward()` is **one structural inference per `MiningTask`** at
+constant cost — the network-dependent quantity is the number of
+template variations the host attempts, not the cost per attempt.
 
 ## Algebraic-closure encoding
 
-`MiningResult::CONSTRAINTS` declares 80 disjoint `ConstraintRef::Site`
-instances — one per wire-format-header byte. The constraint nerve has
-80 isolated vertices with no higher simplices; β_0 = 80, β_k = 0 for
-k ≥ 1, χ = 80 = SITE_COUNT — the UOR Index Theorem IT_7d
+`MiningResult::CONSTRAINTS` declares 32 disjoint `ConstraintRef::Site`
+instances — one per κ-label digest byte. The constraint nerve has 32
+isolated vertices with no higher simplices; β_0 = 32, β_k = 0 for
+k ≥ 1, χ = SITE_COUNT = 32 — the UOR Index Theorem IT_7d
 algebraic-closure criterion is satisfied at the declaration level
-(architecture §2.3). Sites 0..76 are template-pinned (host-supplied
-prefix bytes); sites 76..80 are κ-pinned (ψ_9 resolver's structural
-κ-derivation via the canonical hash axis fixes the four nonce bytes
-to the leading bytes of `H(MiningTask)`). Both mechanisms terminate
-at the same fixed point: 80 sites pinned ⇒ `FreeRank = 0` ⇒
-convergence at the terminal ψ-stage.
+(architecture §2.3). All 32 sites are **κ-pinned by ψ_9
+simultaneously**: ψ_9 structurally κ-derives the 4-byte nonce from
+the typed `MiningTask` via the canonical hash axis, reconstructs the
+80-byte wire-format Bitcoin header from `(template_prefix,
+derived_nonce)`, and emits `SHA-256d(wire_format_header)` as the
+32-byte κ-label. `FreeRank` drops from 32 to 0 in this single
+terminal stage; convergence at the typed-iso surface is then handed
+to foundation's `run_route` for the `TargetCommitment::evaluate` gate.
 
 ## Diagnostic surface
 
@@ -238,26 +258,29 @@ traditional cryptanalysis, and ADR-style framework proposals.
 
 [ARCHITECTURE.md §14](ARCHITECTURE.md) — **UOR-optimal mining**.
 The cryptanalysis identifies the Pareto frontier
-`cost(B) = 2^B × α^-1`; prism-btc realizes it via
-`mine_with<C: TypedCommitment>(header, target, commitment)` — prism's
-**zero-cost typed commitment surface**. Every commitment is a
-compile-time-known typed structure (`EmptyCommitment`,
-`PayloadCommitment<K>`, or any user-defined `TypedCommitment` impl):
-no `Vec`, no dynamic dispatch, no runtime allocation, no runtime
-disjointness check. `wellFormed` is discharged at the type level by
-the commitment's invariants; the Lean theorem
-`Commitment.prf_prob_tight_wellFormed` applies at equality
-(declared bandwidth = operational PRF cost, not an upper bound).
-Every mined block is wire-format-valid for `submitblock` *and*
-commits to `B` bits of application-declared structural information
-at proportional PRF cost. The receiver-side typed lens is
-`KappaObservables` — **total**, carried on every `MiningOutcome` and
-every `MiningFailure::DidNotAdmit` — and `ExtendedObservables<N_PAR,
-N_REF>` for application-specific parities and reference points.
-Session-level aggregation lives in `CampaignStats` (zero-allocation
-histograms folded across every attempt) — the operator's typed window
-onto the search at mainnet scale. Reproducible via `cargo run
---release --example optimal_mining`.
+`cost(B) = 2^B × α^-1`; prism-btc realizes it via foundation's
+sealed `TypedCommitment` catalog (wiki ADR-048 + ADR-049). `mine()`
+is the only public mining entry; admission is evaluated inside
+foundation's `run_route` catamorphism via the model's pinned
+`TargetCommitment`. For typed-bandwidth commitments beyond bare
+admission, applications compose `AndCommitment<TargetCommitment,
+payload>` using prism-btc's `payload_commitment_k2 / k4 / k8`
+helpers (each producing an `AndCommitment` tree of
+`SingletonCommitment<AffineParity>` leaves per wiki QS-06's K-fold
+exemplar) and declare a derived `PrismModel<…, C>` with that
+composed shape in the 5th slot. Every commitment is `Copy + Sealed`,
+monomorphized per use site — no `Vec`, no dynamic dispatch, no
+runtime allocation, no runtime disjointness check. `wellFormed` is
+discharged at the type level by foundation's catalog seal; the Lean
+theorem `Commitment.prf_prob_tight_wellFormed` applies at equality
+across every Rust monomorphization the catalog produces. The
+receiver-side typed lens is `KappaObservables` — **total**, carried
+on every `MiningOutcome` and every `MiningFailure::DidNotAdmit` —
+and `ExtendedObservables<N_PAR, N_REF>` for application-specific
+parities and reference points. Session-level aggregation lives in
+`CampaignStats` (zero-allocation histograms folded across every
+attempt) — the operator's typed window onto the search at mainnet
+scale.
 
 ## Real-network mining (`prism-btc-node`)
 
