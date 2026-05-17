@@ -72,9 +72,7 @@ fn main() {
     println!();
 
     let (digest, nonce) = mine_one_admitting_block();
-    println!(
-        "── §1. Bare admission ──────────────────────────────────"
-    );
+    println!("── §1. Bare admission ──────────────────────────────────");
     println!("  κ-derived nonce      : 0x{nonce:08x}");
     println!("  κ-label digest (hex) : {}", hex32(&digest));
     println!();
@@ -109,11 +107,26 @@ fn demo_payload_commitments(digest: &[u8; 32]) {
     println!("  --  ---------    -----------    --------   ----------------------");
 
     let b2 = decode_payload::<2>(digest);
-    print_payload_row(2, &payload_commitment_k2(b2), digest, decode_payload::<2>(digest) == b2);
+    print_payload_row(
+        2,
+        &payload_commitment_k2(b2),
+        digest,
+        decode_payload::<2>(digest) == b2,
+    );
     let b4 = decode_payload::<4>(digest);
-    print_payload_row(4, &payload_commitment_k4(b4), digest, decode_payload::<4>(digest) == b4);
+    print_payload_row(
+        4,
+        &payload_commitment_k4(b4),
+        digest,
+        decode_payload::<4>(digest) == b4,
+    );
     let b8 = decode_payload::<8>(digest);
-    print_payload_row(8, &payload_commitment_k8(b8), digest, decode_payload::<8>(digest) == b8);
+    print_payload_row(
+        8,
+        &payload_commitment_k8(b8),
+        digest,
+        decode_payload::<8>(digest) == b8,
+    );
 
     println!();
     println!("Bandwidth is additive over the AndCommitment tree;");
@@ -127,11 +140,15 @@ fn demo_stratum_commitment(digest: &[u8; 32]) {
     // Pick k = the 2-adic valuation actually observed on this digest, so
     // the predicate accepts; show the type-level shape regardless.
     let k = prism_btc::p_adic_valuation(digest, 2).min(31);
-    let cmt = SingletonCommitment { predicate: Stratum::<2> { k } };
+    let cmt = SingletonCommitment {
+        predicate: Stratum::<2> { k },
+    };
     println!("  Stratum<P=2> {{ k = {k} }}  (ν_2(κ-label) over the BE-integer view)");
     println!(
         "  bandwidth = {:.3} bits, accept_prob = {:.6}, evaluate = {}",
-        cmt.bandwidth_bits(), cmt.accept_prob(), cmt.evaluate(digest),
+        cmt.bandwidth_bits(),
+        cmt.accept_prob(),
+        cmt.evaluate(digest),
     );
 }
 
@@ -143,7 +160,10 @@ fn demo_composed_target_and_payload(digest: &[u8; 32]) {
     let target_static = leak_target(Target::new(REGTEST_NBITS).to_bytes());
     let target_c = target_commitment(target_static);
     let payload = payload_commitment_k4(decode_payload::<4>(digest));
-    let composed = AndCommitment { left: target_c, right: payload };
+    let composed = AndCommitment {
+        left: target_c,
+        right: payload,
+    };
 
     let sum_b = target_c.bandwidth_bits() + payload.bandwidth_bits();
     let prod_a = target_c.accept_prob() * payload.accept_prob();
@@ -151,8 +171,14 @@ fn demo_composed_target_and_payload(digest: &[u8; 32]) {
         "  AndCommitment<TargetCommitment, PayloadK4>: predicate_count = {}",
         composed.predicate_count(),
     );
-    println!("  bandwidth(left)       = {:>7.4} bits", target_c.bandwidth_bits());
-    println!("  bandwidth(right)      = {:>7.4} bits", payload.bandwidth_bits());
+    println!(
+        "  bandwidth(left)       = {:>7.4} bits",
+        target_c.bandwidth_bits()
+    );
+    println!(
+        "  bandwidth(right)      = {:>7.4} bits",
+        payload.bandwidth_bits()
+    );
     println!(
         "  bandwidth(composed)   = {:>7.4} bits   (= left + right ⇒ {})",
         composed.bandwidth_bits(),

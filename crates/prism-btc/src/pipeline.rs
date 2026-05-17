@@ -303,7 +303,10 @@ mod tests {
                 break;
             }
         }
-        assert!(admitted, "permissive target must admit within 32 variations");
+        assert!(
+            admitted,
+            "permissive target must admit within 32 variations"
+        );
     }
 
     #[test]

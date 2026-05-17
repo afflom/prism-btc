@@ -27,14 +27,14 @@
 //!   produce identical CompileUnit-level fingerprints (they identify
 //!   the typed-iso path, not bytewise input identity).
 
+use prism::operation::Term;
+use prism::pipeline::{ConstrainedTypeShape, ConstraintRef, PrismModel};
+use prism::vocabulary::DefaultHostTypes;
 use prism_btc::{
     mine, serialize_header, sha256d_display, take_resolution_state, BitcoinMiningModel,
     BitcoinResolverTuple, Bits, BlockHeader, MerkleRoot, MiningResult, MiningTask, PrismBtcBounds,
     Sha256dHasher, Target, Timestamp, Version, VERB_TERMS_MINING_INFERENCE,
 };
-use prism::operation::Term;
-use prism::pipeline::{ConstrainedTypeShape, ConstraintRef, PrismModel};
-use prism::vocabulary::DefaultHostTypes;
 
 fn canonical_header(version: u32, timestamp: u32, bits: u32) -> BlockHeader {
     let merkle: [u8; 32] = [

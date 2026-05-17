@@ -21,7 +21,7 @@ use prism::pipeline::PrismModel;
 use prism::vocabulary::DefaultHostTypes;
 use prism_btc::{
     mine, set_thread_target_bytes, BitcoinMiningModel, BitcoinResolverTuple, Bits, BlockHeader,
-    MerkleRoot, MiningTask, PrismBtcBounds, Sha256dHasher, TargetCommitment, Target, Timestamp,
+    MerkleRoot, MiningTask, PrismBtcBounds, Sha256dHasher, Target, TargetCommitment, Timestamp,
     Version,
 };
 
@@ -48,9 +48,7 @@ fn easy_header() -> BlockHeader {
 /// target slot is set to a permissive value — the model's pinned
 /// `C = TargetCommitment` reads the target from this slot at every
 /// invocation per wiki ADR-048.
-fn forward_permissive(
-    task: MiningTask,
-) -> prism::seal::Grounded<prism_btc::MiningResult> {
+fn forward_permissive(task: MiningTask) -> prism::seal::Grounded<prism_btc::MiningResult> {
     set_thread_target_bytes(PERMISSIVE_TARGET_BYTES);
     <BitcoinMiningModel as PrismModel<
         DefaultHostTypes,

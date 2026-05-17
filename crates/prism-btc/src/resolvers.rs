@@ -436,7 +436,10 @@ impl<H: Hasher> NerveResolver<H> for BitcoinNerveResolver<H> {
 #[derive(Debug)]
 pub struct BitcoinChainComplexResolver<H>(PhantomData<H>);
 
-impl<H: Hasher> prism::uor_foundation::pipeline::__sdk_seal::Sealed for BitcoinChainComplexResolver<H> {}
+impl<H: Hasher> prism::uor_foundation::pipeline::__sdk_seal::Sealed
+    for BitcoinChainComplexResolver<H>
+{
+}
 
 impl<H: Hasher> ChainComplexResolver<H> for BitcoinChainComplexResolver<H> {
     #[inline]
@@ -462,7 +465,10 @@ impl<H: Hasher> ChainComplexResolver<H> for BitcoinChainComplexResolver<H> {
 #[derive(Debug)]
 pub struct BitcoinHomologyGroupResolver<H>(PhantomData<H>);
 
-impl<H: Hasher> prism::uor_foundation::pipeline::__sdk_seal::Sealed for BitcoinHomologyGroupResolver<H> {}
+impl<H: Hasher> prism::uor_foundation::pipeline::__sdk_seal::Sealed
+    for BitcoinHomologyGroupResolver<H>
+{
+}
 
 impl<H: Hasher> HomologyGroupResolver<H> for BitcoinHomologyGroupResolver<H> {
     #[inline]
@@ -489,7 +495,10 @@ impl<H: Hasher> HomologyGroupResolver<H> for BitcoinHomologyGroupResolver<H> {
 #[derive(Debug)]
 pub struct BitcoinCochainComplexResolver<H>(PhantomData<H>);
 
-impl<H: Hasher> prism::uor_foundation::pipeline::__sdk_seal::Sealed for BitcoinCochainComplexResolver<H> {}
+impl<H: Hasher> prism::uor_foundation::pipeline::__sdk_seal::Sealed
+    for BitcoinCochainComplexResolver<H>
+{
+}
 
 impl<H: Hasher> CochainComplexResolver<H> for BitcoinCochainComplexResolver<H> {
     #[inline]
@@ -515,7 +524,10 @@ impl<H: Hasher> CochainComplexResolver<H> for BitcoinCochainComplexResolver<H> {
 #[derive(Debug)]
 pub struct BitcoinCohomologyGroupResolver<H>(PhantomData<H>);
 
-impl<H: Hasher> prism::uor_foundation::pipeline::__sdk_seal::Sealed for BitcoinCohomologyGroupResolver<H> {}
+impl<H: Hasher> prism::uor_foundation::pipeline::__sdk_seal::Sealed
+    for BitcoinCohomologyGroupResolver<H>
+{
+}
 
 impl<H: Hasher> CohomologyGroupResolver<H> for BitcoinCohomologyGroupResolver<H> {
     #[inline]
@@ -544,7 +556,10 @@ impl<H: Hasher> CohomologyGroupResolver<H> for BitcoinCohomologyGroupResolver<H>
 #[derive(Debug)]
 pub struct BitcoinPostnikovResolver<H>(PhantomData<H>);
 
-impl<H: Hasher> prism::uor_foundation::pipeline::__sdk_seal::Sealed for BitcoinPostnikovResolver<H> {}
+impl<H: Hasher> prism::uor_foundation::pipeline::__sdk_seal::Sealed
+    for BitcoinPostnikovResolver<H>
+{
+}
 
 impl<H: Hasher> PostnikovResolver<H> for BitcoinPostnikovResolver<H> {
     #[inline]
@@ -571,7 +586,10 @@ impl<H: Hasher> PostnikovResolver<H> for BitcoinPostnikovResolver<H> {
 #[derive(Debug)]
 pub struct BitcoinHomotopyGroupResolver<H>(PhantomData<H>);
 
-impl<H: Hasher> prism::uor_foundation::pipeline::__sdk_seal::Sealed for BitcoinHomotopyGroupResolver<H> {}
+impl<H: Hasher> prism::uor_foundation::pipeline::__sdk_seal::Sealed
+    for BitcoinHomotopyGroupResolver<H>
+{
+}
 
 impl<H: Hasher> HomotopyGroupResolver<H> for BitcoinHomotopyGroupResolver<H> {
     #[inline]
@@ -634,7 +652,10 @@ impl<H: Hasher> HomotopyGroupResolver<H> for BitcoinHomotopyGroupResolver<H> {
 #[derive(Debug)]
 pub struct BitcoinKInvariantResolver<H>(PhantomData<H>);
 
-impl<H: Hasher> prism::uor_foundation::pipeline::__sdk_seal::Sealed for BitcoinKInvariantResolver<H> {}
+impl<H: Hasher> prism::uor_foundation::pipeline::__sdk_seal::Sealed
+    for BitcoinKInvariantResolver<H>
+{
+}
 
 impl<H: Hasher> KInvariantResolver<H> for BitcoinKInvariantResolver<H> {
     #[inline]

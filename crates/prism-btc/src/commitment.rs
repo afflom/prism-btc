@@ -159,12 +159,18 @@ pub type PayloadK2 =
 
 /// Four-bit payload commitment: left-associative conjunction of four
 /// single-bit predicates at bit indices `[0, 1, 2, 3]`.
-pub type PayloadK4 = AndCommitment<AndCommitment<PayloadK2, SingletonCommitment<AffineParity>>, SingletonCommitment<AffineParity>>;
+pub type PayloadK4 = AndCommitment<
+    AndCommitment<PayloadK2, SingletonCommitment<AffineParity>>,
+    SingletonCommitment<AffineParity>,
+>;
 
 /// Eight-bit payload commitment: left-associative conjunction of eight
 /// single-bit predicates at bit indices `[0..8)`.
 pub type PayloadK8 = AndCommitment<
-    AndCommitment<AndCommitment<PayloadK4, SingletonCommitment<AffineParity>>, SingletonCommitment<AffineParity>>,
+    AndCommitment<
+        AndCommitment<PayloadK4, SingletonCommitment<AffineParity>>,
+        SingletonCommitment<AffineParity>,
+    >,
     AndCommitment<SingletonCommitment<AffineParity>, SingletonCommitment<AffineParity>>,
 >;
 

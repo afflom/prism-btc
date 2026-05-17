@@ -27,10 +27,10 @@ use std::path::{Path, PathBuf};
 use prism_btc::{
     decode_payload, leak_target, mine, p_adic_valuation, payload_bit, payload_commitment_k2,
     payload_commitment_k4, payload_commitment_k8, sha256d_display, target_commitment, AffineParity,
-    AndCommitment, Bits, BlockHeader, EmptyCommitment, KappaObservables, LexicographicLessEqThreshold,
-    MerkleRoot, MiningFailure, ObservablePredicate, SingletonCommitment, Stratum, Target,
-    TargetCommitment, Timestamp, TriadicCoords, TypedCommitment, UltrametricCloseTo, Version,
-    WalshHadamardParity, CANONICAL_PRIMES,
+    AndCommitment, Bits, BlockHeader, EmptyCommitment, KappaObservables,
+    LexicographicLessEqThreshold, MerkleRoot, MiningFailure, ObservablePredicate,
+    SingletonCommitment, Stratum, Target, TargetCommitment, Timestamp, TriadicCoords,
+    TypedCommitment, UltrametricCloseTo, Version, WalshHadamardParity, CANONICAL_PRIMES,
 };
 
 const REGTEST_NBITS: u32 = 0x207fffff;
@@ -484,13 +484,7 @@ const CP_TOLERANCE: f64 = 0.30;
 #[test]
 fn cp1_k_scaling_holds_across_two_decades() {
     const ADMISSION_LZ: u32 = 1;
-    let cases: &[(u32, f64)] = &[
-        (0, 2.0),
-        (2, 8.0),
-        (4, 32.0),
-        (8, 512.0),
-        (12, 8192.0),
-    ];
+    let cases: &[(u32, f64)] = &[(0, 2.0), (2, 8.0), (4, 32.0), (8, 512.0), (12, 8192.0)];
     for &(k, predicted) in cases {
         let max_per_trial = (predicted as u64) * 64 + 1024;
         let observed = average_trials(ADMISSION_LZ, k, 0xC0FFEE_u64, CP_N_TRIALS, max_per_trial);
@@ -588,9 +582,8 @@ fn cp4_typed_commitment_composition_is_bandwidth_additive() {
         bit_index: 0,
         expected: true,
     };
-    let payload_singleton: SingletonCommitment<AffineParity> = SingletonCommitment {
-        predicate: payload,
-    };
+    let payload_singleton: SingletonCommitment<AffineParity> =
+        SingletonCommitment { predicate: payload };
     let composed: AndCommitment<TargetCommitment, SingletonCommitment<AffineParity>> =
         AndCommitment {
             left: target_c,
