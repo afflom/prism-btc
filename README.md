@@ -93,11 +93,14 @@ is the canonical typed-iso surface (wiki ADR-020 + ADR-036 + ADR-048
 5-position form, foundation 0.4.12). The 5th-position
 `C = TargetCommitment` is foundation's alias for
 `SingletonCommitment<LexicographicLessEqThreshold>` (wiki ADR-040 +
-ADR-049): Bitcoin's `digest ≤ target` admission relation is a typed
-predicate that foundation's `run_route` catamorphism evaluates on the
-κ-label **inside** the typed-iso surface — not at a host-boundary
-gate. The `Grounded<MiningResult>` is the foundation-sealed
-certificate that the inference admits; its `output_bytes()` carry
+ADR-049). **Bitcoin proof-of-work is realized as a typed admission
+relation inside the typed-iso surface:** the catamorphism seals a
+`Grounded<MiningResult>` only when `LexicographicLessEqThreshold`
+holds on the κ-label, so the existence of the sealed value is
+**constructive proof that Bitcoin's `digest ≤ target` admission
+relation holds at the framework level.** There is no separate
+"verify admission" step — admission is a premise of the type being
+constructed. The seal is the certificate; its `output_bytes()` carry
 the 32-byte SHA-256d κ-label.
 
 ## Workspace
@@ -118,20 +121,21 @@ the 32-byte SHA-256d κ-label.
 | `Hasher` | [`Sha256dHasher`](crates/prism-btc/src/shapes/hasher.rs) — pure-Rust SHA-256-then-SHA-256. The canonical hash axis is a **content-addressing primitive**, not an algorithm prism-btc runs. |
 | `ResolverTuple` | [`BitcoinResolverTuple`](crates/prism-btc/src/resolvers.rs) — Bitcoin-specific realization of the eight resolver-bound ψ-stages (ψ_1, ψ_2, ψ_3, ψ_5, ψ_6, ψ_7, ψ_8, ψ_9; ψ_4 Betti is resolver-free). |
 
-## Bit-identicality + fail-closed contract (architecture §6)
+## Witness construction + bit-identicality (architecture §6)
 
 `mine(header, target)` is the canonical entry. Internally it
 publishes the target on the thread-local commitment slot and invokes
-`BitcoinMiningModel::forward(task)`. Admission is evaluated **inside
-foundation's `run_route` catamorphism** via the model's pinned
-`TargetCommitment` — not at a host-boundary recomputation of the
+`BitcoinMiningModel::forward(task)`. **The catamorphism constructs a
+sealed `Grounded<MiningResult>` only when admission holds** — the
+seal itself is the witness that Bitcoin's PoW admission relation
+held on this κ-label. There is no host-boundary recomputation of the
 σ-projection. Foundation's `Grounded<MiningResult>` carries the
-32-byte SHA-256d κ-label as `output_bytes()`; the 80-byte
-wire-format Bitcoin header is reconstructed for `submitblock` at the
-prism-btc boundary and surfaced on the success path as
+32-byte SHA-256d κ-label as `output_bytes()`; the 80-byte wire-format
+Bitcoin header is reconstructed for `submitblock` at the prism-btc
+boundary and surfaced on the success path as
 `MiningOutcome.wire_format_header: [u8; 80]`.
 
-When admission fails inside `run_route`, foundation reports
+When the catamorphism does not seal, foundation reports
 `PipelineFailure::ShapeViolation` with the
 `commitment/TypedCommitment/VIOLATED` shape IRI and prism-btc
 classifies that as
@@ -146,19 +150,33 @@ present on `Ok(MiningOutcome)` and on `DidNotAdmit` alike. Every
 giving the host operator typed visibility into the search at session
 granularity.
 
-**Valid input either produces an admitting outcome or surfaces
-`DidNotAdmit` for the host to handle.** `mine()` never returns an
-outcome whose κ-label does not admit — the typed-iso gate is inside
-the catamorphism.
+**Fail-closed by construction.** `mine()` never returns an outcome
+whose κ-label does not admit, because the type `MiningOutcome`
+itself can only be constructed from a sealed `Grounded<MiningResult>`,
+and the seal is contingent on the catamorphism's admission predicate.
+The typed-iso gate is not a runtime check the implementation could
+forget; it is a premise of the return type's existence.
 
 prism-btc's transform is structural: the typed-iso surface maps
 `MiningTask → 32-byte κ-label` deterministically via the ψ-pipeline,
-then `TargetCommitment::evaluate` decides admission inside
-`run_route`. There is no inner search loop, no nonce enumeration, no
-"hashrate" metric. The reconstructed wire-format header
-(`outcome.wire_format_header`) is byte-for-byte what Bitcoin Core's
-`submitblock` accepts because both reach the same canonical
-serialization.
+and the catamorphism seals iff `TargetCommitment` admits. There is
+no inner search loop, no nonce enumeration, no "hashrate" metric.
+The reconstructed wire-format header (`outcome.wire_format_header`)
+is byte-for-byte what Bitcoin Core's `submitblock` accepts because
+both reach the same canonical serialization.
+
+**Cost-model = proof-of-work, by construction.** The Lean theorem
+`Commitment.prf_prob_tight_wellFormed` (wiki ADR-047 U6) says
+expected mining trials equal `α⁻¹ × 2^bandwidth_bits` at equality,
+where bandwidth is `TargetCommitment::bandwidth_bits() ≈ -log₂(target_accept_prob)`.
+At mainnet difficulty this is ≈ 77 bits — the same number as
+"expected mining attempts at mainnet difficulty," not coincidentally
+but because they are the same statement. Cost-model conformance and
+Bitcoin proof-of-work are the same theorem; the framework operationalizes
+it. The result generalizes: substituting any UOR-hardened σ-projection
+axis (Blake3, Keccak, post-quantum) preserves the framework-level
+admission proof — Bitcoin is the realization-witness that the cost
+model holds at a deployed PoW protocol at mainnet difficulty.
 
 **Network-invariant.** Same `BitcoinMiningModel`, same ψ-pipeline verb
 body, same `BitcoinResolverTuple`, same κ-derivation, same

@@ -342,16 +342,22 @@ discipline converges here: `FreeRank` over `MiningResult` drops from
 32 (the 32 digest sites) to 0 in this single ψ-stage. ψ_9 always
 succeeds for well-formed `MiningTask` inputs.
 
-The admission relation `σ(header) ≤ target` is **evaluated inside
-foundation's `run_route` catamorphism** — not at a host-boundary
-gate. `BitcoinMiningModel`'s 5th-slot `C = TargetCommitment` (§3, §5)
-pins admission as
-`SingletonCommitment<LexicographicLessEqThreshold>`; `run_route`
-consults `commitment.evaluate(kappa_label)` immediately after ψ_9
-emits the digest. On rejection it returns
+**Bitcoin proof-of-work is realized as a typed admission relation
+inside the typed-iso surface.** `BitcoinMiningModel`'s 5th-slot
+`C = TargetCommitment` (§3, §5) pins Bitcoin's `σ(header) ≤ target`
+as `SingletonCommitment<LexicographicLessEqThreshold>` — a typed
+predicate in foundation's closed `ObservablePredicate` catalog
+(ADR-049). Foundation's `run_route` catamorphism seals a
+`Grounded<MiningResult>` only when the predicate holds on the κ-label;
+**the existence of the sealed value is constructive proof that
+Bitcoin's PoW admission relation holds at the framework level.**
+There is no separate "we then checked admission" step — admission is
+a premise of the type being constructed. The seal is the certificate.
+
+On rejection, the catamorphism does not seal: `run_route` returns
 `PipelineFailure::ShapeViolation` with the
-`commitment/TypedCommitment/VIOLATED` shape IRI;
-[`crate::pipeline::mine`] classifies that as
+`commitment/TypedCommitment/VIOLATED` shape IRI, which
+[`crate::pipeline::mine`] classifies as
 `Err(MiningFailure::DidNotAdmit { observables, nonce, digest })`. The
 receiver-side typed lens is **total** — every inference exposes the
 candidate's typed property landscape regardless of admission, so the
@@ -359,7 +365,7 @@ host loop can fold each attempt into a
 [`crate::campaign::CampaignStats`] aggregate observatory. The host
 boundary varies the template-derived `MiningTask` (extranonce roll
 → distinct prefix → distinct κ-derivation) until a κ-candidate
-admits.
+admits and the framework constructs the witness.
 
 **Diagnostic surface.** ψ_9 records a [`ResolutionState`] for every
 `forward()` call: `free_rank` (always 0 — convergence) plus
@@ -419,7 +425,22 @@ seals a `Grounded<MiningResult>` whose `output_bytes()` carry the
 32-byte digest; on rejection it returns `PipelineFailure::ShapeViolation`
 with the commitment-violation shape IRI.
 
-## 6. Bit-identicality and fail-closed contract
+## 6. Witness construction and the proof-object framing
+
+**The `Grounded<MiningResult>` is Bitcoin's PoW witness.** This is the
+single most important architectural fact in prism-btc. Foundation's
+`run_route` catamorphism consumes the model's pinned
+`C = TargetCommitment` (§3, §5) as a premise for sealing. It does
+not "check admission and then seal" — it constructs the sealed
+`Grounded<MiningResult>` only when `LexicographicLessEqThreshold`
+holds on the κ-label, so **the existence of the sealed value is
+constructive proof that Bitcoin's `digest ≤ target` admission
+relation holds at the framework level.** Cost-model conformance and
+proof-of-work are the same statement: the Lean theorem
+`Commitment.prf_prob_tight_wellFormed` says expected trials =
+`α⁻¹ × 2^bandwidth_bits` at equality, and at mainnet difficulty
+`2^bandwidth_bits ≈ 2^77` — not coincidentally the same number as
+"expected mining attempts at mainnet difficulty," but by construction.
 
 **Wire-format bit-identicality.** ψ_9 internally reconstructs the
 80-byte Bitcoin wire-format header from `(template_prefix,
@@ -433,35 +454,36 @@ the SHA-256d *digest* of this header as the κ-label per wiki
 ADR-048/049's natural cost-model framing; the 80-byte wire form is
 the *reconstruction at the boundary*, not the κ-label itself.
 
-**Fail-closed admission, evaluated inside `run_route`.** Foundation's
-catamorphism consults `BitcoinMiningModel`'s pinned
-`C = TargetCommitment` (§3, §5) on the 32-byte κ-label immediately
-after ψ_9 emits it. The catamorphism either seals a
-`Grounded<MiningResult>` (admission holds) or returns
-`PipelineFailure::ShapeViolation` with the
-`commitment/TypedCommitment/VIOLATED` shape IRI (admission fails).
-`[crate::pipeline::mine]` classifies the result:
+**Three outcomes from the catamorphism.** `[crate::pipeline::mine]`
+surfaces foundation's catamorphism result as one of three typed cases:
 
-- `Ok(MiningOutcome)` — admission held inside `run_route`; the
-  reconstructed `wire_format_header` is a valid mined block. Carries
+- `Ok(MiningOutcome)` — the catamorphism sealed a
+  `Grounded<MiningResult>`. The seal IS the witness that admission
+  holds; the reconstructed `wire_format_header` is a valid mined block
+  Bitcoin Core's `submitblock` will accept. Carries
   `observables: KappaObservables`.
 - `Err(MiningFailure::DidNotAdmit { observables, nonce, digest })` —
-  the catamorphism reported the commitment-violation shape IRI: the
-  κ-candidate's digest did not satisfy `target` under
-  `LexicographicLessEqThreshold`. The candidate's typed property
-  landscape is exposed in the payload; the receiver-side lens is
-  total. The host (architecture §7) varies the template-derived
-  `MiningTask` and retries, folding each attempt's observables into a
-  `CampaignStats` aggregate.
+  the catamorphism returned `PipelineFailure::ShapeViolation` with the
+  `commitment/TypedCommitment/VIOLATED` shape IRI: no witness was
+  constructed because the κ-candidate's digest did not satisfy
+  `target` under `LexicographicLessEqThreshold`. The candidate's
+  typed property landscape is exposed in the payload; the
+  receiver-side lens is total. The host (architecture §7) varies the
+  template-derived `MiningTask` and retries, folding each attempt's
+  observables into a `CampaignStats` aggregate.
 - `Err(MiningFailure::PipelineFailure)` — defensive: a substrate-level
   shape violation surfaced *before* the commitment stage. Unreachable
   for well-formed `MiningTask` inputs (the ψ-pipeline is total over
   the typed input surface); conformance test CM-2 pins this
   unreachability across the mainnet difficulty history.
 
-**`mine()` never returns a `MiningOutcome` whose digest does not
-admit** — the typed-iso gate is inside the catamorphism, not at the
-host boundary.
+**Fail-closed by construction.** `mine()` never returns a
+`MiningOutcome` whose digest does not admit, because such a
+`MiningOutcome` is uninhabited — the type cannot be constructed
+without the catamorphism's seal, and the seal is contingent on
+admission. The typed-iso gate is not a runtime check the
+implementation could forget to perform; it is a premise of the
+return type's existence.
 
 The wire-format-identicality guarantee composes from the structural
 commitments:
