@@ -1,23 +1,43 @@
-//! `Sha256dHasher` — prism-btc's foundation `Hasher` implementation.
+//! `Sha256dHasher` — prism-btc's σ-axis: Bitcoin's double-SHA-256, as a
+//! foundation [`Hasher`] (ADR-007/ADR-010) **and** a uor-addr
+//! [`AddrHash`](uor_addr::AddrHash) σ-axis.
 //!
-//! ADR-010 defines the `Hasher` substitution-axis contract:
-//! determinism, fixed output width, distinct identifier, idempotence
-//! under truncation. The trait permits arbitrary Rust in the body —
-//! foundation does not mandate that the body be a `PrimitiveOp`
-//! composition. prism-btc, as the prism implementor, provides the body
-//! as pure-Rust SHA-256d (see [`mod@crate::ops::sha256`] for the one-shot
-//! algorithm; this hasher streams bytes through it).
+//! UOR-ADDR ships a pluggable σ-axis family (`sha256` / `blake3` /
+//! `sha3-256` / `keccak256` / `sha512`), but Bitcoin's content address is
+//! the *double* SHA-256 of the 80-byte header. prism-btc therefore
+//! supplies its own σ-axis — `sha256d` — implementing both contracts:
 //!
-//! Used by foundation's pipeline at certificate-emission time to
-//! compute the `ContentFingerprint` over the canonical CompileUnit
-//! byte layout.
+//! - [`Hasher`]`<32>` — the foundation σ-projection the catamorphism folds
+//!   the carrier through to compute the content fingerprint. The blanket
+//!   `impl<H: Hasher> AxisTuple for H` makes this the model's single
+//!   hash axis (kernel 0).
+//! - [`AddrHash`](uor_addr::AddrHash) — lets the **shared**
+//!   [`AddressResolverTuple`](uor_addr::AddressResolverTuple) ψ-tower carry
+//!   this axis: ψ₉ calls [`AddrHash::digest_carrier`] and formats the
+//!   `sha256d:<64hex>` κ-label.
+//!
+//! ## Display-order finalize (Bitcoin PoW byte order)
+//!
+//! [`finalize`](Hasher::finalize) emits the digest in **Bitcoin display
+//! order** (the conventional block-hash hex — most-significant byte
+//! first), i.e. the byte-reverse of the internal SHA-256d. This is what
+//! makes the cost-model commitment correct: foundation evaluates the
+//! `TypedCommitment` on ψ₉'s κ-label output, and
+//! [`LexicographicLessEqThreshold`](prism::pipeline::LexicographicLessEqThreshold)
+//! does a big-endian unsigned compare. With display-order bytes (and the
+//! target expressed in the same κ-label form), the comparison
+//! `kappa_label ≤ target_label` is exactly Bitcoin's PoW relation
+//! `block_hash ≤ target`. See [`crate::commitment`].
 
 use prism::vocabulary::Hasher;
+use uor_addr::hash::MAX_DIGEST_BYTES;
+use uor_addr::AddrHash;
 
 use crate::ops::sha256::{sha256, SHA256_INITIAL_STATE};
 
-/// Streaming SHA-256d. Maintains the inner-pass SHA-256 state online;
-/// the outer pass is one-shot at finalize.
+/// Streaming SHA-256d. Maintains the inner-pass SHA-256 state online; the
+/// outer pass is one-shot at finalize, and the result is byte-reversed
+/// into Bitcoin display order.
 ///
 /// Heap-free: bookkeeping fits in a fixed-size struct (state + 64-byte
 /// partial-block buffer + counters).
@@ -35,8 +55,13 @@ pub struct Sha256dHasher {
 
 impl Sha256dHasher {
     fn compress_block(&mut self, block: &[u8; 64]) {
-        // Reuses the same compression machinery as one-shot sha256.
         crate::ops::sha256::compress(&mut self.state, block);
+    }
+}
+
+impl Default for Sha256dHasher {
+    fn default() -> Self {
+        <Self as Hasher>::initial()
     }
 }
 
@@ -65,7 +90,6 @@ impl Hasher for Sha256dHasher {
     }
 
     fn fold_bytes(mut self, bytes: &[u8]) -> Self {
-        // Fast path: copy whole 64-byte chunks once the partial is empty.
         let mut i = 0;
         while i < bytes.len() {
             let need = 64 - self.partial_len as usize;
@@ -88,12 +112,9 @@ impl Hasher for Sha256dHasher {
         // Inner-pass finalisation: pad with 0x80, zero-pad to 56 mod 64,
         // append big-endian 64-bit total bit length.
         let bit_len = self.total_bytes.wrapping_mul(8);
-        // 0x80 sentinel.
         self.partial[self.partial_len as usize] = 0x80;
         self.partial_len += 1;
-        // Pad zeroes; possibly need a second block.
         if self.partial_len > 56 {
-            // Fill out current block, compress, then start a fresh padding block.
             for i in self.partial_len as usize..64 {
                 self.partial[i] = 0;
             }
@@ -116,11 +137,37 @@ impl Hasher for Sha256dHasher {
             inner[4 * i..4 * i + 4].copy_from_slice(&word.to_be_bytes());
         }
 
-        // Outer pass: one-shot SHA-256 over the 32-byte inner result.
-        // Internal byte order — the foundation's fingerprint slot is
-        // opaque bytes; display-order reversal is a Bitcoin-protocol
-        // concern, not a foundation concern.
-        sha256(&inner)
+        // Outer pass, then reverse into Bitcoin display order.
+        let mut out = sha256(&inner);
+        out.reverse();
+        out
+    }
+}
+
+impl AddrHash for Sha256dHasher {
+    /// The κ-label algorithm token: `sha256d:<64hex>` (72 ASCII bytes).
+    const LABEL_PREFIX: &'static str = "sha256d";
+    const OUTPUT_BYTES: usize = 32;
+
+    fn digest_carrier<const N: usize>(
+        input: &prism::operation::TermValue<'_, N>,
+    ) -> [u8; MAX_DIGEST_BYTES] {
+        // Stream-fold the (possibly Borrowed/Stream) carrier through the
+        // streaming σ-axis with bounded resident memory, then emit the
+        // display-order digest. Mirrors uor-addr's `hash::stream` but binds
+        // our double-SHA-256 axis.
+        let mut h = <Sha256dHasher as Hasher>::initial();
+        input.for_each_chunk(&mut |chunk| {
+            // `Sha256dHasher: Default` (= `Hasher::initial`), so `take`
+            // moves the running state out and leaves a fresh initial in
+            // place; we fold the chunk into the moved-out state.
+            let cur = core::mem::take(&mut h);
+            h = cur.fold_bytes(chunk);
+        });
+        let digest = h.finalize();
+        let mut out = [0u8; MAX_DIGEST_BYTES];
+        out[..32].copy_from_slice(&digest);
+        out
     }
 }
 
@@ -129,35 +176,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sha256d_hasher_empty() {
-        let out = Sha256dHasher::initial().finalize();
-        // SHA-256d("") internal = 5df6e0e2761359d30a8275058e299fcc0381534545f55cf43e41983f5d4c9456
+    fn sha256d_hasher_empty_is_display_order() {
+        let out = <Sha256dHasher as Hasher>::initial().finalize();
+        // SHA-256d("") display order = reverse of
+        // 5df6e0e2...5d4c9456 → 56944c5d...e2e0f65d.
         let expected: [u8; 32] = [
-            0x5d, 0xf6, 0xe0, 0xe2, 0x76, 0x13, 0x59, 0xd3, 0x0a, 0x82, 0x75, 0x05, 0x8e, 0x29,
-            0x9f, 0xcc, 0x03, 0x81, 0x53, 0x45, 0x45, 0xf5, 0x5c, 0xf4, 0x3e, 0x41, 0x98, 0x3f,
-            0x5d, 0x4c, 0x94, 0x56,
+            0x56, 0x94, 0x4c, 0x5d, 0x3f, 0x98, 0x41, 0x3e, 0xf4, 0x5c, 0xf5, 0x45, 0x45, 0x53,
+            0x81, 0x03, 0xcc, 0x9f, 0x29, 0x8e, 0x05, 0x75, 0x82, 0x0a, 0xd3, 0x59, 0x13, 0x76,
+            0xe2, 0xe0, 0xf6, 0x5d,
         ];
         assert_eq!(out, expected);
     }
 
     #[test]
-    fn sha256d_hasher_streaming_equals_one_shot() {
+    fn sha256d_hasher_matches_display_one_shot() {
+        use crate::ops::sha256::sha256d_display;
         let bytes = b"prism-btc test vector for streaming";
-        let one_shot = Sha256dHasher::initial().fold_bytes(bytes).finalize();
-        let mut streaming = Sha256dHasher::initial();
+        let from_hasher = <Sha256dHasher as Hasher>::initial()
+            .fold_bytes(bytes)
+            .finalize();
+        assert_eq!(from_hasher, sha256d_display(bytes));
+    }
+
+    #[test]
+    fn streaming_equals_one_shot() {
+        let bytes = b"abc";
+        let one_shot = <Sha256dHasher as Hasher>::initial()
+            .fold_bytes(bytes)
+            .finalize();
+        let mut streaming = <Sha256dHasher as Hasher>::initial();
         for &b in bytes.iter() {
             streaming = streaming.fold_byte(b);
         }
         assert_eq!(one_shot, streaming.finalize());
-    }
-
-    #[test]
-    fn sha256d_hasher_against_oneshot_helper() {
-        // The hasher must agree with the one-shot helper for the same input.
-        use crate::ops::sha256::sha256d_internal;
-        let bytes = b"abc";
-        let from_hasher = Sha256dHasher::initial().fold_bytes(bytes).finalize();
-        let from_one_shot = sha256d_internal(bytes);
-        assert_eq!(from_hasher, from_one_shot);
     }
 }

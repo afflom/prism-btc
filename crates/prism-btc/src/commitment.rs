@@ -1,6 +1,6 @@
 //! Cost-model commitment surface — re-exports of foundation's canonical
 //! typed-commitment + observable-predicate primitives (wiki ADR-048 +
-//! ADR-049, foundation 0.4.12) plus prism-btc-side helpers that lift
+//! ADR-049, foundation 0.5.2) plus prism-btc-side helpers that lift
 //! application-level constructs (the K-bit payload encoding, the
 //! runtime Bitcoin target) into commitment shapes the foundation
 //! `run_route` catamorphism evaluates.
@@ -72,63 +72,91 @@ pub use prism::pipeline::TargetCommitment;
 
 // ─── Runtime → 'static byte-buffer helpers ──────────────────────────────
 
-/// Promote a 32-byte mining target to `&'static [u8]`. Foundation's
+/// The κ-label form of a 32-byte Bitcoin target: `sha256d:<64hex>` — the
+/// 72-byte ASCII threshold the commitment compares ψ₉'s κ-label output
+/// against.
+///
+/// Because the σ-axis emits the digest in **display order** and both the
+/// κ-label and this threshold are the same 72-byte ASCII width with the
+/// same `sha256d:` prefix, the big-endian unsigned comparison
+/// `LexicographicLessEqThreshold` performs reduces exactly to
+/// `block_hash ≤ target` (equal-length lowercase-hex lexicographic order
+/// is numeric order). `target` is in display order (big-endian), as
+/// produced by [`crate::domain::Target::to_bytes`].
+#[must_use]
+pub fn target_label_bytes(target: [u8; 32]) -> [u8; 72] {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = [0u8; 72];
+    out[..7].copy_from_slice(b"sha256d");
+    out[7] = b':';
+    for (i, &byte) in target.iter().enumerate() {
+        out[8 + 2 * i] = HEX[(byte >> 4) as usize];
+        out[8 + 2 * i + 1] = HEX[(byte & 0x0F) as usize];
+    }
+    out
+}
+
+/// Promote a 32-byte mining target to the `&'static [u8]` κ-label-form
+/// threshold the model's commitment names. Foundation's
 /// [`LexicographicLessEqThreshold::target`] requires `&'static [u8]`
 /// because the predicate is `Copy` and lives in the macro-emitted
-/// `forward()` body; the bytes must outlive every `run_route`
+/// `commitment()` body; the bytes must outlive every `run_route`
 /// invocation that names this commitment.
 ///
-/// Each unique target byte sequence is leaked at most once per process
-/// — the per-target bytes live for the process lifetime. Bitcoin's
-/// difficulty retarget every 2016 blocks means the leak rate is
-/// `O(1)` per chain epoch in practice. The implementation deduplicates
-/// against a global registry to make repeat calls with the same bytes
-/// return the same reference.
+/// Each unique target is leaked at most once per process. Bitcoin's
+/// difficulty retarget every 2016 blocks bounds the leak rate to `O(1)`
+/// per chain epoch. The implementation deduplicates against a global
+/// registry so repeat calls with the same bytes return the same reference.
 #[must_use]
-pub fn leak_target(bytes: [u8; 32]) -> &'static [u8] {
-    leak_into_registry(bytes)
+pub fn leak_target(target: [u8; 32]) -> &'static [u8] {
+    leak_bytes(&target_label_bytes(target))
 }
 
 /// Promote an ultrametric reference digest to `&'static [u8]`.
 /// Deduplicates against the shared registry.
 #[must_use]
 pub fn leak_reference(bytes: [u8; 32]) -> &'static [u8] {
-    leak_into_registry(bytes)
+    leak_bytes(&bytes)
 }
 
 /// Promote a Walsh–Hadamard frequency mask to `&'static [u8]`.
 /// Deduplicates against the shared registry.
 #[must_use]
 pub fn leak_frequency(bytes: [u8; 32]) -> &'static [u8] {
-    leak_into_registry(bytes)
+    leak_bytes(&bytes)
 }
 
+/// Promote an arbitrary byte sequence to a process-lifetime `&'static
+/// [u8]`, deduplicating against a shared registry.
 #[cfg(feature = "std")]
-fn leak_into_registry(bytes: [u8; 32]) -> &'static [u8] {
+#[must_use]
+pub fn leak_bytes(bytes: &[u8]) -> &'static [u8] {
     use std::sync::Mutex;
     use std::sync::OnceLock;
 
-    static REGISTRY: OnceLock<Mutex<alloc::collections::BTreeMap<[u8; 32], &'static [u8]>>> =
-        OnceLock::new();
+    static REGISTRY: OnceLock<
+        Mutex<alloc::collections::BTreeMap<alloc::vec::Vec<u8>, &'static [u8]>>,
+    > = OnceLock::new();
 
     let map = REGISTRY.get_or_init(|| Mutex::new(alloc::collections::BTreeMap::new()));
-    let mut guard = map.lock().expect("target-leak registry poisoned");
-    if let Some(&pinned) = guard.get(&bytes) {
+    let mut guard = map.lock().expect("byte-leak registry poisoned");
+    if let Some(&pinned) = guard.get(bytes) {
         return pinned;
     }
-    let boxed: alloc::boxed::Box<[u8]> = alloc::boxed::Box::from(bytes.as_slice());
+    let boxed: alloc::boxed::Box<[u8]> = alloc::boxed::Box::from(bytes);
     let pinned: &'static [u8] = alloc::boxed::Box::leak(boxed);
-    guard.insert(bytes, pinned);
+    guard.insert(bytes.to_vec(), pinned);
     pinned
 }
 
 #[cfg(not(feature = "std"))]
-fn leak_into_registry(_bytes: [u8; 32]) -> &'static [u8] {
-    // The `&'static` registry pattern needs interior mutability behind
-    // a Mutex; under `no_std` we cannot offer that without pulling in
-    // `spin` or similar. Applications targeting `no_std` must supply
-    // their own `&'static` byte sources (compile-time constants).
-    panic!("leak_into_registry is only available with the `std` feature; use a compile-time constant target in no_std builds");
+#[must_use]
+pub fn leak_bytes(_bytes: &[u8]) -> &'static [u8] {
+    // The `&'static` registry pattern needs interior mutability behind a
+    // Mutex; under `no_std` we cannot offer that without pulling in `spin`
+    // or similar. Applications targeting `no_std` must supply their own
+    // `&'static` byte sources (compile-time constants).
+    panic!("leak_bytes is only available with the `std` feature; use a compile-time constant target in no_std builds");
 }
 
 // ─── Helpers for constructing common payload-commitment shapes ─────────
@@ -246,12 +274,37 @@ mod tests {
 
     #[test]
     fn target_commitment_admits_threshold_neighborhood() {
-        let target_bytes = [0xff; 32];
-        let target = leak_target(target_bytes);
+        // The commitment compares ψ₉'s κ-label output against the
+        // κ-label-form threshold; equal-length lowercase-hex lexicographic
+        // order is numeric order, so target `0xff..ff` admits every block.
+        let target = leak_target([0xff; 32]);
         let cmt = target_commitment(target);
-        assert!(cmt.evaluate(&[0x00; 32]));
-        assert!(cmt.evaluate(&[0xff; 32]));
+        let low = target_label_bytes([0x00; 32]); // sha256d:0000…00
+        let high = target_label_bytes([0xff; 32]); // sha256d:ffff…ff
+        assert!(cmt.evaluate(&low));
+        assert!(cmt.evaluate(&high));
         assert_eq!(cmt.predicate_count(), 1);
+    }
+
+    #[test]
+    fn target_commitment_rejects_block_above_threshold() {
+        // Threshold admits only block hashes ≤ 0x0fff…ff (leading nibble 0).
+        let target = leak_target({
+            let mut t = [0xffu8; 32];
+            t[0] = 0x0f;
+            t
+        });
+        let cmt = target_commitment(target);
+        // A block hash with a high byte of 0x10 exceeds the threshold.
+        let above = target_label_bytes({
+            let mut h = [0x00u8; 32];
+            h[0] = 0x10;
+            h
+        });
+        assert!(!cmt.evaluate(&above));
+        // A block hash with leading zero byte is admitted.
+        let below = target_label_bytes([0x00; 32]);
+        assert!(cmt.evaluate(&below));
     }
 
     #[test]
@@ -284,18 +337,25 @@ mod tests {
     }
 
     #[test]
-    fn and_commitment_composes_target_with_payload() {
-        let target = leak_target([0xff; 32]);
+    fn and_commitment_composes_two_thresholds() {
+        // ADR-047 U6 bandwidth-additivity: `block_hash ≤ t1 AND ≤ t2`.
+        // Both predicates see the κ-label byte sequence ψ₉ emits.
+        let t1 = leak_target([0xff; 32]);
+        let t2 = leak_target({
+            let mut t = [0xffu8; 32];
+            t[0] = 0x7f;
+            t
+        });
         let composed = AndCommitment {
-            left: target_commitment(target),
-            right: payload_commitment_k2([true, false]),
+            left: target_commitment(t1),
+            right: target_commitment(t2),
         };
-        let mut digest = [0u8; 32];
-        digest[0] = 0b0000_0001;
-        assert!(composed.evaluate(&digest));
-        // Bit-1 mismatch ⇒ rejected.
-        digest[0] = 0b0000_0011;
-        assert!(!composed.evaluate(&digest));
+        // Block hash 0x00..00 ≤ both thresholds.
+        assert!(composed.evaluate(&target_label_bytes([0x00; 32])));
+        // Block hash 0x80..00 ≤ t1 but > t2 ⇒ rejected by the conjunction.
+        let mut h = [0x00u8; 32];
+        h[0] = 0x80;
+        assert!(!composed.evaluate(&target_label_bytes(h)));
     }
 
     #[test]

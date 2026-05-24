@@ -12,9 +12,10 @@ members = [
 # and `uor-foundation-sdk` remain direct deps because the SDK macros
 # (`verb!`, `resolver!`, `prism_model!`, `output_shape!`) expand to
 # absolute `::uor_foundation::*` paths that the linker must resolve.
-uor-prism          = { version = "0.1.1", default-features = false }
-uor-foundation     = { version = "0.4.12" }
-uor-foundation-sdk = { version = "0.4.12" }
+uor-prism          = { version = "0.4.0", default-features = false }
+uor-foundation     = { version = "0.5.2" }
+uor-foundation-sdk = { version = "0.5.2" }
+uor-addr           = { version = "0.2.0", default-features = false }
 wasm-bindgen       = { version = "0.2" }
 js-sys             = { version = "0.3" }
 

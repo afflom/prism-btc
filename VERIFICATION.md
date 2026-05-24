@@ -14,34 +14,33 @@ artifact in the repo.
 ## §1 Architectural conformance — `cargo test --release`
 
 The verb arena, model declarations, and substrate-bindings carry
-compile-time invariants the test surface re-asserts at runtime. 68
+compile-time invariants the test surface re-asserts at runtime. 54
 unit tests across the prism-btc crate's modules:
 
-- **`crates/prism-btc/src/verbs.rs::tests`** (6 tests) — the verb
-  arena's structural shape: non-empty; contains ψ_1 Nerve, ψ_7
-  PostnikovTower, ψ_8 HomotopyGroups, ψ_9 KInvariants; contains zero
-  σ-residuals (no `Term::FirstAdmit`, no `Term::AxisInvocation`, no
-  byte-comparison or `Concat` ops in the verb body). The substrate's
-  proc-macro discipline (ADR-035) enforces the latter at compile
-  time; these runtime assertions are defense-in-depth.
+- **`crates/prism-btc/src/model.rs::tests`** (3 tests) — the model's
+  input/output shapes: `BlockHeaderCarrier`'s canonical header field
+  decomposition (version‖prev_hash‖merkle_root‖timestamp‖bits‖nonce);
+  `BlockAddressLabel`'s 72 W8 sites (the `sha256d:<64hex>` κ-label
+  width per wiki ADR-048/049); CONSTRAINTS' 72 disjoint Site instances
+  spanning [0, 72). The verb-arena's structural shape (ψ_1 Nerve, ψ_7
+  PostnikovTower, ψ_8 HomotopyGroups, ψ_9 KInvariants; zero
+  σ-residuals) is pinned by the §2 V&V tests (rows 1–2).
 
-- **`crates/prism-btc/src/model.rs::tests`** (6 tests) — the typed
-  feature hierarchy: `TemplatePrefix`'s 76-byte layout
-  (`version‖prev_hash‖merkle_root‖timestamp‖bits`); `MiningTask`'s
-  108-byte partition_product layout; `MiningResult`'s 32 W8 sites
-  (the SHA-256d κ-label width per wiki ADR-048/049);
-  `IntoBindingValue` 108-byte projection; CONSTRAINTS' 32 disjoint
-  Site instances spanning [0, 32).
+- **`crates/prism-btc/src/composition.rs::tests`** (6 tests) — the
+  ADR-061 `sha256d` composition reference impl: `compose_g2_product`
+  commutativity, `compose_ordered_product` non-commutativity,
+  `compose_e8_embedding` grounding, Bitcoin `merkle_root` as iterated
+  ordered composition, and non-`sha256d`-axis rejection.
 
-- **`crates/prism-btc/src/shapes/bounds.rs::tests`** (2 tests) —
-  `PrismBtcBounds`' prism-btc-specific constants
-  (`FINGERPRINT_{MIN,MAX}_BYTES = 32`, `TRACE_MAX_EVENTS = 64`,
-  `WITT_LEVEL_MAX_BITS = 32`) and the uniformity of the
-  per-ψ-stage output ceilings.
+- **`crates/prism-btc/src/shapes/bounds.rs::tests`** (1 test) —
+  `PrismBtcBounds` is a transparent alias for the shared
+  `uor_addr::AddrBounds` profile (`FINGERPRINT_MAX_BYTES = 32`); under
+  ADR-060 there are no per-ψ-stage byte ceilings, and the structural
+  site ceiling admits the 72-byte κ-label.
 
 - **`crates/prism-btc/src/shapes/hasher.rs::tests`** (3 tests) —
   `Sha256dHasher` streaming-vs-one-shot equivalence and FIPS-180-4
-  vector matching.
+  display-order vector matching.
 
 - **`crates/prism-btc/src/domain.rs::tests`** (13 tests) —
   `Bits ↔ Target` round-trip, `Target::is_satisfied_by_bytes`
@@ -56,16 +55,17 @@ unit tests across the prism-btc crate's modules:
   against rust-bitcoin reference; canonical 80-byte header
   serialization round-trip.
 
-- **`crates/prism-btc/src/pipeline.rs::tests`** — the public mining
-  entry (`mine`) under foundation 0.4.12's typed-commitment surface
-  (wiki ADR-048):
-  - `mine()` admits within a small variation window for a permissive
+- **`crates/prism-btc/src/pipeline.rs::tests`** (3 tests) — the
+  public mining entry (`mine` / `mine_at`) under foundation's
+  typed-commitment surface (wiki ADR-048):
+  - `mine()` admits within a small nonce-scan window for a permissive
     regtest target — foundation's `run_route` evaluates
-    `TargetCommitment` on the κ-label inside the catamorphism.
-  - On `Ok`, the κ-label is the 32-byte SHA-256d digest (wiki
-    ADR-048/049 cost-model surface); the 80-byte wire-format header
-    is surfaced on the side as `outcome.wire_format_header` for the
-    `submitblock` boundary.
+    `TargetCommitment` on the κ-label inside the catamorphism; the
+    `AddressWitness` re-verifies to the same 72-byte κ-label.
+  - On `Ok`, the κ-label is the `sha256d:<64hex>` address (carrying
+    the 32-byte display-order digest, wiki ADR-048/049 cost-model
+    surface); the 80-byte wire-format header is surfaced on the side
+    as `outcome.wire_format_header` for the `submitblock` boundary.
   - `MiningFailure::DidNotAdmit` carries the receiver-side typed
     lens (`observables`, `nonce`, `digest`) — total lens, not
     admission-only.
@@ -103,14 +103,15 @@ unit tests across the prism-btc crate's modules:
     (canonical-only lens; the const-generic shape covers
     the zero-extension case).
 
-The [`crate::diagnostics`](crates/prism-btc/src/diagnostics.rs)
-module exposes ψ_9's structural κ-derivation state
-(`ResolutionState`, `take_resolution_state`); its behaviour is
-pinned by the §2 V&V tests below (rows 15–17).
+Every admitting `forward()` carries a replayable TC-05
+[`AddressWitness<72, 32>`](crates/prism-btc/src/pipeline.rs) (alias
+`MiningWitness`) — the proof-of-work witness; `.verify()` re-certifies
+the κ-label without re-invoking the σ-axis. Its behaviour is pinned by
+the §2 V&V tests below (row 14).
 
 ## §2 V&V suite — `crates/prism-btc/tests/verification.rs`
 
-17 tests that pin the load-bearing architectural properties. 5
+14 tests that pin the load-bearing architectural properties. 7
 additional integration tests in `crates/prism-btc/tests/integration.rs`
 exercise the typed-iso surface end-to-end. Module docstrings carry the
 per-test rationale.
@@ -118,22 +119,19 @@ per-test rationale.
 | # | Test | Property |
 |---|---|---|
 | 1 | `v_verb_arena_composes_only_psi_stages_no_sigma_residuals` | Pure-prism commitment: verb body contains only ψ-Terms + Variable/Literal scaffolding |
-| 2 | `v_verb_arena_implements_the_k_invariant_branch` | ψ_1 → ψ_7 → ψ_8 → ψ_9 — the canonical mining transform (architecture §4) |
-| 3 | `v_mine_admits_within_a_few_template_variations_for_permissive_target` | `mine()` admits within a small variation window for a permissive regtest target — admission decided by foundation's `run_route` via the model's `TargetCommitment` |
+| 2 | `v_verb_arena_implements_the_k_invariant_branch` | ψ_1 → ψ_7 → ψ_8 → ψ_9 — the canonical block-address transform (architecture §4) |
+| 3 | `v_mine_admits_for_permissive_target` | `mine()` admits within a small nonce-scan window for a permissive regtest target — admission decided by foundation's `run_route` via the model's `TargetCommitment` |
 | 4 | `v_mine_outcome_digest_actually_satisfies_target_when_admitted` | Fail-closed: every `Ok` outcome's digest genuinely satisfies the target (the typed-iso gate is inside `run_route`) |
-| 5 | `v_psi_pipeline_is_pure_function_of_typed_input` | Determinism: 5 repetitions of the same `MiningTask` produce byte-identical κ-labels |
-| 6 | `v_kappa_label_is_distinct_for_distinct_typed_inputs` | Distinctness: 64 distinct inputs produce 64 distinct κ-labels |
-| 7 | `v_kappa_label_is_sha256d_of_reconstructed_wire_format_header` | The 32-byte κ-label equals `SHA-256d(serialize_header(host_header, resolved_nonce))` byte-for-byte |
-| 8 | `v_wire_format_header_preserves_the_host_supplied_prefix` | ψ-pipeline preserves the template prefix; only the nonce field is derived |
+| 5 | `v_psi_pipeline_is_pure_function_of_typed_input` | Determinism: repetitions of the same header carrier produce byte-identical κ-labels |
+| 6 | `v_kappa_label_is_distinct_for_distinct_typed_inputs` | Distinctness: distinct inputs produce distinct κ-labels |
+| 7 | `v_kappa_label_is_sha256d_of_reconstructed_wire_format_header` | The κ-label digest equals `SHA-256d(serialize_header(host_header, nonce))` (display order) byte-for-byte |
+| 8 | `v_wire_format_header_preserves_the_host_supplied_prefix` | The wire-format header preserves the host-supplied template prefix; only the explicit nonce field varies |
 | 9 | `v_model_declarations_invariant_across_network_byte_thresholds` | Network-invariance: same model + same verb arena + same `TargetCommitment` shape across regtest/signet/testnet/testnet4/mainnet `bits` values |
-| 10 | `v_compile_unit_fingerprint_identifies_the_typed_iso_path` | TC-03 typed-iso path-singularity: distinct inputs share CompileUnit fingerprint (the path, not the input) |
-| 11 | `v_mining_result_constraints_have_thirty_two_disjoint_site_instances` | Algebraic-closure encoding: 32 disjoint `ConstraintRef::Site` instances on `MiningResult` (IT_7d) |
-| 12 | `v_constraint_nerve_is_thirty_two_isolated_vertices_no_higher_simplices` | Constraint-nerve geometry: β_0 = 32, β_k = 0 for k ≥ 1, χ = SITE_COUNT = 32 |
-| 13 | `v_constraint_site_supports_span_the_full_digest` | Site supports cover [0, 32) — every κ-label digest byte pinned by one Site constraint |
-| 14 | `v_prism_btc_bounds_declare_algebraic_closure_target` | `PrismBtcBounds` declares the algebraic-closure ceilings (compile-time assertion) |
-| 15 | `v_mine_outcome_carries_kappa_derivation_state` | `MiningOutcome.resolution` carries `free_rank = 0` (terminal-stage convergence) and `derived_nonce` matching the κ-derived nonce |
-| 16 | `v_mine_drains_thread_local_diagnostic_channel` | `mine()` drains the thread-local diagnostic channel as part of returning the outcome — a subsequent `take_resolution_state()` returns `None` |
-| 17 | `v_forward_records_resolution_state_for_inspection` | Direct `forward()` callers (not via `mine()`) inspect ψ_9's state via `take_resolution_state()` — ψ_9 records state on every invocation |
+| 10 | `v_witness_replays_to_the_attested_kappa_label` | TC-05 replayable witness: `AddressWitness::verify()` re-certifies the same 72-byte κ-label without re-invoking the σ-axis |
+| 11 | `v_block_address_label_constraints_have_seventy_two_disjoint_site_instances` | Algebraic-closure encoding: 72 disjoint `ConstraintRef::Site` instances on `BlockAddressLabel` (IT_7d) |
+| 12 | `v_constraint_nerve_is_seventy_two_isolated_vertices_no_higher_simplices` | Constraint-nerve geometry: β_0 = 72, β_k = 0 for k ≥ 1, χ = SITE_COUNT = 72 |
+| 13 | `v_constraint_site_supports_span_the_full_kappa_label` | Site supports cover [0, 72) — every κ-label byte pinned by one Site constraint |
+| 14 | `v_prism_btc_bounds_declare_algebraic_closure_target` | `PrismBtcBounds` (alias for `uor_addr::AddrBounds`) admits the 72-site κ-label geometry (compile-time assertion) |
 
 Run: `cargo test --release -p prism-btc --test verification`.
 
@@ -150,7 +148,7 @@ statements; tests are ID'd against it.
 | **CS** (structural) | 6 | No `Vec<Predicate>` / `dyn TypedCommitment` / `Box<dyn …>` in `src/`; `TypedCommitment: Copy + Sealed` enforced (foundation supertrait, wiki ADR-048); foundation's five canonical `ObservablePredicate` impls (`Stratum<P>`, `WalshHadamardParity`, `UltrametricCloseTo<P>`, `AffineParity`, `LexicographicLessEqThreshold`) reachable + closed catalog pinned (ADR-049); `MiningOutcome.observables: KappaObservables` always present; no legacy commitment-surface identifiers (`MiningCommitment`, `mine_with(`, `PayloadCommitment<`, `enum Predicate`, `enum Support`, …) in `src/`. |
 | **CD** (dynamic) | 3 | `mine()` returns `Ok` ⇒ digest satisfies the model's pinned `TargetCommitment` (admission was evaluated inside `run_route`); `payload_commitment_k*` helpers round-trip at K ∈ {1, 2, 4, 8}; `MiningOutcome.observables` agrees with the per-primitive `TriadicCoords::from_hash` / `p_adic_valuation` computation. |
 | **CP** (probabilistic scaling) | 4 | `α⁻¹ × 2^K` cost identity holds within ±30% (≈4σ at N=200) across (a) K-sweep over four decades [0..12] at fixed α, (b) α-sweep over four decades [2⁻¹..2⁻¹²] at fixed K=2, (c) compound K × α decompositions of the same product; (d) foundation's `AndCommitment<TargetCommitment, payload>` is bandwidth-additive + `predicate_count`-additive + identity under `EmptyCommitment`, witnessed empirically across (lz, K) combinations. |
-| **CM** (mainnet readiness) | 6 | `Target::new(nBits)` accepts every mainnet-difficulty value in the chain's history; `mine()` produces well-formed 32-byte κ-labels (with reconstructed 80-byte `wire_format_header`) on synthetic mainnet inputs (`PipelineFailure` unreachable across 400 attempts × 8 difficulty levels); aggregate `CampaignStats` matches PRF baseline at N=10⁴ (χ² goodness-of-fit on stratum + spectrum at α=0.001); empirical α converges to theoretical α at N=10⁴ within ±5%; campaign is consistent under cooperative interruption. |
+| **CM** (mainnet readiness) | 6 | `Target::new(nBits)` accepts every mainnet-difficulty value in the chain's history; `mine()` produces well-formed 72-byte `sha256d` κ-labels (with 80-byte `wire_format_header` + 32-byte display-order digest) on synthetic mainnet inputs (`PipelineFailure` unreachable across 400 attempts × 8 difficulty levels); aggregate `CampaignStats` matches PRF baseline at N=10⁴ (χ² goodness-of-fit on stratum + spectrum at α=0.001); empirical α converges to theoretical α at N=10⁴ within ±5%; campaign is consistent under cooperative interruption. |
 | **CN** + **CL** | (cross-ref) | Network-invariance (CN-1…4) cross-referenced to V&V §2 + host-loop §5; Lean-formal (CL-1…4) cross-referenced to §4 below. |
 
 Plus 1 negative-conformance witness (`MiningFailure::DidNotAdmit`
@@ -194,15 +192,15 @@ bitcoind:
 
 - `extranonce_roll_produces_distinct_merkle_roots` — distinct
   extranonce values produce distinct merkle roots (and hence distinct
-  `MiningTask` prefixes, distinct κ-derivations). Same-extranonce
-  rebuilds are byte-identical (deterministic host loop).
+  header carriers, distinct κ-labels). Same-extranonce rebuilds are
+  byte-identical (deterministic host loop).
 - `extranonce_roll_holds_non_merkle_header_fields_constant` — only
   the merkle root varies under extranonce roll; version, prev_hash,
   timestamp, bits are template-fixed.
 - `assemble_produces_valid_bitcoin_block_with_supplied_nonce` — the
-  κ-derived nonce is spliced into a wire-format `Block` with all
-  header fields preserved; coinbase carries BIP141 witness and BIP34
-  height push.
+  winning nonce (from `mine`'s scan) is spliced into a wire-format
+  `Block` with all header fields preserved; coinbase carries BIP141
+  witness and BIP34 height push.
 - `from_components_accepts_witness_commitment` — when SegWit is
   active and bitcoind supplies a witness commitment, the coinbase
   output[1] carries the OP_RETURN commitment correctly.
@@ -212,16 +210,16 @@ bitcoind:
 - `mines_a_block_and_advances_the_chain` — single-block end-to-end:
   1. `getblocktemplate` for a fresh regtest template.
   2. `PrismMiner::mine_one_block` drives the host-boundary
-     template-variation loop: build `MiningTask` from current
-     extranonce, call `prism_btc::mine`, on `DidNotAdmit` roll the
-     extranonce, on `Ok` submit.
+     template-variation loop: build the block header from the current
+     extranonce, call `prism_btc::mine` (which scans the nonce space),
+     on `DidNotAdmit` roll the extranonce, on `Ok` submit.
   3. `submitblock` accepts the prism-btc-produced block.
   4. The observer client confirms the chain height advanced by
      exactly 1 and the new tip equals the prism-btc-mined block hash.
-  5. The mined `MiningWitness` carries a non-zero `unit_address`,
-     `witt_level_bits == 32`, and an `output_bytes` of 80 bytes whose
-     nonce-field bytes (76..80, LE) decode to the same `u32` the
-     submitted block's header carries.
+  5. The mined `MiningWitness` (the replayable TC-05
+     `AddressWitness<72, 32>`) re-certifies via `.verify()` to the
+     attested `sha256d:<64hex>` κ-label (72 bytes) and carries a
+     32-byte `content_fingerprint` — the proof-of-work witness.
 
 - `mines_a_chain_of_blocks_without_fail` — multi-block end-to-end (10
   consecutive `mine_one_block` calls). Pins the "valid input → valid

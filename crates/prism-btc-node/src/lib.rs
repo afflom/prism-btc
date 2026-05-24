@@ -1,12 +1,12 @@
 //! Bitcoin Core RPC integration for prism-btc.
 //!
 //! [`PrismMiner::mine_one_block`] is the entry point: fetch a template
-//! via `getblocktemplate`, then drive prism-btc's ψ-pipeline against
-//! template-derived `MiningTask` variations (extranonce roll) until an
-//! admitting κ-derived header lands; assemble the wire-format block
-//! and submit via `submitblock` (architecture §7).
+//! via `getblocktemplate`, then address prism-btc's block-header
+//! realization against template variations (extranonce roll) until an
+//! admitting block hash lands; assemble the wire-format block and submit
+//! via `submitblock` (architecture §7).
 //!
-//! prism-btc owns the mining inference (the typed-iso surface
+//! prism-btc owns the addressing inference (the UOR-ADDR typed-iso surface
 //! foundation's catamorphism evaluates); rust-bitcoin owns the
 //! transaction / script / block container; this crate is the wiring.
 
@@ -74,18 +74,17 @@ impl PrismMiner {
     /// submit the admitting wire-format block via `submitblock`, return
     /// the summary.
     ///
-    /// `prism_btc::mine` is one-shot per template: ψ_9's structural
-    /// κ-derivation produces exactly one candidate header for any
-    /// well-formed `MiningTask`. The host boundary iterates the
-    /// **extranonce roll** (architecture §7) — each extranonce value
-    /// produces a distinct coinbase txid → distinct merkle root →
-    /// distinct `MiningTask` → distinct κ-derivation. Under PRF
-    /// baseline, expected extranonce trials before admission is
-    /// `1/α` where `α` is the target's admission probability. The
-    /// u64 extranonce space (2^64) covers every realistic network
-    /// difficulty (mainnet `α ≈ 2^-77`); exhaustion would indicate
-    /// the network's `α` is below the algorithmic floor and is not a
-    /// pipeline bug.
+    /// `prism_btc::mine` scans the 32-bit nonce space for one header
+    /// template, addressing each `(header, nonce)` until the block hash
+    /// satisfies the target. The host boundary iterates the **extranonce
+    /// roll** (architecture §7) on top — each extranonce value produces a
+    /// distinct coinbase txid → distinct merkle root → distinct header
+    /// template → a fresh nonce scan. Under PRF baseline, expected total
+    /// inferences before admission is `1/α` where `α` is the target's
+    /// admission probability. The nonce space (2^32) plus the u64
+    /// extranonce space covers every realistic network difficulty
+    /// (mainnet `α ≈ 2^-77`); exhaustion would indicate the network's `α`
+    /// is below the algorithmic floor and is not a pipeline bug.
     pub fn mine_one_block(&self) -> Result<MinedBlock> {
         let rules: &[GetBlockTemplateRules] = match self.network {
             Network::Signet => &[
@@ -128,10 +127,10 @@ impl PrismMiner {
             );
         }
 
-        // Template-variation loop: each iteration produces a fresh
-        // MiningTask (distinct merkle root via the rolled extranonce)
-        // and a distinct κ-derivation. mine() returns Ok when the
-        // κ-candidate's σ-projection admits; DidNotAdmit otherwise.
+        // Template-variation loop: each iteration produces a fresh header
+        // template (distinct merkle root via the rolled extranonce) and a
+        // fresh nonce scan. mine() returns Ok when an addressed block hash
+        // admits; DidNotAdmit when the whole nonce space is exhausted.
         // The receiver-side typed lens (KappaObservables) is **total**:
         // present on every attempt regardless of admission. Folded
         // into a CampaignStats aggregate across the session so the
@@ -160,7 +159,6 @@ impl PrismMiner {
                         nonce: outcome.nonce,
                         witness: outcome.witness,
                         tx_count: block.txdata.len(),
-                        resolution: outcome.resolution,
                         extranonce_attempts: extranonce,
                         campaign,
                     });
@@ -170,12 +168,11 @@ impl PrismMiner {
                     digest,
                     ..
                 }) => {
-                    // The κ-derivation for this template's
-                    // (prefix, target) didn't satisfy target. Record
-                    // the non-admitting candidate's typed property
-                    // landscape into the campaign aggregate, then
-                    // vary the extranonce → distinct MerkleRoot →
-                    // distinct TemplatePrefix → distinct κ-derivation.
+                    // No nonce for this template's header satisfied the
+                    // target. Record the final non-admitting candidate's
+                    // typed property landscape into the campaign aggregate,
+                    // then vary the extranonce → distinct MerkleRoot →
+                    // distinct header template → a fresh nonce scan.
                     campaign.record_attempt(&observables, &digest);
                     extranonce = extranonce.wrapping_add(1);
                     if extranonce == 0 {
@@ -186,7 +183,7 @@ impl PrismMiner {
                 }
                 Err(MiningFailure::PipelineFailure) => {
                     bail!(
-                        "ψ-pipeline shape violation — defensive failure mode, should not occur for well-formed MiningTask inputs"
+                        "ψ-pipeline shape violation — defensive failure mode, should not occur for well-formed block headers"
                     );
                 }
             }
@@ -205,10 +202,6 @@ pub struct MinedBlock {
     pub nonce: u32,
     pub witness: MiningWitness,
     pub tx_count: usize,
-    /// Diagnostic state from ψ_9's structural κ-derivation that
-    /// landed the admitting κ-label for the submitted block.
-    /// See [`prism_btc::diagnostics`].
-    pub resolution: prism_btc::ResolutionState,
     /// Number of host-boundary extranonce variations the template
     /// loop walked before admission. `0` means the first
     /// κ-derivation admitted; higher values count subsequent
@@ -436,12 +429,12 @@ mod tests {
     #[test]
     fn extranonce_roll_produces_distinct_merkle_roots() {
         // Architecture §7: each host-boundary extranonce variation must
-        // produce a distinct MiningTask (distinct prefix → distinct
-        // κ-derivation). The mechanism: extranonce bytes change the
-        // coinbase scriptSig → coinbase txid changes → merkle root
-        // changes → header prefix changes. Without this distinctness
-        // the host loop would re-issue the same κ-derivation every
-        // iteration, never landing admission for harder targets.
+        // produce a distinct header template (distinct merkle root →
+        // distinct addressing inference). The mechanism: extranonce bytes
+        // change the coinbase scriptSig → coinbase txid changes → merkle
+        // root changes → header changes. Without this distinctness the
+        // host loop would re-scan the same nonce space every iteration,
+        // never landing admission for harder targets.
         let job0 = fixture_components(0).expect("build job 0");
         let job1 = fixture_components(1).expect("build job 1");
         let job2 = fixture_components(0xDEAD_BEEF).expect("build job 2");

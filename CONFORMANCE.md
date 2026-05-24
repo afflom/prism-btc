@@ -69,8 +69,8 @@ make the cost-model claim verifiable rather than aspirational.
 | **CD-1** | `mine(header, target)` threads `TargetCommitment` through foundation's `run_route` as the model's pinned `C: TypedCommitment` (wiki ADR-048). When `mine()` returns `Ok(outcome)` the κ-label's 32-byte digest satisfies the target by construction — admission was evaluated inside the catamorphism, not at a host-boundary gate. | runtime test | `tests/conformance.rs::cd1_mine_admits_under_target_commitment` |
 | **CD-2** | For every K ∈ {1, 2, 4, 8} the `payload_commitment_k*` helpers produce foundation `AndCommitment` trees of `SingletonCommitment<AffineParity>` leaves (wiki QS-06's K-fold exemplar). The commitment `evaluate` and `decode_payload` are inverses: a synthetic digest carrying K bits at the canonical low-bit positions admits the commitment, and `decode_payload` round-trips the encoded payload byte-for-byte. (K=1 is the `payload_bit` single-leaf case.) | runtime test (synthetic digest, per-K) | `tests/conformance.rs::cd2_payload_commitment_round_trips_at_every_k` |
 | **CD-3** | `MiningOutcome.observables.coords` agrees with `TriadicCoords::from_hash(&outcome.digest)`; `MiningOutcome.observables.p_adic[i]` agrees with `p_adic_valuation(&outcome.digest, CANONICAL_PRIMES[i])`. The receiver-side decoding is consistent with the per-primitive computation. | runtime test | `tests/conformance.rs::cd3_observables_agree_with_per_primitive_computation` |
-| **CD-4** | The constraint nerve of `MiningResult` has exactly 32 disjoint `Site` instances spanning `[0, 32)`, regardless of target.bits. The algebraic-closure encoding (IT_7d, χ = SITE_COUNT = 32) is target-invariant. | runtime test | `tests/verification.rs::v_constraint_nerve_*` (cross-reference) |
-| **CD-5** | Distinct extranonces produce distinct merkle roots (and hence distinct `MiningTask` prefixes and κ-derivations) at the host boundary. | runtime test | `crates/prism-btc-node/src/lib.rs::tests::extranonce_roll_produces_distinct_merkle_roots` (cross-reference) |
+| **CD-4** | The constraint nerve of `BlockAddressLabel` has exactly 72 disjoint `Site` instances spanning `[0, 72)`, regardless of target.bits. The algebraic-closure encoding (IT_7d, χ = SITE_COUNT = 72) is target-invariant. | runtime test | `tests/verification.rs::v_constraint_nerve_is_seventy_two_isolated_vertices_no_higher_simplices` (cross-reference) |
+| **CD-5** | Distinct extranonces produce distinct merkle roots (and hence distinct header carriers and κ-labels) at the host boundary. | runtime test | `crates/prism-btc-node/src/lib.rs::tests::extranonce_roll_produces_distinct_merkle_roots` (cross-reference) |
 
 ## CP — Probabilistic scaling
 
@@ -103,7 +103,7 @@ this aggregate is the operator's typed window onto the search space.
 | ID | Statement | Enforcement | Witness |
 |---|---|---|---|
 | **CM-1** | `Target::new(nBits)` accepts every mainnet-difficulty `nBits` value spanning Bitcoin's history (8 representative values, genesis-era through current epoch) without panic, overflow, or invalid output. | runtime test over the difficulty history | `tests/mainnet.rs::cm1_target_constructor_accepts_full_mainnet_difficulty_history` |
-| **CM-2** | `mine()` produces an admitting outcome whose κ-label is a 32-byte SHA-256d digest for every well-formed mainnet-difficulty header, or `Err(DidNotAdmit{observables, digest, ..})` carrying the candidate's typed property landscape. `PipelineFailure` is **unreachable** — exercised over 8 difficulty values × 50 seeds = 400 attempts. The wire-format Bitcoin header is reconstructed on the `Ok` arm as `outcome.wire_format_header: [u8; 80]` for the `submitblock` boundary. | runtime test | `tests/mainnet.rs::cm2_pipeline_inference_succeeds_at_every_mainnet_difficulty` |
+| **CM-2** | `mine()` produces an admitting outcome whose κ-label is a 72-byte `sha256d:<64hex>` address (carrying the 32-byte SHA-256d display-order digest) for every well-formed mainnet-difficulty header, or `Err(DidNotAdmit{observables, digest, ..})` carrying the candidate's typed property landscape. `PipelineFailure` is **unreachable** — exercised over 8 difficulty values × 50 seeds = 400 attempts. The wire-format Bitcoin header is surfaced on the `Ok` arm as `outcome.wire_format_header: [u8; 80]` for the `submitblock` boundary. | runtime test | `tests/mainnet.rs::cm2_pipeline_inference_succeeds_at_every_mainnet_difficulty` |
 | **CM-3** | At N=10⁴ inferences against the typed surface, the aggregate `CampaignStats` matches the PRF baseline: stratum histogram passes χ² goodness-of-fit against Geom(1/2) at α=0.001 (df=16, crit ≈ 39.25); spectrum histogram passes balanced-Bernoulli χ² at α=0.001 (df=1, crit ≈ 10.83). The receiver-side lens at session scale is consistent with U1 marginal-uniformity. | runtime test | `tests/mainnet.rs::cm3_aggregate_observatory_matches_prf_baseline_at_n_10000` |
 | **CM-4** | `CampaignStats` is consistent under cooperative interruption: stopping at an arbitrary attempt count M and resuming produces an aggregate byte-identical to a single-shot N-attempt run. The session-level aggregate is path-independent. | runtime test | `tests/mainnet.rs::cm4_campaign_stats_consistent_under_cooperative_interruption` |
 | **CM-5** | Empirical admission rate `CampaignStats::empirical_alpha()` converges to the target's theoretical α within ±5% at N=10⁴ (binomial SE ≈ 0.5%; this is ~10σ confident). The host's observed admission rate matches the model's declared α. | runtime test | `tests/mainnet.rs::cm5_empirical_alpha_converges_to_theoretical_at_n_10000` |
@@ -113,9 +113,9 @@ this aggregate is the operator's typed window onto the search space.
 
 | ID | Statement | Witness |
 |---|---|---|
-| **CN-1** | Same `BitcoinMiningModel`, same verb arena, same resolver tuple across regtest/signet/testnet/testnet4/mainnet `bits` values; only the target byte threshold (consumed by foundation's `LexicographicLessEqThreshold` predicate inside `TargetCommitment`) varies. | `tests/verification.rs::v_model_declarations_invariant_across_network_byte_thresholds` |
+| **CN-1** | Same `BitcoinAddressModel`, same verb arena, same shared `AddressResolverTuple` ψ-tower across regtest/signet/testnet/testnet4/mainnet `bits` values; only the target byte threshold (consumed by foundation's `LexicographicLessEqThreshold` predicate inside `TargetCommitment`) varies. | `tests/verification.rs::v_model_declarations_invariant_across_network_byte_thresholds` |
 | **CN-2** | The host loop in `prism-btc-node::PrismMiner::mine_one_block` does not branch on the network beyond template rules (SegWit/Csv/Taproot/Signet) and the signet-challenge gate. | source inspection + `crates/prism-btc-node/src/lib.rs::mine_one_block` |
-| **CN-3** | The reconstructed wire-format header (`outcome.wire_format_header`) is byte-identical to what `submitblock` expects for any network with template-supplied parameters. | `tests/regtest.rs::mines_a_chain_of_blocks_without_fail` (10-block chain accepted byte-for-byte) |
+| **CN-3** | The wire-format header (`outcome.wire_format_header`) is byte-identical to what `submitblock` expects for any network with template-supplied parameters. | `tests/regtest.rs::mines_a_chain_of_blocks_without_fail` (10-block chain accepted byte-for-byte) |
 | **CN-4** | On `Network::Signet` with non-empty `signet_challenge`, `mine_one_block` fail-closed rather than produce an unsigned (invalid) block. | `crates/prism-btc-node/src/lib.rs::mine_one_block` signet gate |
 
 ## CL — Lean-formal
@@ -131,21 +131,22 @@ this aggregate is the operator's typed window onto the search space.
 
 **Claims (proven by the conformance suite):**
 
-- **Mainnet cost-model conformance.** `BitcoinMiningModel` realizes
+- **Mainnet cost-model conformance.** `BitcoinAddressModel` realizes
   wiki ADR-048's 5-position `PrismModel<H, B, A, R, C>` form with
   `C = TargetCommitment` (foundation alias for
   `SingletonCommitment<LexicographicLessEqThreshold>`, ADR-040 +
-  ADR-049). Admission (`digest ≤ target` under big-endian unsigned
-  comparison) is evaluated **inside foundation's `run_route`
-  catamorphism** on the 32-byte SHA-256d κ-label — not at a
-  host-boundary gate sitting outside the typed surface. The
+  ADR-049). Admission (`block_hash ≤ target`, both expressed in
+  κ-label form, where equal-length lowercase-hex lexicographic order is
+  big-endian integer order) is evaluated **inside foundation's
+  `run_route` catamorphism** on the `sha256d:<64hex>` κ-label ψ_9 emits —
+  not at a host-boundary gate sitting outside the typed surface. The
   cost-model contract `operational = declared at equality` therefore
   ranges over the full typed commitment surface (CS, CD, CP, CM).
 - **Mainnet correctness** — prism-btc accepts every well-formed
-  mainnet input and produces a well-formed 32-byte κ-label (plus the
-  reconstructed 80-byte wire-format header for the `submitblock`
-  path) or a typed `DidNotAdmit` observation; `PipelineFailure` is
-  unreachable on legitimate inputs (CM-1, CM-2).
+  mainnet input and produces a well-formed 72-byte `sha256d` κ-label
+  (plus the 80-byte wire-format header and 32-byte display-order digest
+  for the `submitblock` path) or a typed `DidNotAdmit` observation;
+  `PipelineFailure` is unreachable on legitimate inputs (CM-1, CM-2).
 - **Aggregate observability at scale** — the typed receiver-side lens
   is total across every ψ-pipeline inference; the campaign aggregate
   matches PRF baseline at N=10⁴ and converges empirically to the

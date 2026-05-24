@@ -50,7 +50,7 @@ pub struct CampaignStats {
     pub attempts: u64,
     /// Subset of attempts that admitted (`mine()`'s Ok arm — foundation's
     /// `run_route` evaluated the model's pinned `TargetCommitment` and
-    /// returned a sealed `Grounded<MiningResult>`).
+    /// sealed a `Grounded` block-address `AddressWitness`).
     pub admissions: u64,
     /// Stratum histogram: `stratum_hist[k]` counts attempts whose
     /// κ-label has 2-adic valuation `min(k, STRATUM_BINS - 1)`.

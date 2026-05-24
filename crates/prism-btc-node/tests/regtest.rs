@@ -13,12 +13,12 @@
 //! ```
 //!
 //! Verifies the full pipeline: get template → mine via prism-btc
-//! (foundation's catamorphism evaluates the `mining_inference` verb's
-//! ψ-chain term arena, ψ_1 → ψ_7 → ψ_8 → ψ_9; ψ_9's structural
-//! κ-derivation produces one wire-format candidate per template, and
-//! the host loop rolls extranonces until one admits) → assemble block
-//! → submit → chain height advances → block we minted appears at the
-//! new tip.
+//! (foundation's catamorphism evaluates the `block_address_inference`
+//! verb's ψ-chain term arena, ψ_1 → ψ_7 → ψ_8 → ψ_9; ψ_9 folds the
+//! header carrier through the `sha256d` σ-axis to the block-hash κ-label,
+//! the host scans nonces and rolls extranonces until one admits) →
+//! assemble block → submit → chain height advances → block we minted
+//! appears at the new tip.
 
 use bitcoin::hashes::Hash;
 use bitcoin::Network;
@@ -71,40 +71,22 @@ fn mines_a_block_and_advances_the_chain() {
         "tip hash should equal the prism-btc-mined block hash"
     );
 
-    // The mined block carries a non-zero, type-certified grounding witness.
-    let unit_addr = mined.witness.unit_address().as_u128();
-    assert_ne!(unit_addr, 0, "grounded unit_address must be non-zero");
-    assert_eq!(
-        mined.witness.witt_level_bits(),
-        32,
-        "W32 level must propagate from the const-validated CompileUnit"
+    // The mined block carries a replayable TC-05 proof-of-work witness.
+    // verify() re-certifies the derivation and returns the attested
+    // κ-label — the sha256d:<64hex> block address.
+    let attested = mined.witness.verify().expect("witness must replay");
+    assert!(
+        attested.starts_with("sha256d:"),
+        "witness attests the sha256d block address"
     );
-
-    // The ψ-pipeline label is the terminal ψ_9 output: 80 bytes that
-    // ARE the wire-format Bitcoin header by construction (architecture
-    // §2.2 + §6). Bytes 76..80 are the resolved nonce (canonical LE).
-    let output = mined.witness.output_bytes();
-    assert_eq!(
-        output.len(),
-        80,
-        "κ-label is the 80-byte wire-format header"
-    );
-    let nonce_from_label = u32::from_le_bytes([output[76], output[77], output[78], output[79]]);
-    assert_eq!(
-        nonce_from_label, mined.nonce,
-        "κ-label's nonce-field bytes decode to the resolved nonce"
-    );
+    assert_eq!(attested.len(), 72, "κ-label is the 72-byte sha256d address");
+    assert_eq!(mined.witness.content_fingerprint().len(), 32);
 
     // The MiningOutcome's host-side digest matches the bitcoind-anchored block hash.
     let from_bitcoind: [u8; 32] = mined.hash.to_byte_array();
     let mut display = [0u8; 32];
     display.copy_from_slice(&from_bitcoind);
     display.reverse();
-    assert_eq!(
-        mined.witness.witt_level_bits(),
-        32,
-        "witt level pinned through forward()"
-    );
     assert_ne!(display, [0u8; 32], "block hash is non-zero");
 }
 
@@ -156,17 +138,16 @@ fn mines_a_chain_of_blocks_without_fail() {
             tip_hash, mined.hash,
             "after mining #{i}, tip hash should equal the prism-btc-mined block hash"
         );
-        // Wire-format invariants hold for every block.
-        let output = mined.witness.output_bytes();
+        // Witness invariants hold for every block: the replayable TC-05
+        // witness re-certifies to the 72-byte sha256d block address.
+        let attested = mined
+            .witness
+            .verify()
+            .unwrap_or_else(|e| panic!("witness must replay (block #{i}): {e:?}"));
         assert_eq!(
-            output.len(),
-            80,
-            "κ-label is 80 bytes for every mined block"
-        );
-        let nonce_from_label = u32::from_le_bytes([output[76], output[77], output[78], output[79]]);
-        assert_eq!(
-            nonce_from_label, mined.nonce,
-            "κ-label's nonce-field bytes decode to the resolved nonce (block #{i})"
+            attested.len(),
+            72,
+            "κ-label is the 72-byte sha256d address for every mined block (#{i})"
         );
         mined_hashes.push(mined.hash);
     }

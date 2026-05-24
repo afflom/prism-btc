@@ -7,10 +7,10 @@ import PrismBtc.TriadicCoords
 Formal statements covering:
 
 1. **Host-boundary template-variation termination**: the `prism-btc-node`
-   boundary loop (architecture §7) iterates `MiningTask` variations
-   over the u64 extranonce space. The loop either lands on an
-   admitting κ-derived header or exhausts the extranonce space; on a
-   finite domain there is no third outcome.
+   boundary loop (architecture §7) iterates header-template variations
+   over the u64 extranonce space (each scanning the 32-bit nonce space).
+   The loop either lands on an admitting block-hash κ-label or exhausts
+   the search space; on a finite domain there is no third outcome.
 
    NOTE: SHA256d is the **σ-projection** (ingestion hash), NOT a UOR
    ψ-map. Foundation reserves ψ for the categorical functor chain

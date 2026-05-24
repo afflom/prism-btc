@@ -2,12 +2,14 @@
 //!
 //! Each bench measures one operation on the surface. There are no
 //! "mining throughput" or "candidates per second" metrics here —
-//! prism-btc commits to one structural inference per `MiningTask`
+//! prism-btc performs one addressing inference per `(header, nonce)`
 //! (architecture §6 + §14), so the meaningful measurement is the
-//! wall-clock cost of a single `forward()`.
+//! wall-clock cost of a single `forward()` via [`mine_at`].
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
-use prism_btc::{mine, Bits, BlockHeader, MerkleRoot, Target, Timestamp, TriadicCoords, Version};
+use prism_btc::{
+    mine_at, Bits, BlockHeader, MerkleRoot, Target, Timestamp, TriadicCoords, Version,
+};
 
 fn permissive_header() -> BlockHeader {
     let merkle_bytes: [u8; 32] = [
@@ -25,18 +27,19 @@ fn permissive_header() -> BlockHeader {
 }
 
 fn bench_mine_one_structural_inference(c: &mut Criterion) {
-    // One full `mine()` against a maximally-permissive target —
-    // ψ_1 → ψ_7 → ψ_8 → ψ_9 structural κ-derivation plus the
-    // boundary admission check. The κ-derivation is deterministic
-    // in the typed input; the wall-clock per call is constant
-    // (independent of target restrictiveness).
+    // One full addressing inference (`mine_at` at a fixed nonce) against a
+    // maximally-permissive target — ψ_1 → ψ_7 → ψ_8 → ψ_9 fold of the
+    // header carrier through the `sha256d` σ-axis plus the commitment
+    // admission check inside `run_route`. Deterministic in the typed
+    // input; the wall-clock per call is constant (independent of target
+    // restrictiveness).
     let header = permissive_header();
     let target = Target::new(0x207fffff);
     let mut g = c.benchmark_group("mine");
     g.throughput(Throughput::Elements(1));
     g.bench_function("one_structural_inference", |b| {
         b.iter(|| {
-            let outcome = mine(black_box(&header), black_box(target));
+            let outcome = mine_at(black_box(&header), black_box(target), black_box(0));
             black_box(outcome.ok());
         })
     });

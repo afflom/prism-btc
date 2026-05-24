@@ -1,38 +1,37 @@
-//! prism-btc — the prism implementor for Bitcoin proof-of-work.
+//! prism-btc — Bitcoin proof-of-work as a **UOR-ADDR realization**.
 //!
-//! Mining inference end-to-end through prism's typed-iso surface. The
-//! mining transform is the k-invariant branch of the ψ-pipeline
-//! (wiki ADR-035) applied to Bitcoin's typed feature hierarchy
-//! (architecture §2, §4); foundation's catamorphism dispatches each
-//! resolver-bound ψ-stage through [`resolvers::BitcoinResolverTuple`]
-//! (ADR-036). No σ-enumeration in the verb body — see
-//! [`ARCHITECTURE.md`] for the normative pure-prism specification.
+//! prism-btc content-addresses Bitcoin block headers through uor-addr's
+//! shared addressing surface (ADR-031 / ADR-036 / ADR-060): a block
+//! header is the canonical-form input, the `sha256d` σ-axis is the
+//! content-addressing primitive, and the κ-label ψ₉ emits —
+//! `sha256d:<64hex>` — is the conventional Bitcoin block hash. The
+//! difficulty target is the cost-model commitment (ADR-048): foundation
+//! evaluates `kappa_label ≤ target_label` inside `run_route`, which is
+//! exactly Bitcoin's PoW relation `block_hash ≤ target`. The replayable
+//! TC-05 [`AddressWitness`] the outcome carries **is** the proof-of-work
+//! witness — the catamorphism's seal. See [`ARCHITECTURE.md`].
 //!
 //! ## Quick reference
 //!
-//! - [`mine`] — the public entry point: builds a [`MiningTask`] and
-//!   invokes [`BitcoinMiningModel`]'s `PrismModel::forward` impl.
-//!   Admission (`digest ≤ target` under big-endian unsigned
-//!   comparison) is evaluated **inside foundation's `run_route`** via
-//!   the model's pinned [`TargetCommitment`].
-//! - [`BitcoinMiningModel`] — `PrismModel<HostTypes, HostBounds, Hasher,
-//!   ResolverTuple, TargetCommitment>` (wiki ADR-048 5-position form;
-//!   foundation 0.4.12). The 5th slot is the cost-model commitment
-//!   surface; pinning it at [`TargetCommitment`] = foundation alias
-//!   `SingletonCommitment<LexicographicLessEqThreshold>` (wiki
-//!   ADR-040) makes Bitcoin's admission relation a typed predicate
-//!   evaluated inside the catamorphism per wiki QS-06.
-//! - [`MiningTask`] — `partition_product(TemplatePrefix, Target)`,
-//!   108 W8 sites.
-//! - [`MiningResult`] — the ψ-pipeline label (32 W8 sites — the
-//!   SHA-256d digest, the natural cost-model κ-label per wiki
-//!   ADR-048/049).
-//! - [`Sha256dHasher`] — the canonical hash axis (content-addressing
-//!   primitive).
-//! - [`PrismBtcBounds`] — the `HostBounds` profile (`WITT_LEVEL_MAX_BITS = 32`).
-//! - [`ResolutionState`] / [`take_resolution_state`] — diagnostic
-//!   surface for ψ_9's structural κ-derivation
-//!   ([`diagnostics`] module).
+//! - [`mine`] / [`mine_at`] — the public entry points. [`mine`] scans the
+//!   nonce space for an admitting block hash; [`mine_at`] does one
+//!   inference at a given nonce. Both serialize the header to its 80-byte
+//!   wire form, wrap it in a [`BlockHeaderCarrier`], and run
+//!   [`BitcoinAddressModel`]; admission is evaluated **inside foundation's
+//!   `run_route`** via the pinned [`TargetCommitment`].
+//! - [`BitcoinAddressModel`] — `PrismModel<DefaultHostTypes, PrismBtcBounds,
+//!   Sha256dHasher, uor_addr::AddressResolverTuple<Sha256dHasher>,
+//!   TargetCommitment>`. It binds uor-addr's **shared, format-independent**
+//!   ψ-tower (prism-btc carries no resolver code) and the difficulty
+//!   commitment in the ADR-048 5th slot.
+//! - [`BlockHeaderCarrier`] — the ADR-060 borrowed canonical-form input
+//!   handle over the 80-byte serialized header.
+//! - [`BlockAddressLabel`] — the ψ-pipeline output shape: the 72-byte
+//!   `sha256d:<64hex>` κ-label (72 disjoint `Site` constraints).
+//! - [`Sha256dHasher`] — the `sha256d` σ-axis (double-SHA-256, display-order
+//!   finalize); a foundation `Hasher<32>` **and** a [`uor_addr::AddrHash`].
+//! - [`PrismBtcBounds`] — the `HostBounds` profile (alias for the shared
+//!   [`uor_addr::AddrBounds`]).
 //! - **Cost-model commitment surface** —
 //!   [`TypedCommitment`] / [`EmptyCommitment`] / [`SingletonCommitment`] /
 //!   [`AndCommitment`] / [`TargetCommitment`] (wiki ADR-048) and the five
@@ -82,15 +81,20 @@ extern crate alloc;
 
 pub mod campaign;
 pub mod commitment;
-pub mod diagnostics;
+pub mod composition;
 pub mod domain;
 pub mod model;
 pub mod observables;
 pub mod ops;
 pub mod pipeline;
-pub mod resolvers;
 pub mod shapes;
-pub mod verbs;
+
+/// Re-export of [`uor_addr`] — the UOR-ADDR standard-library surface
+/// prism-btc realizes. Downstream crates reach the shared addressing
+/// vocabulary (`AddressResolverTuple`, `AddrBounds`, `AddrHash`,
+/// `AddressOutcome`/`AddressWitness`, `KappaLabel`) and the ADR-061
+/// `composition` framework through this re-export.
+pub use uor_addr;
 
 // Public façade — typed surface.
 pub use campaign::{CampaignStats, PADIC_BINS, STRATUM_BINS};
@@ -108,27 +112,33 @@ pub use commitment::{
     ObservablePredicate, PayloadK2, PayloadK4, PayloadK8, SingletonCommitment, Stratum,
     TargetCommitment, TypedCommitment, UltrametricCloseTo, WalshHadamardParity,
 };
-pub use diagnostics::{take_resolution_state, ResolutionState};
 pub use domain::{
     p_adic_valuation, ultrametric_valuation, walsh_hadamard_parity_at, Bits, BlockHash,
-    BlockHeader, MerkleRoot, MiningTag, MiningWitness, Target, Timestamp, TriadicCoords, Version,
+    BlockHeader, MerkleRoot, MiningWitness, Target, Timestamp, TriadicCoords, Version,
 };
-pub use model::{BitcoinMiningModel, BitcoinMiningRoute, MiningResult, MiningTask, TemplatePrefix};
+pub use model::{
+    block_address_inference, BitcoinAddressModel, BitcoinAddressRoute, BlockAddressLabel,
+    BlockHeaderCarrier, BLOCK_ADDRESS_LABEL_BYTES, HEADER_BYTES,
+    VERB_TERMS_BLOCK_ADDRESS_INFERENCE,
+};
 pub use observables::{ExtendedObservables, KappaObservables, CANONICAL_PRIMES};
 pub use pipeline::{
-    current_thread_target, mine, set_thread_target, set_thread_target_bytes, MiningFailure,
-    MiningOutcome,
-};
-pub use resolvers::{
-    BitcoinChainComplexResolver, BitcoinCochainComplexResolver, BitcoinCohomologyGroupResolver,
-    BitcoinHomologyGroupResolver, BitcoinHomotopyGroupResolver, BitcoinKInvariantResolver,
-    BitcoinNerveResolver, BitcoinPostnikovResolver, BitcoinResolverTuple,
+    current_thread_target, mine, mine_at, set_thread_target, set_thread_target_bytes,
+    MiningFailure, MiningOutcome,
 };
 pub use shapes::{PrismBtcBounds, Sha256dHasher};
 
-// Layer-3 verb declaration (wiki ADR-024). `mining_inference_term_arena()`
-// returns the ψ-chain term-tree fragment foundation evaluates.
-pub use verbs::{mining_inference, VERB_TERMS_MINING_INFERENCE};
+// The shared UOR-ADDR outcome surface, re-exported for downstream use.
+pub use uor_addr::{AddressOutcome, AddressWitness, KappaLabel};
+
+// The ADR-061 composition framework for the `sha256d` axis — prism-btc's
+// reference realization (the five categorical operations + the ordered
+// product + Bitcoin merkle as iterated composition).
+pub use composition::{
+    block_label_from_digest, compose_e6_filtration, compose_e7_augmentation, compose_e8_embedding,
+    compose_f4_quotient, compose_g2_product, compose_ordered_product, merkle_root,
+    CompositionFailure, CompositionOutcome,
+};
 
 // Wire-format helpers — boundary-only, not part of the ψ-pipeline
 // transform. Used by prism-btc-node to assemble wire-format block bytes

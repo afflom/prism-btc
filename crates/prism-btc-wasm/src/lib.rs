@@ -25,4 +25,4 @@ pub mod api;
 pub mod types;
 
 pub use api::mine_block;
-pub use types::{JsBlockHeader, JsMiningResult};
+pub use types::{JsBlockAddress, JsBlockHeader};

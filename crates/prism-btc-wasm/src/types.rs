@@ -64,26 +64,28 @@ impl JsBlockHeader {
     }
 }
 
-/// JavaScript-visible mining result.
+/// JavaScript-visible block address — the result of addressing a mined
+/// block header.
 ///
 /// The nonce is not exposed — it is an internal wire-format detail.
-/// Callers receive the triadic coordinates (stratum, spectrum) and the hash bytes.
+/// Callers receive the 32-byte block hash (the `sha256d` content address)
+/// plus its triadic coordinates (stratum, spectrum).
 #[wasm_bindgen]
-pub struct JsMiningResult {
+pub struct JsBlockAddress {
     pub stratum: u32,
     pub spectrum: u32,
     hash: [u8; 32],
 }
 
 #[wasm_bindgen]
-impl JsMiningResult {
+impl JsBlockAddress {
     /// The 32-byte block hash as a Uint8Array.
     pub fn hash(&self) -> Vec<u8> {
         self.hash.to_vec()
     }
 }
 
-impl JsMiningResult {
+impl JsBlockAddress {
     pub(crate) fn new(hash: [u8; 32], stratum: u32, spectrum: u32) -> Self {
         Self {
             hash,

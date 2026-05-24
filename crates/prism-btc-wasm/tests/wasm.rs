@@ -2,7 +2,7 @@
 //!
 //! The wasm bindings expose [`prism_btc::mine`] to JavaScript callers
 //! via [`mine_block`]. These tests exercise the binding surface: header
-//! construction, mine() invocation, JsMiningResult shape. The fail-
+//! construction, mine() invocation, JsBlockAddress shape. The fail-
 //! closed mining contract (architecture §6) — `mine()` returns `Ok`
 //! only when the κ-derived wire-format header genuinely admits — is
 //! pinned by the prism-btc crate's integration + V&V suites; the wasm

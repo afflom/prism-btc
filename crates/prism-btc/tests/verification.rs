@@ -1,39 +1,34 @@
 //! prism-btc Verification & Validation suite.
 //!
-//! These tests pin the architectural invariants the implementation
-//! commits to. They are independent of the integration tests
-//! ([`tests/integration.rs`]) which exercise the surface API; the
-//! V&V suite verifies the **load-bearing structural properties**:
+//! These tests pin the architectural invariants the UOR-ADDR realization
+//! commits to. They verify the **load-bearing structural properties**:
 //!
 //! - **ψ-pipeline structural form** — the verb arena composes only
 //!   ψ-stage Term variants (no σ-residuals; substrate-enforced at
 //!   compile time but pinned here for defense-in-depth).
 //! - **Fail-closed mining contract** — `mine()` only returns an
-//!   admitting `MiningOutcome`; the 32-byte SHA-256d κ-label
+//!   admitting `MiningOutcome`; the κ-label's display-order digest
 //!   actually satisfies the host-supplied target — admission is
 //!   evaluated inside foundation's `run_route` via the model's
 //!   `C = TargetCommitment` pin (wiki ADR-048).
 //! - **Determinism + parametricity** — the ψ-pipeline is a pure
 //!   deterministic function of the typed input.
-//! - **κ-label identity** — the κ-label IS the SHA-256d digest of the
-//!   wire-format Bitcoin header. `MiningOutcome.wire_format_header`
-//!   carries the reconstructed 80-byte header (recovered from
-//!   `(template_prefix, derived_nonce)` at the prism-btc boundary)
-//!   for `submitblock` compatibility.
-//! - **Cross-network invariance** — the same `BitcoinMiningModel`
-//!   declarations apply across regtest, signet, testnet, testnet4,
+//! - **κ-label identity** — the κ-label IS the `sha256d:<64hex>` address:
+//!   the SHA-256d digest of the wire-format Bitcoin header in display
+//!   order. `MiningOutcome.wire_format_header` carries the 80-byte header
+//!   (prefix ‖ nonce) for `submitblock` compatibility.
+//! - **Cross-network invariance** — the same `BitcoinAddressModel` and
+//!   shared ψ-tower apply across regtest, signet, testnet, testnet4,
 //!   mainnet; only the target byte threshold varies.
-//! - **CompileUnit identity invariance** — distinct typed inputs
-//!   produce identical CompileUnit-level fingerprints (they identify
-//!   the typed-iso path, not bytewise input identity).
+//! - **Output-shape algebraic structure** — `BlockAddressLabel` declares
+//!   72 disjoint `Site` constraints (χ(N(C)) = 72, β_k = 0 for k ≥ 1).
 
 use prism::operation::Term;
 use prism::pipeline::{ConstrainedTypeShape, ConstraintRef, PrismModel};
-use prism::vocabulary::DefaultHostTypes;
 use prism_btc::{
-    mine, serialize_header, sha256d_display, take_resolution_state, BitcoinMiningModel,
-    BitcoinResolverTuple, Bits, BlockHeader, MerkleRoot, MiningResult, MiningTask, PrismBtcBounds,
-    Sha256dHasher, Target, Timestamp, Version, VERB_TERMS_MINING_INFERENCE,
+    mine, mine_at, serialize_header, serialize_prefix, set_thread_target_bytes, sha256d_display,
+    uor_addr::AddressOutcome, BitcoinAddressModel, Bits, BlockAddressLabel, BlockHeader,
+    BlockHeaderCarrier, MerkleRoot, Target, Timestamp, Version, VERB_TERMS_BLOCK_ADDRESS_INFERENCE,
 };
 
 fn canonical_header(version: u32, timestamp: u32, bits: u32) -> BlockHeader {
@@ -51,32 +46,30 @@ fn canonical_header(version: u32, timestamp: u32, bits: u32) -> BlockHeader {
     }
 }
 
-/// Forward via the canonical 5-position `PrismModel<…, TargetCommitment>`
-/// (wiki ADR-048). The thread-local target slot is set to a permissive
-/// value (`[0xff; 32]`) so admission holds for every κ-label — V&V
-/// tests exercise the ψ-pipeline's *structural* properties, not the
-/// admission relation.
-fn forward(task: MiningTask) -> prism::seal::Grounded<prism_btc::MiningResult> {
-    prism_btc::set_thread_target_bytes([0xffu8; 32]);
-    <BitcoinMiningModel as PrismModel<
-        DefaultHostTypes,
-        PrismBtcBounds,
-        Sha256dHasher,
-        BitcoinResolverTuple<Sha256dHasher>,
-        prism_btc::TargetCommitment,
-    >>::forward(task)
-    .expect("ψ-pipeline must run end-to-end on permissive target")
+/// Drive `BitcoinAddressModel::forward` on a borrowed carrier after
+/// publishing a permissive thread-local target (`[0xff; 32]`) so admission
+/// holds for every κ-label — V&V tests exercise the ψ-pipeline's
+/// *structural* properties, not the admission relation. Returns the
+/// κ-label string.
+fn forward_kappa_label(header: &BlockHeader, nonce: u32) -> String {
+    set_thread_target_bytes([0xffu8; 32]);
+    let wire = serialize_header(header, nonce);
+    let carrier = BlockHeaderCarrier::new(&wire);
+    let grounded =
+        BitcoinAddressModel::forward(carrier).expect("ψ-pipeline must run on permissive target");
+    let outcome = AddressOutcome::<72, 32>::from_grounded(&grounded)
+        .expect("outcome extracts from the sealed Grounded");
+    outcome.address.as_str().to_owned()
 }
 
 // ─── §1. Structural verb-arena invariants ──────────────────────────────
 
 #[test]
 fn v_verb_arena_composes_only_psi_stages_no_sigma_residuals() {
-    // Pure-prism commitment (architecture §12; substrate-enforced
-    // ψ-residuals discipline §9.0). The verb arena must contain only
-    // ψ-stage Term variants — no FirstAdmit, no AxisInvocation, no
-    // byte-comparison / concat operators.
-    let arena = VERB_TERMS_MINING_INFERENCE;
+    // Pure-prism commitment (substrate-enforced ψ-residuals discipline).
+    // The verb arena must contain only ψ-stage Term variants — no
+    // FirstAdmit, no AxisInvocation, no byte-comparison / concat operators.
+    let arena = VERB_TERMS_BLOCK_ADDRESS_INFERENCE::<32>();
     assert!(!arena.is_empty(), "verb arena is non-empty");
 
     let psi_terms_only = arena.iter().all(|t| {
@@ -104,10 +97,10 @@ fn v_verb_arena_composes_only_psi_stages_no_sigma_residuals() {
 
 #[test]
 fn v_verb_arena_implements_the_k_invariant_branch() {
-    // Architecture §4: prism-btc selects the k-invariant branch
-    // (ψ_1 → ψ_7 → ψ_8 → ψ_9) as the canonical mining transform.
-    // The arena must contain exactly these four ψ-Term variants.
-    let arena = VERB_TERMS_MINING_INFERENCE;
+    // prism-btc selects the k-invariant branch
+    // (k_invariants ∘ homotopy_groups ∘ postnikov_tower ∘ nerve) as the
+    // canonical address transform. The arena must contain these ψ-Terms.
+    let arena = VERB_TERMS_BLOCK_ADDRESS_INFERENCE::<32>();
     assert!(arena.iter().any(|t| matches!(t, Term::Nerve { .. })));
     assert!(arena
         .iter()
@@ -121,56 +114,36 @@ fn v_verb_arena_implements_the_k_invariant_branch() {
 // ─── §2. Fail-closed mining contract ───────────────────────────────────
 
 #[test]
-fn v_mine_admits_within_a_few_template_variations_for_permissive_target() {
-    // Architecture §6 fail-closed invariant: ψ_9's structural
-    // κ-derivation produces one wire-format header candidate per
-    // MiningTask; the host boundary's admission check decides Ok vs
-    // DidNotAdmit. For a permissive target (regtest's 0x207fffff:
-    // ~50% per-κ-derivation admission probability), iterating a
-    // small number of template variations lands an admitting
-    // κ-derivation. Cryptographic re-derivation: recompute SHA-256d
-    // from the wire-format header bytes and verify it matches the
-    // reported digest AND satisfies the target.
+fn v_mine_admits_for_permissive_target() {
+    // Fail-closed invariant: mine() returns Ok only when the κ-label's
+    // display-order digest satisfies the target (evaluated inside
+    // foundation's run_route via the pinned TargetCommitment).
+    // Cryptographic re-derivation: recompute SHA-256d from the wire-format
+    // header and verify it matches the reported digest AND satisfies the
+    // target.
     let target = Target::new(0x207fffff);
+    let header = canonical_header(1, 1_700_000_000, 0x207fffff);
+    let admitted = mine(&header, target).expect("permissive target must admit");
 
-    let admitted = (0u32..32)
-        .find_map(|ts_offset| {
-            let header = canonical_header(1, 1_700_000_000_u32 + ts_offset, 0x207fffff);
-            mine(&header, target).ok()
-        })
-        .expect("at least one of 32 template variations should admit at a permissive target");
-
-    // The κ-label IS the 32-byte SHA-256d digest (the natural cost-model
-    // κ-label per wiki ADR-048/049). Re-derive from the reconstructed
-    // wire-format header.
-    let kappa_label = admitted.witness.output_bytes();
-    assert_eq!(kappa_label.len(), 32, "κ-label is the 32-byte digest");
-    let re_derived_digest = sha256d_display(&admitted.wire_format_header);
-    let mut kappa_bytes = [0u8; 32];
-    kappa_bytes.copy_from_slice(kappa_label);
+    // The κ-label IS the sha256d:<64hex> address; the hex is the display-
+    // order block hash. Re-derive from the reconstructed wire-format header.
+    assert!(admitted.address.starts_with("sha256d:"));
+    assert_eq!(admitted.address.len(), 72);
+    let re_derived = sha256d_display(&admitted.wire_format_header);
     assert_eq!(
-        kappa_bytes, re_derived_digest,
-        "κ-label must equal SHA-256d(wire_format_header) in display order"
-    );
-    assert_eq!(
-        admitted.digest, re_derived_digest,
-        "outcome.digest mirrors the κ-label digest"
+        admitted.digest, re_derived,
+        "outcome.digest must equal SHA-256d(wire_format_header) in display order"
     );
     assert!(
-        target.is_satisfied_by_bytes(&re_derived_digest),
+        target.is_satisfied_by_bytes(&re_derived),
         "fail-closed: an admitted outcome's digest MUST actually satisfy the target"
     );
 }
 
 #[test]
 fn v_mine_outcome_digest_actually_satisfies_target_when_admitted() {
-    // Fail-closed across the input space: for every (header, target)
-    // pair where mine() returns Ok, the wire-format header's digest
-    // genuinely satisfies the target. Templates whose κ-derivation
-    // does not admit return Err(DidNotAdmit) — those don't produce
-    // a MiningOutcome, so there is no admitted-but-invalid case to
-    // worry about. The boundary admission check is the fail-closed
-    // gate.
+    // Fail-closed across the input space: for every (header, target) pair
+    // where mine() returns Ok, the digest genuinely satisfies the target.
     let target = Target::new(0x207fffff);
     let mut admitted_count = 0;
     for ts_offset in 0u32..64 {
@@ -185,7 +158,7 @@ fn v_mine_outcome_digest_actually_satisfies_target_when_admitted() {
     }
     assert!(
         admitted_count > 0,
-        "with a permissive target and 64 variations, at least one κ-derivation should admit"
+        "with a permissive target and 64 variations, at least one mine() should admit"
     );
 }
 
@@ -193,44 +166,26 @@ fn v_mine_outcome_digest_actually_satisfies_target_when_admitted() {
 
 #[test]
 fn v_psi_pipeline_is_pure_function_of_typed_input() {
-    // Architecture §4: the ψ-pipeline is parametric and deterministic
-    // — same MiningTask → same κ-label. Five repetitions to defend
-    // against any incidental non-determinism in the resolver chain.
-    let mut prefix = [0u8; 76];
-    prefix[0] = 0xA5;
-    let target = [0xffu8; 32];
-    let task = MiningTask::new(prefix, target);
-
-    let baseline = forward(task);
-    let baseline_bytes = baseline.output_bytes().to_vec();
-
+    // The ψ-pipeline is parametric and deterministic — same (header,
+    // nonce) → same κ-label. Five repetitions to defend against any
+    // incidental non-determinism in the resolver chain.
+    let header = canonical_header(1, 1_700_000_000, 0x207fffff);
+    let baseline = forward_kappa_label(&header, 0xA5);
     for _ in 0..5 {
-        let repeat = forward(task);
-        assert_eq!(
-            repeat.output_bytes(),
-            baseline_bytes.as_slice(),
-            "ψ-pipeline must be deterministic"
-        );
+        let repeat = forward_kappa_label(&header, 0xA5);
+        assert_eq!(repeat, baseline, "ψ-pipeline must be deterministic");
     }
 }
 
 #[test]
 fn v_kappa_label_is_distinct_for_distinct_typed_inputs() {
-    // Architecture §4: distinct typed inputs yield distinct κ-labels.
-    // The κ-derivation projects the typed MiningTask via the canonical
-    // hash axis; distinct prefixes produce distinct content-addresses
-    // and therefore distinct κ-derivations (in the cryptographic
-    // collision-resistance sense). Even if two prefixes happened to
-    // collide on the κ-nonce, the structural distinction would
-    // remain in the wire-format prefix region of the κ-label.
-    let target = [0xffu8; 32];
+    // Distinct typed inputs yield distinct κ-labels — the σ-axis is
+    // collision-resistant, so distinct headers content-address to
+    // distinct sha256d block hashes.
+    let header = canonical_header(1, 1_700_000_000, 0x207fffff);
     let mut labels = std::collections::HashSet::new();
-    for v in 0u8..64 {
-        let mut prefix = [0u8; 76];
-        prefix[0] = v;
-        let task = MiningTask::new(prefix, target);
-        let grounded = forward(task);
-        let label: Vec<u8> = grounded.output_bytes().to_vec();
+    for nonce in 0u32..64 {
+        let label = forward_kappa_label(&header, nonce);
         assert!(
             labels.insert(label),
             "κ-labels must be distinct across distinct typed inputs (no collisions in 64-sweep)"
@@ -242,71 +197,56 @@ fn v_kappa_label_is_distinct_for_distinct_typed_inputs() {
 
 #[test]
 fn v_kappa_label_is_sha256d_of_reconstructed_wire_format_header() {
-    // Wiki ADR-048/049: the κ-label IS the 32-byte SHA-256d digest of
-    // the wire-format Bitcoin header — this is the natural cost-model
-    // κ-label foundation's `LexicographicLessEqThreshold` predicate
-    // compares against the target. The 80-byte wire-format header is
-    // reconstructed at the prism-btc boundary from
-    // `(template_prefix, derived_nonce)` and carried as
-    // `outcome.wire_format_header`.
+    // The κ-label IS the sha256d:<64hex> address: the SHA-256d digest of
+    // the wire-format Bitcoin header in display order. The 80-byte
+    // wire-format header is carried as `outcome.wire_format_header`.
     let header = canonical_header(1, 1_700_000_000, 0x207fffff);
-
-    let admitting = (0u32..1024)
-        .find_map(|salt| {
-            let mut varied = header.clone();
-            varied.timestamp = Timestamp(header.timestamp.0.wrapping_add(salt));
-            mine(&varied, Target::new(0x207fffff))
-                .ok()
-                .map(|o| (varied, o))
-        })
-        .expect("permissive target must admit within 1024 variations");
-    let (host_header, outcome) = admitting;
+    let outcome = mine(&header, Target::new(0x207fffff)).expect("permissive target must admit");
 
     // The reconstructed wire-format header is byte-for-byte
-    // serialize_header(host_header, derived_nonce). This is the bytes
+    // serialize_header(header, winning_nonce). This is the bytes
     // `submitblock` accepts.
-    let manual_wire = serialize_header(&host_header, outcome.nonce);
+    let manual_wire = serialize_header(&header, outcome.nonce);
     assert_eq!(
         outcome.wire_format_header, manual_wire,
         "MiningOutcome.wire_format_header must be the canonical 80-byte serialization"
     );
 
-    // The κ-label (witness.output_bytes()) is the digest of that
-    // wire-format header in display order.
-    let kappa_label = outcome.witness.output_bytes();
-    assert_eq!(kappa_label.len(), 32);
+    // The κ-label hex is the display-order digest of that header.
     let expected_digest = sha256d_display(&manual_wire);
+    assert_eq!(outcome.digest, expected_digest);
+    // The 64-hex tail of the κ-label encodes the display-order digest.
+    let hex_tail = &outcome.address.as_str()[8..];
+    let mut expected_hex = String::with_capacity(64);
+    for b in expected_digest {
+        expected_hex.push_str(&format!("{b:02x}"));
+    }
     assert_eq!(
-        kappa_label,
-        &expected_digest[..],
-        "κ-label MUST be SHA-256d(wire_format_header) in display order"
+        hex_tail, expected_hex,
+        "κ-label hex MUST be the display-order digest"
     );
 }
 
 #[test]
 fn v_wire_format_header_preserves_the_host_supplied_prefix() {
-    // Architecture §4: the reconstructed wire-format header's leading
-    // 76 bytes are exactly the host-supplied TemplatePrefix bytes
-    // (Version || PrevHash || MerkleRoot || Timestamp || Bits). The
-    // ψ-pipeline does not mutate the template-supplied bytes; it only
-    // derives the nonce. (The κ-label itself is the 32-byte digest;
-    // the wire-format header is the reconstructed 80-byte artifact
-    // carried separately on `outcome.wire_format_header`.)
+    // The reconstructed wire-format header's leading 76 bytes are exactly
+    // the host-supplied template prefix (Version ‖ PrevHash ‖ MerkleRoot ‖
+    // Timestamp ‖ Bits); only the trailing 4 nonce bytes vary. The
+    // ψ-pipeline does not mutate the template-supplied bytes.
     let target = Target::new(0x207fffff);
-    let mut found = None;
-    for ts in 0u32..256 {
-        let header = canonical_header(1, 1_700_000_000_u32 + ts, 0x207fffff);
-        if let Ok(outcome) = mine(&header, target) {
-            found = Some((header, outcome));
-            break;
-        }
-    }
-    let (host_header, outcome) = found.expect("permissive target must admit");
-    let prefix = serialize_header(&host_header, 0);
+    let header = canonical_header(1, 1_700_000_000, 0x207fffff);
+    let outcome = mine(&header, target).expect("permissive target must admit");
+
+    let prefix = serialize_prefix(&header);
     assert_eq!(
         &outcome.wire_format_header[..76],
-        &prefix[..76],
-        "wire_format_header's leading 76 bytes must equal the host-supplied TemplatePrefix"
+        &prefix[..],
+        "wire_format_header's leading 76 bytes must equal the host-supplied prefix"
+    );
+    assert_eq!(
+        &outcome.wire_format_header[76..80],
+        &outcome.nonce.to_le_bytes(),
+        "wire_format_header's trailing 4 bytes are the winning nonce (canonical LE)"
     );
 }
 
@@ -314,22 +254,15 @@ fn v_wire_format_header_preserves_the_host_supplied_prefix() {
 
 #[test]
 fn v_model_declarations_invariant_across_network_byte_thresholds() {
-    // Architecture §6 network-invariance: the ψ-pipeline transform is
-    // identical across regtest / signet / testnet / testnet4 /
-    // mainnet — same `BitcoinMiningModel`, same verb-body ψ-chain,
-    // same `BitcoinResolverTuple`. The network-dependent value is the
-    // target byte threshold encoded in the template's `bits` field;
-    // the model declarations are uniform.
-    //
-    // Static check: for representative `bits` values from each
-    // network, the typed `MiningTask` partition_product layout is
-    // identical, the substitution-axis triple is identical, and the
-    // verb-arena slice is identical. Whether the κ-derivation for a
-    // given (prefix, target) admits at the boundary is a property
-    // of the typed input, not of the implementation — not exercised
-    // here. The regtest end-to-end suite (VERIFICATION.md §4)
-    // exercises an actual network end-to-end.
+    // Network-invariance: the ψ-pipeline transform is identical across
+    // regtest / signet / testnet / testnet4 / mainnet — same
+    // BitcoinAddressModel, same verb-body ψ-chain, same shared ψ-tower.
+    // The network-dependent value is the target byte threshold; the model
+    // declarations are uniform. We use mine_at at nonce 0 for the hard
+    // targets (no actual mainnet mining) and assert the structural
+    // inference is well-formed regardless of network.
     use prism::vocabulary::HostBounds;
+    use prism_btc::PrismBtcBounds;
 
     let representative_bits: &[u32] = &[
         0x207fffff, // regtest
@@ -338,67 +271,65 @@ fn v_model_declarations_invariant_across_network_byte_thresholds() {
         0x1c0001b3, // mid-difficulty
     ];
 
+    // The output shape's site count is uniform across networks.
+    assert_eq!(<BlockAddressLabel as ConstrainedTypeShape>::SITE_COUNT, 72);
+    assert_eq!(<PrismBtcBounds as HostBounds>::WITT_LEVEL_MAX_BITS, 32);
+    assert!(!VERB_TERMS_BLOCK_ADDRESS_INFERENCE::<32>().is_empty());
+
     for &bits in representative_bits {
         let header = canonical_header(1, 1_700_000_000, bits);
-        let prefix = serialize_header(&header, 0);
-        let mut prefix76 = [0u8; 76];
-        prefix76.copy_from_slice(&prefix[..76]);
-        let target_bytes = Target::new(bits).to_bytes();
-        let task = MiningTask::new(prefix76, target_bytes);
-
-        // The typed input's structural layout is uniform across
-        // networks: 108-byte partition_product of TemplatePrefix
-        // (76) + Target (32), 32-site `MiningResult` output shape
-        // (the SHA-256d κ-label per wiki ADR-048/049), identical
-        // PrismBtcBounds capacity profile.
-        assert_eq!(task.0.len(), 108);
-        assert_eq!(<MiningResult as ConstrainedTypeShape>::SITE_COUNT, 32);
-        assert_eq!(<PrismBtcBounds as HostBounds>::WITT_LEVEL_MAX_BITS, 32);
-
-        // The verb arena's structural composition is uniform —
-        // independent of which network's bits the runtime template
-        // carries.
-        assert!(!VERB_TERMS_MINING_INFERENCE.is_empty());
+        let target = Target::new(bits);
+        // A single inference at nonce 0: the structural κ-derivation
+        // produces a well-formed sha256d address regardless of network.
+        // For the hard targets nonce 0 will not admit, but the κ-label is
+        // still well-formed (carried on DidNotAdmit's digest). For the
+        // permissive regtest target it may admit; either way the digest
+        // is a valid 32-byte block hash.
+        match mine_at(&header, target, 0) {
+            Ok(outcome) => {
+                assert!(outcome.address.starts_with("sha256d:"));
+                assert_eq!(outcome.address.len(), 72);
+            }
+            Err(prism_btc::MiningFailure::DidNotAdmit { digest, .. }) => {
+                assert_eq!(digest.len(), 32);
+            }
+            Err(prism_btc::MiningFailure::PipelineFailure) => {
+                panic!("PipelineFailure unreachable for well-formed header (bits=0x{bits:08x})")
+            }
+        }
     }
 }
 
-// ─── §6. CompileUnit identity invariance (TC-03 typed-iso path) ────────
+// ─── §6. Replayable witness identity (TC-05) ───────────────────────────
 
 #[test]
-fn v_compile_unit_fingerprint_identifies_the_typed_iso_path() {
-    // Architecture conformance (TC-03 typed-iso path-singularity):
-    // two distinct typed inputs produce identical CompileUnit-level
-    // fingerprints — they identify the **path** through the typed-
-    // iso surface, not bytewise input identity. (Distinct admitted
-    // values still get distinct `output_bytes`; only the substrate's
-    // CompileUnit metadata is shared.)
-    let mut p_a = [0u8; 76];
-    p_a[0] = 0x01;
-    let mut p_b = [0u8; 76];
-    p_b[0] = 0x02;
-    let target = [0xffu8; 32];
+fn v_witness_replays_to_the_attested_kappa_label() {
+    // The MiningOutcome carries a replayable TC-05 witness. verify()
+    // re-certifies the derivation without re-invoking the σ-axis and
+    // returns the attested κ-label — which must equal the outcome's
+    // address. The content fingerprint is the 32-byte σ-projection.
+    let target = Target::new(0x207fffff);
+    let header = canonical_header(1, 1_700_000_000, 0x207fffff);
+    let outcome = mine(&header, target).expect("permissive target must admit");
 
-    let ga = forward(MiningTask::new(p_a, target));
-    let gb = forward(MiningTask::new(p_b, target));
-
-    assert_eq!(ga.content_fingerprint(), gb.content_fingerprint());
-    assert_eq!(ga.unit_address(), gb.unit_address());
-    assert_eq!(ga.witt_level_bits(), gb.witt_level_bits());
-    assert_eq!(ga.witt_level_bits(), 32);
+    let replayed = outcome.witness.verify().expect("witness replays");
+    assert_eq!(
+        replayed, outcome.address,
+        "witness re-certifies to the κ-label"
+    );
+    assert_eq!(outcome.witness.kappa_label(), outcome.address);
+    assert_eq!(outcome.witness.content_fingerprint().len(), 32);
 }
 
-// ─── §7. Algebraic structure of MiningResult::CONSTRAINTS ──────────────
+// ─── §7. Algebraic structure of BlockAddressLabel::CONSTRAINTS ─────────
 
 #[test]
-fn v_mining_result_constraints_have_thirty_two_disjoint_site_instances() {
-    // Architecture §2.3 + IT_7d algebraic-closure: 32 disjoint `Site`
-    // constraints, one per SHA-256d digest byte. The constraint
-    // nerve has 32 isolated vertices, β_0 = 32, β_k = 0 for k ≥ 1,
-    // χ = 32 = SITE_COUNT — the framework's algebraic-closure
-    // criterion satisfied at the declaration level for the 32-byte
-    // κ-label per wiki ADR-048/049.
-    let cs = <MiningResult as ConstrainedTypeShape>::CONSTRAINTS;
-    assert_eq!(cs.len(), 32);
+fn v_block_address_label_constraints_have_seventy_two_disjoint_site_instances() {
+    // Algebraic-closure: 72 disjoint `Site` constraints, one per κ-label
+    // byte position (sha256d:<64hex>). The constraint nerve has 72
+    // isolated vertices, β_0 = 72, β_k = 0 for k ≥ 1, χ = 72 = SITE_COUNT.
+    let cs = <BlockAddressLabel as ConstrainedTypeShape>::CONSTRAINTS;
+    assert_eq!(cs.len(), 72);
     for c in cs {
         assert!(
             matches!(c, ConstraintRef::Site { .. }),
@@ -408,12 +339,12 @@ fn v_mining_result_constraints_have_thirty_two_disjoint_site_instances() {
 }
 
 #[test]
-fn v_constraint_nerve_is_thirty_two_isolated_vertices_no_higher_simplices() {
-    // Architecture §2.3: the constraint nerve N(C) has vertices = the
-    // 32 constraints; site supports are pairwise disjoint (each
-    // Site_i pins one distinct site i ∈ [0, 32)); therefore no
-    // 1-simplices, no higher simplices. β_0 = 32, β_k = 0 for k ≥ 1.
-    let cs = <MiningResult as ConstrainedTypeShape>::CONSTRAINTS;
+fn v_constraint_nerve_is_seventy_two_isolated_vertices_no_higher_simplices() {
+    // The constraint nerve N(C) has vertices = the 72 constraints; site
+    // supports are pairwise disjoint (each Site_i pins one distinct site
+    // i ∈ [0, 72)); therefore no 1-simplices, no higher simplices.
+    // β_0 = 72, β_k = 0 for k ≥ 1.
+    let cs = <BlockAddressLabel as ConstrainedTypeShape>::CONSTRAINTS;
 
     fn site_support(c: &ConstraintRef) -> Option<u32> {
         match c {
@@ -432,18 +363,15 @@ fn v_constraint_nerve_is_thirty_two_isolated_vertices_no_higher_simplices() {
     }
     assert_eq!(
         supports.len(),
-        32,
-        "32 disjoint site supports across [0, 32)"
+        72,
+        "72 disjoint site supports across [0, 72)"
     );
 }
 
 #[test]
-fn v_constraint_site_supports_span_the_full_digest() {
-    // Architecture §2.3 + IT_7d: site supports collectively cover all
-    // 32 SHA-256d κ-label byte positions. All sites are κ-pinned by
-    // ψ_9's structural κ-derivation (SHA-256d of the reconstructed
-    // wire-format header).
-    let cs = <MiningResult as ConstrainedTypeShape>::CONSTRAINTS;
+fn v_constraint_site_supports_span_the_full_kappa_label() {
+    // Site supports collectively cover all 72 κ-label byte positions.
+    let cs = <BlockAddressLabel as ConstrainedTypeShape>::CONSTRAINTS;
     let mut sites: Vec<u32> = cs
         .iter()
         .map(|c| match c {
@@ -454,108 +382,21 @@ fn v_constraint_site_supports_span_the_full_digest() {
     sites.sort_unstable();
     assert_eq!(
         sites,
-        (0u32..32).collect::<Vec<_>>(),
-        "site supports span [0, 32) exactly"
+        (0u32..72).collect::<Vec<_>>(),
+        "site supports span [0, 72) exactly"
     );
 }
 
 #[test]
 fn v_prism_btc_bounds_declare_algebraic_closure_target() {
-    // Architecture §2.3 + §9.3: PrismBtcBounds declares prism-btc's
-    // algebraic-closure target ceilings — the application-side
-    // binding ceiling for the 32-site `MiningResult` κ-label per wiki
-    // ADR-048/049. The capacity floor is 32 (one per digest byte).
+    // PrismBtcBounds declares prism-btc's algebraic-closure target
+    // ceilings — the application-side binding ceiling for the 72-site
+    // BlockAddressLabel κ-label. The capacity floor is 72 (one per byte).
     use prism::vocabulary::HostBounds;
+    use prism_btc::PrismBtcBounds;
     const _: () = {
-        assert!(<PrismBtcBounds as HostBounds>::NERVE_SITES_MAX >= 32);
-        assert!(<PrismBtcBounds as HostBounds>::NERVE_CONSTRAINTS_MAX >= 32);
-        assert!(<PrismBtcBounds as HostBounds>::BETTI_DIMENSION_MAX >= 32);
-        assert!(<PrismBtcBounds as HostBounds>::AFFINE_COEFFS_MAX >= 32);
+        assert!(<PrismBtcBounds as HostBounds>::NERVE_SITES_MAX >= 72);
+        assert!(<PrismBtcBounds as HostBounds>::NERVE_CONSTRAINTS_MAX >= 72);
+        assert!(<PrismBtcBounds as HostBounds>::BETTI_DIMENSION_MAX >= 72);
     };
-}
-
-// ─── §8. ψ_9 κ-derivation diagnostic surface ──────────────────────────
-
-#[test]
-fn v_mine_outcome_carries_kappa_derivation_state() {
-    // Architecture §4 + crate::diagnostics: on the Ok path of mine(),
-    // outcome.resolution carries free_rank = 0 (all 32 MiningResult
-    // sites pinned at the terminal ψ-stage by the SHA-256d evaluation)
-    // and derived_nonce matching the κ-derived nonce embedded in the
-    // wire-format header.
-    let target = Target::new(0x207fffff);
-    let outcome = (0u32..32)
-        .find_map(|ts_offset| {
-            let header = canonical_header(1, 1_700_000_000_u32 + ts_offset, 0x207fffff);
-            mine(&header, target).ok()
-        })
-        .expect("permissive target admits within a small variation window");
-
-    assert_eq!(
-        outcome.resolution.free_rank, 0,
-        "free_rank = 0 at terminal ψ-stage convergence"
-    );
-    assert_eq!(
-        outcome.resolution.derived_nonce, outcome.nonce,
-        "ψ_9's recorded κ-derivation matches the host-perspective nonce"
-    );
-}
-
-#[test]
-fn v_mine_drains_thread_local_diagnostic_channel() {
-    // crate::diagnostics: mine() drains the thread-local channel as
-    // part of constructing MiningOutcome; a subsequent
-    // take_resolution_state() returns None.
-    let target = Target::new(0x207fffff);
-    let _ = (0u32..32)
-        .find_map(|ts_offset| {
-            let header = canonical_header(1, 1_700_000_000_u32 + ts_offset, 0x207fffff);
-            mine(&header, target).ok()
-        })
-        .expect("permissive target admits within a small variation window");
-
-    assert!(
-        take_resolution_state().is_none(),
-        "mine()'s Ok path drains the channel; subsequent take() returns None"
-    );
-}
-
-#[test]
-fn v_forward_records_resolution_state_for_inspection() {
-    // Direct forward() callers (not going through mine()) inspect
-    // the diagnostic channel via take_resolution_state(). ψ_9
-    // records state on every invocation.
-    let _ = take_resolution_state(); // drain any leftover state
-    let mut prefix = [0u8; 76];
-    prefix[0] = 0x55;
-    let target = [0xffu8; 32];
-    let task = MiningTask::new(prefix, target);
-
-    prism_btc::set_thread_target_bytes(target);
-    let _grounded = <BitcoinMiningModel as PrismModel<
-        DefaultHostTypes,
-        PrismBtcBounds,
-        Sha256dHasher,
-        BitcoinResolverTuple<Sha256dHasher>,
-        prism_btc::TargetCommitment,
-    >>::forward(task)
-    .expect("ψ-pipeline runs");
-
-    let state =
-        take_resolution_state().expect("ψ_9 must have recorded resolution state for forward()");
-    assert_eq!(state.free_rank, 0, "terminal ψ-stage converges");
-
-    // The κ-label is the 32-byte SHA-256d digest. Reconstruct the
-    // wire-format header from (prefix, state.derived_nonce) and
-    // verify SHA-256d(reconstruction) == κ-label, i.e. ψ_9 emitted
-    // the canonical digest of the canonical wire-format reconstruction.
-    let kappa_label = _grounded.output_bytes();
-    assert_eq!(kappa_label.len(), 32, "κ-label is the 32-byte digest");
-    let reconstructed = prism_btc::splice_nonce(&prefix, state.derived_nonce);
-    let expected_digest = sha256d_display(&reconstructed);
-    assert_eq!(
-        kappa_label,
-        &expected_digest[..],
-        "κ-label MUST be SHA-256d(splice_nonce(prefix, derived_nonce))"
-    );
 }

@@ -21,7 +21,7 @@
 > inputs), and joint (pairwise admission independence) channels.
 > The σ-projection is hardened against the cryptanalysis the
 > framework can pose; prism-btc's commitment to one structural
-> inference per `MiningTask` is empirically vindicated.
+> inference per block-header carrier is empirically vindicated.
 
 ---
 
@@ -79,10 +79,10 @@ autocorrelative) compose them.
 
 The ψ-pipeline (architecture §4) is a directed field of structure-
 preserving morphisms over the manifold: ψ_1 → ψ_7 → ψ_8 → ψ_9. ψ_9
-projects the typed `MiningTask` to its content-address via the
-canonical hash axis and pins the four nonce-byte sites to the
-leading four bytes of that content-address. The κ-label *is* the
-wire-format Bitcoin header at that manifold position.
+folds the borrowed 80-byte block-header carrier through the `sha256d`
+σ-axis to mint its content-address — the `sha256d:<64hex>` κ-label.
+The κ-label *is* the conventional Bitcoin block hash (display order)
+for the header at that manifold position.
 
 ### 1.5 What "exploitable" means
 
@@ -103,8 +103,8 @@ structure is admission-orthogonal.
 The script
 [`crates/prism-btc/examples/uor_cryptanalysis.rs`](crates/prism-btc/examples/uor_cryptanalysis.rs)
 runs eight tests at `N = 10⁷` samples each on a deterministic input
-stream (sequential 80-byte headers / 108-byte mining tasks varying a
-4-byte counter field). Statistical conventions: χ² tests at
+stream (sequential 80-byte headers varying a 4-byte counter field).
+Statistical conventions: χ² tests at
 α = 0.001; two-sided z thresholds at α = 0.001 (|z| > 3.29). Each
 test reports observed statistic versus critical value; passing ⇔
 observed below critical.
@@ -179,22 +179,22 @@ frequency.
 
 Sequential inputs produce strata that are statistically i.i.d.
 
-### 3.5 §E — κ-derivation autocorrelation (mining-specific)
+### 3.5 §E — κ-label leading-word autocorrelation (mining-specific)
 
-For sequential `MiningTask` inputs varying the timestamp field
-(bytes 68..72), ψ_9's κ-derived nonce
-`u32::from_le_bytes(H(task)[..4])`:
+For sequential block-header carriers varying the timestamp field
+(bytes 68..72), the leading display-order word of ψ_9's κ-label
+digest `u32::from_le_bytes(H(header)[..4])`:
 
 | Statistic | Observed | Expected/Critical | Pass |
 |---|---:|---:|:---:|
-| κ-nonce mean | 2.148 × 10⁹ | 2.147 × 10⁹ | ✓ |
-| κ-nonce variance | 1.537 × 10¹⁸ | 1.537 × 10¹⁸ | ✓ |
+| leading-word mean | 2.148 × 10⁹ | 2.147 × 10⁹ | ✓ |
+| leading-word variance | 1.537 × 10¹⁸ | 1.537 × 10¹⁸ | ✓ |
 | max \|z\| across lags 1..10 | **1.56** | 3.29 (α=0.001) | ✓ |
 
 **Mining-specific finding.** Sequential template variations produce
-κ-derivations that are statistically indistinguishable from i.i.d.
-uniform u32 draws. **A miner cannot predict the next κ-derivation
-from the current one** — the prism-btc-specific exploitability
+κ-labels whose leading digest word is statistically indistinguishable
+from i.i.d. uniform u32 draws. **A miner cannot predict the next
+κ-label from the current one** — the prism-btc-specific exploitability
 channel is closed by the σ-projection's avalanche.
 
 ### 3.6 §F — p-adic stratification for `p ∈ {3, 5, 7}`
@@ -296,7 +296,7 @@ takes U1 + U2 as axioms **per typed Predicate** the runtime admits.
 §I closes the calibration loop by directly testing U1
 (`PRF.prob_predicate`) at each variant: sample 10⁶ uniform digests,
 compare observed acceptance to the variant's
-`ObservablePredicate::accept_prob()` (foundation 0.4.12 surface per
+`ObservablePredicate::accept_prob()` (foundation 0.5.2 surface per
 wiki ADR-049; the predicate publishes an `f64` accept probability —
 the rational-domain correspondence that historically lived in
 prism-btc as `Predicate::accept_prob_rational()` has moved upstream
@@ -513,8 +513,8 @@ tools.
 The cryptanalysis empirically vindicates the architectural choice
 (ARCHITECTURE.md §6, §12, §14):
 
-- **One structural inference per `MiningTask`** is not a performance
-  compromise; there is no UOR-structural exploit a "more
+- **One structural inference per block-header carrier** is not a
+  performance compromise; there is no UOR-structural exploit a "more
   algorithmic" implementation could anchor itself to.
 - **Constant per-`forward()` cost** is consistent with admission-
   orthogonality: cheaper-than-σ observables cannot predict
@@ -611,7 +611,7 @@ The substrate's Conjunction primitive constructs a Shannon channel:
 
 - **Sender** — the application that declares K typed predicates.
 - **Channel** — the σ-projection over candidate inputs, materialized
-  as the typed-iso surface ([`BitcoinMiningModel::forward`] in
+  as the typed-iso surface ([`BitcoinAddressModel::forward`] in
   prism-btc's case).
 - **Receiver** — any party that reads the κ-label and evaluates the
   declared predicates on it.
@@ -664,14 +664,14 @@ commitment channel** on top of any UOR-hardened σ-projection:
   cost** — a Shannon-style trade-off the framework makes legible.
 
 For prism-btc this opens a future extension lane: today's
-[`MiningResult::CONSTRAINTS`](crates/prism-btc/src/model.rs)
-declares 80 disjoint `ConstraintRef::Site` instances — the IT_7d
-algebraic-closure encoding for the wire-format Bitcoin header. The
-nerve is 80 isolated vertices; the channel bandwidth is the 80
-sites' template + κ-derived content. A future
-`MiningResult` variant could Conjunction additional 1-bit predicates
-onto the existing site geometry — for example, "the κ-derived nonce
-has popcount ≡ 0 mod 4" or "WH parity at frequency ω equals 1" —
+[`BlockAddressLabel::CONSTRAINTS`](crates/prism-btc/src/model.rs)
+declares 72 disjoint `ConstraintRef::Site` instances — the IT_7d
+algebraic-closure encoding for the `sha256d:<64hex>` κ-label. The
+nerve is 72 isolated vertices; the channel bandwidth is the 72
+sites' content-addressed content. An application's derived
+`PrismModel<…, C>` could Conjunction additional 1-bit predicates
+onto the existing site geometry — for example, "the leading digest
+word has popcount ≡ 0 mod 4" or "WH parity at frequency ω equals 1" —
 encoding application-specific commitments into the κ-label at
 proportional PRF cost. The substrate's Conjunction primitive makes
 this strictly an application-side declaration; the σ-projection

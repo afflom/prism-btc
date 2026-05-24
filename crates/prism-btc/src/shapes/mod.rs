@@ -1,24 +1,21 @@
-//! Foundation substitution-axis selections (architecture §3).
+//! Foundation substitution-axis selections for the Bitcoin addressing
+//! realization (UOR-ADDR common surface).
 //!
-//! - [`bounds::PrismBtcBounds`] — the `HostBounds` profile.
-//! - [`hasher::Sha256dHasher`] — the `Hasher` axis body (pure-Rust
-//!   SHA-256-then-SHA-256). The canonical content-addressing primitive.
+//! - [`bounds::PrismBtcBounds`] — the `HostBounds` capacity profile.
+//!   prism-btc binds uor-addr's shared [`AddrBounds`](uor_addr::AddrBounds)
+//!   profile verbatim (ADR-037 single capacity profile); the alias keeps
+//!   the prism-btc-facing name while reusing the framework profile.
+//! - [`hasher::Sha256dHasher`] — the `sha256d` σ-axis: Bitcoin's
+//!   double-SHA-256 as a foundation [`Hasher`](prism::vocabulary::Hasher)
+//!   **and** a uor-addr [`AddrHash`](uor_addr::AddrHash). The canonical
+//!   content-addressing primitive for block headers.
 //!
 //! `HostTypes` is bound to `prism::vocabulary::DefaultHostTypes` at the
-//! `BitcoinMiningModel` declaration site directly. `ResolverTuple`
-//! lives in [`crate::resolvers`] as `BitcoinResolverTuple`.
-//!
-//! The atomic Bitcoin feature primitives (`Version`, `PrevHash`,
-//! `MerkleRoot`, `Timestamp`, `Bits`, `Nonce`, `Target` — see
-//! ARCHITECTURE.md §2.1) are realized at the byte-range level on the
-//! composite shapes [`crate::model::TemplatePrefix`] (76-byte
-//! `partition_product`) and [`crate::model::MiningTask`] (108-byte
-//! `partition_product`): each composite declares its
-//! `PartitionProductFields` table naming the per-factor byte offsets
-//! and lengths. The 32-byte `MiningResult` site count matches the
-//! SHA-256d digest width — the natural cost-model κ-label per wiki
-//! ADR-048/049 (foundation's `LexicographicLessEqThreshold`
-//! consumes this byte sequence).
+//! [`crate::model::BitcoinAddressModel`] declaration. The ψ-tower is
+//! uor-addr's shared, format-independent
+//! [`AddressResolverTuple`](uor_addr::AddressResolverTuple) — prism-btc
+//! carries no resolver code (ADR-060 carrier model: canonicalization at
+//! the host boundary, ψ₉ folds the carrier through the σ-axis).
 
 pub mod bounds;
 pub mod hasher;

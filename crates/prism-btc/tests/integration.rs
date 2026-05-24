@@ -1,32 +1,28 @@
-//! Integration tests for prism-btc's pure-prism mining inference.
+//! Integration tests for prism-btc's UOR-ADDR block-address inference.
 //!
-//! See [ARCHITECTURE.md](../../../../ARCHITECTURE.md) for the normative
-//! specification. The tests pin the **architectural commitment**:
+//! prism-btc is a UOR-ADDR realization (ADR-060). The host serializes a
+//! [`BlockHeader`] + candidate nonce to the 80-byte wire form
+//! ([`serialize_header`]) — the canonical form — and wraps it in a
+//! [`BlockHeaderCarrier`]. [`BitcoinAddressModel::forward`] runs the
+//! shared ψ-tower: ψ₁–ψ₈ thread the borrowed carrier through and ψ₉ folds
+//! it through the `sha256d` σ-axis to mint the `sha256d:<64hex>` κ-label
+//! (the block hash in display order). Foundation's `run_route` evaluates
+//! the model's pinned `C = TargetCommitment` on the κ-label; admission
+//! `kappa_label ≤ target_label` is Bitcoin's PoW relation.
 //!
-//! - `BitcoinMiningModel` is a 5-position `PrismModel<HostTypes,
-//!   HostBounds, Hasher, ResolverTuple, TargetCommitment>`
-//!   (architecture §5; wiki ADR-048).
-//! - `BitcoinResolverTuple` realizes the eight resolver-bound ψ-stages
-//!   (architecture §3, §4).
-//! - `BitcoinMiningModel::forward(task)` drives the ψ-pipeline end-to-end
-//!   through foundation's catamorphism (`prism::pipeline::run_route`)
-//!   dispatching each ψ-Term through the application's resolver tuple
-//!   and evaluating the model's pinned `TargetCommitment` on the κ-label
-//!   before sealing.
-//! - The κ-label (`Grounded<MiningResult>::output_bytes()`) is exactly
-//!   80 bytes — the wire-format Bitcoin header by construction
-//!   (architecture §6 bit-identicality contract).
+//! These tests pin the surface API: the κ-label shape, determinism,
+//! distinctness, and the fail-closed admission contract via the public
+//! [`mine`] / [`mine_at`] entry points.
 
 use prism::pipeline::PrismModel;
-use prism::vocabulary::DefaultHostTypes;
 use prism_btc::{
-    mine, set_thread_target_bytes, BitcoinMiningModel, BitcoinResolverTuple, Bits, BlockHeader,
-    MerkleRoot, MiningTask, PrismBtcBounds, Sha256dHasher, Target, TargetCommitment, Timestamp,
-    Version,
+    mine, mine_at, serialize_prefix, set_thread_target_bytes, uor_addr::AddressOutcome,
+    BitcoinAddressModel, Bits, BlockHeader, BlockHeaderCarrier, MerkleRoot, MiningFailure, Target,
+    Timestamp, Version,
 };
 
-/// Permissive target: every digest admits. Used for tests that
-/// exercise the ψ-pipeline shape rather than the admission relation.
+/// Permissive target: ~50% admission. Used for tests that exercise the
+/// ψ-pipeline shape rather than a restrictive admission relation.
 const PERMISSIVE_TARGET_BYTES: [u8; 32] = [0xffu8; 32];
 
 fn easy_header() -> BlockHeader {
@@ -44,128 +40,128 @@ fn easy_header() -> BlockHeader {
     }
 }
 
-/// Invoke `BitcoinMiningModel::forward` after ensuring the thread-local
-/// target slot is set to a permissive value — the model's pinned
+/// Drive `BitcoinAddressModel::forward` on a borrowed carrier after
+/// publishing a permissive thread-local target — the model's pinned
 /// `C = TargetCommitment` reads the target from this slot at every
-/// invocation per wiki ADR-048.
-fn forward_permissive(task: MiningTask) -> prism::seal::Grounded<prism_btc::MiningResult> {
+/// invocation (ADR-048). Returns the κ-label string.
+fn forward_kappa_label(header: &BlockHeader, nonce: u32) -> String {
     set_thread_target_bytes(PERMISSIVE_TARGET_BYTES);
-    <BitcoinMiningModel as PrismModel<
-        DefaultHostTypes,
-        PrismBtcBounds,
-        Sha256dHasher,
-        BitcoinResolverTuple<Sha256dHasher>,
-        TargetCommitment,
-    >>::forward(task)
-    .expect("ψ-pipeline must run end-to-end on permissive target")
+    let wire = prism_btc::serialize_header(header, nonce);
+    let carrier = BlockHeaderCarrier::new(&wire);
+    let grounded =
+        BitcoinAddressModel::forward(carrier).expect("ψ-pipeline runs on permissive target");
+    let outcome = AddressOutcome::<72, 32>::from_grounded(&grounded)
+        .expect("outcome extracts from the sealed Grounded");
+    outcome.address.as_str().to_owned()
 }
 
 #[test]
-fn forward_emits_a_thirty_two_byte_digest_kappa_label() {
-    // The terminal ψ_9 resolver emits 32 bytes: the SHA-256d digest
-    // of the reconstructed wire-format Bitcoin header. This is the
-    // natural cost-model κ-label per wiki ADR-048/049 — foundation's
-    // `LexicographicLessEqThreshold` predicate compares this byte
-    // sequence against the target.
-    let mut prefix = [0u8; 76];
-    prefix[0] = 0x01;
-    let task = MiningTask::new(prefix, PERMISSIVE_TARGET_BYTES);
-
-    let grounded = forward_permissive(task);
-
-    let kappa_label = grounded.output_bytes();
-    assert_eq!(
-        kappa_label.len(),
-        32,
-        "κ-label is exactly the 32-byte SHA-256d digest"
+fn forward_emits_a_seventy_two_byte_sha256d_kappa_label() {
+    // ψ₉ folds the carrier through the `sha256d` σ-axis and emits the
+    // 72-byte `sha256d:<64hex>` κ-label — the conventional Bitcoin block
+    // hash in display order. Foundation evaluates the TargetCommitment on
+    // this κ-label byte sequence.
+    let header = easy_header();
+    let label = forward_kappa_label(&header, 0);
+    assert!(
+        label.starts_with("sha256d:"),
+        "κ-label is the sha256d address"
     );
-
-    // Witt level pinned through forward().
-    assert_eq!(grounded.witt_level_bits(), 32);
+    assert_eq!(label.len(), 72, "sha256d:<64hex> = 7 + 1 + 64 = 72 bytes");
 }
 
 #[test]
 fn forward_kappa_label_is_deterministic_in_the_typed_input() {
-    // The ψ-pipeline is parametric: same MiningTask → same κ-label.
-    let mut prefix = [0u8; 76];
-    prefix[0] = 0x42;
-    let task_a = MiningTask::new(prefix, PERMISSIVE_TARGET_BYTES);
-    let task_b = MiningTask::new(prefix, PERMISSIVE_TARGET_BYTES);
-
-    let grounded_a = forward_permissive(task_a);
-    let grounded_b = forward_permissive(task_b);
-
-    assert_eq!(grounded_a.output_bytes(), grounded_b.output_bytes());
+    // The ψ-pipeline is parametric: same (header, nonce) → same κ-label.
+    let header = easy_header();
+    let a = forward_kappa_label(&header, 0x42);
+    let b = forward_kappa_label(&header, 0x42);
+    assert_eq!(a, b, "ψ-pipeline must be deterministic");
 }
 
 #[test]
 fn forward_kappa_label_is_distinct_for_distinct_inputs() {
-    // The ψ-pipeline distinguishes typed inputs: distinct MiningTask
-    // prefixes yield distinct κ-labels. The κ-derivation projects the
-    // typed input via the canonical hash axis; distinct prefixes
-    // produce distinct content-addresses (cryptographic collision-
-    // resistance) and therefore distinct κ-derivations. Even on the
-    // unlikely event of a κ-nonce collision, the structural
-    // distinction would remain in the prefix region of the wire-
-    // format header.
-    let mut p_a = [0u8; 76];
-    p_a[0] = 0x01;
-    let mut p_b = [0u8; 76];
-    p_b[0] = 0x02;
-
-    let ga = forward_permissive(MiningTask::new(p_a, PERMISSIVE_TARGET_BYTES));
-    let gb = forward_permissive(MiningTask::new(p_b, PERMISSIVE_TARGET_BYTES));
-
-    assert_ne!(
-        ga.output_bytes(),
-        gb.output_bytes(),
-        "distinct typed inputs must yield distinct κ-labels"
-    );
-}
-
-#[test]
-fn forward_path_identity_is_input_invariant() {
-    // The Grounded's content_fingerprint and unit_address come from
-    // CompileUnit metadata, not input bytes. Two distinct admitted
-    // inputs agree on those substrate bits — they identify the
-    // typed-iso path, not bytewise input identity.
-    let mut p_a = [0u8; 76];
-    p_a[0] = 0x01;
-    let mut p_b = [0u8; 76];
-    p_b[0] = 0x02;
-
-    let ga = forward_permissive(MiningTask::new(p_a, PERMISSIVE_TARGET_BYTES));
-    let gb = forward_permissive(MiningTask::new(p_b, PERMISSIVE_TARGET_BYTES));
-
-    assert_eq!(ga.content_fingerprint(), gb.content_fingerprint());
-    assert_eq!(ga.unit_address(), gb.unit_address());
-    assert_eq!(ga.witt_level_bits(), gb.witt_level_bits());
+    // Distinct typed inputs (distinct nonces) yield distinct κ-labels —
+    // the σ-axis is collision-resistant, so distinct headers content-
+    // address to distinct sha256d block hashes.
+    let header = easy_header();
+    let a = forward_kappa_label(&header, 0x01);
+    let b = forward_kappa_label(&header, 0x02);
+    assert_ne!(a, b, "distinct typed inputs must yield distinct κ-labels");
 }
 
 #[test]
 fn mine_admits_within_a_few_template_variations_against_permissive_target() {
-    // Each mine() call is one structural inference: ψ_9 deterministically
-    // κ-derives a nonce, foundation's `run_route` evaluates the
-    // TargetCommitment on the κ-label. For a permissive target
-    // (regtest's 0x207fffff: ~50% admission probability per
-    // κ-derivation), iterating a small number of template variations
-    // (varying the timestamp) finds an admitting κ-candidate.
-    let base = easy_header();
+    // mine() scans the nonce space; for a permissive target (regtest's
+    // 0x207fffff, ~50% admission per κ-derivation) the first admitting
+    // nonce arrives almost immediately. Fail-closed: Ok means the digest
+    // genuinely satisfies the target (admission was evaluated inside
+    // foundation's run_route via the pinned TargetCommitment).
+    let header = easy_header();
     let target = Target::new(0x207fffff);
+    let outcome = mine(&header, target).expect("permissive target must admit");
 
-    let outcome = (0u32..32)
-        .find_map(|ts_offset| {
-            let mut h = base.clone();
-            h.timestamp = Timestamp(base.timestamp.0.wrapping_add(ts_offset));
-            mine(&h, target).ok()
-        })
-        .expect("permissive target must admit within a small variation window");
-
-    // Fail-closed: mine() returning Ok means the digest genuinely
-    // satisfies the target (admission was evaluated inside foundation's
-    // `run_route` via the model's pinned `TargetCommitment`).
     assert!(target.is_satisfied_by_bytes(&outcome.digest));
-    assert_eq!(outcome.witness.output_bytes().len(), 32);
+    assert!(outcome.address.starts_with("sha256d:"));
+    assert_eq!(outcome.address.len(), 72);
     assert_eq!(outcome.wire_format_header.len(), 80);
+    // The replayable witness re-certifies to the same κ-label (TC-05).
+    assert_eq!(outcome.witness.verify().expect("replays"), outcome.address);
+    // The receiver-side lens projects the block hash's UOR coordinates.
     assert_eq!(outcome.observables.coords.datum, outcome.digest);
+}
+
+#[test]
+fn mine_at_single_inference_admits_for_permissive_target() {
+    // A single inference at one nonce against the permissive target.
+    let header = easy_header();
+    let target = Target::new(0x207fffff);
+    // Find the first admitting nonce via mine(), then re-derive it at
+    // that nonce with mine_at() — they must agree.
+    let scanned = mine(&header, target).expect("permissive target admits");
+    let pinned =
+        mine_at(&header, target, scanned.nonce).expect("mine_at admits at the winning nonce");
+    assert_eq!(pinned.address.as_str(), scanned.address.as_str());
+    assert_eq!(pinned.digest, scanned.digest);
+}
+
+#[test]
+fn mine_at_did_not_admit_is_typed_for_restrictive_target() {
+    // A restrictive mainnet-style target rejects nonce 0 for this
+    // template; DidNotAdmit carries the total receiver-side lens.
+    let header = easy_header();
+    let target = Target::new(0x1d00ffff);
+    match mine_at(&header, target, 0) {
+        Err(MiningFailure::DidNotAdmit {
+            nonce,
+            digest,
+            observables,
+        }) => {
+            assert_eq!(nonce, 0);
+            assert!(!target.is_satisfied_by_bytes(&digest));
+            assert_eq!(observables.coords.datum, digest);
+        }
+        other => panic!("expected DidNotAdmit at nonce 0, got {other:?}"),
+    }
+}
+
+#[test]
+fn wire_format_header_carries_prefix_and_nonce() {
+    // The 80-byte wire-format header the outcome carries is exactly
+    // serialize_prefix(header) ‖ nonce.to_le_bytes() — the bytes
+    // `submitblock` accepts.
+    let header = easy_header();
+    let target = Target::new(0x207fffff);
+    let outcome = mine(&header, target).expect("admits");
+    let prefix = serialize_prefix(&header);
+    assert_eq!(
+        &outcome.wire_format_header[..76],
+        &prefix[..],
+        "leading 76 bytes are the host-supplied template prefix"
+    );
+    assert_eq!(
+        &outcome.wire_format_header[76..80],
+        &outcome.nonce.to_le_bytes(),
+        "trailing 4 bytes are the winning nonce (canonical LE)"
+    );
 }

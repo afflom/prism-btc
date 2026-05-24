@@ -31,9 +31,18 @@
 //! Run: `cargo test -p prism-btc --release --test mainnet`
 
 use prism_btc::{
-    mine, Bits, BlockHeader, CampaignStats, MerkleRoot, MiningFailure, Target, Timestamp, Version,
-    STRATUM_BINS,
+    mine_at, Bits, BlockHeader, CampaignStats, MerkleRoot, MiningFailure, Target, Timestamp,
+    Version, STRATUM_BINS,
 };
+
+// Each statistical trial is a *single* inference at a fixed nonce — one
+// Bernoulli(α) draw. The header varies per `seed` (distinct prev_hash /
+// merkle_root / timestamp → distinct κ-derivation), so successive trials
+// are independent. `mine()` (which scans the whole nonce space until it
+// admits) is the wrong primitive here: at a permissive target it would
+// admit at nonce 0 every call (empirical α ≡ 1), and at mainnet difficulty
+// it would scan 2³² nonces and never return.
+const TRIAL_NONCE: u32 = 0;
 
 /// Representative mainnet-difficulty `nBits` values, spanning Bitcoin's
 /// difficulty history from genesis (2009) to current epochs (2025+).
@@ -106,13 +115,14 @@ fn cm2_pipeline_inference_succeeds_at_every_mainnet_difficulty() {
         let mut admitted_or_observed = 0u64;
         for seed in 0..ATTEMPTS_PER_DIFFICULTY {
             let header = synthetic_mainnet_header(nbits, seed);
-            match mine(&header, target) {
+            match mine_at(&header, target, TRIAL_NONCE) {
                 Ok(outcome) => {
                     assert_eq!(
-                        outcome.witness.output_bytes().len(),
-                        80,
-                        "CM-2 nBits=0x{nbits:08x}: κ-label must be 80 bytes"
+                        outcome.address.len(),
+                        72,
+                        "CM-2 nBits=0x{nbits:08x}: κ-label must be the 72-byte sha256d address"
                     );
+                    assert!(outcome.address.starts_with("sha256d:"));
                     admitted_or_observed += 1;
                 }
                 Err(MiningFailure::DidNotAdmit {
@@ -167,7 +177,7 @@ fn cm3_aggregate_observatory_matches_prf_baseline_at_n_10000() {
     let mut campaign = CampaignStats::new();
     for seed in 0..N {
         let header = synthetic_mainnet_header(REGTEST_NBITS, seed);
-        match mine(&header, target) {
+        match mine_at(&header, target, TRIAL_NONCE) {
             Ok(outcome) => {
                 campaign.record_admission(&outcome);
             }
@@ -317,7 +327,7 @@ fn cm5_empirical_alpha_converges_to_theoretical_at_n_10000() {
 }
 
 fn record_one(campaign: &mut CampaignStats, header: &BlockHeader, target: Target) {
-    match mine(header, target) {
+    match mine_at(header, target, TRIAL_NONCE) {
         Ok(outcome) => campaign.record_admission(&outcome),
         Err(MiningFailure::DidNotAdmit {
             observables,

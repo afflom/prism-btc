@@ -160,17 +160,17 @@ testnet4-up:
 testnet4-status:
     bitcoin-cli -datadir="${PRISM_TESTNET4_DATA:-$HOME/testnet4-data}" getblockchaininfo
 
-# Run prism-mine against testnet4. The mining inference is identical
+# Run prism-mine against testnet4. The addressing inference is identical
 # across regtest / signet / testnet / testnet4 / mainnet: same
-# `BitcoinMiningModel`, same `mining_inference` verb (k-invariant
-# branch ψ_1 → ψ_7 → ψ_8 → ψ_9), same `BitcoinResolverTuple`. The
+# `BitcoinAddressModel`, same `block_address_inference` verb (k-invariant
+# branch ψ_1 → ψ_7 → ψ_8 → ψ_9), same shared `AddressResolverTuple`. The
 # network-dependent value is the runtime byte threshold decoded from
-# `getblocktemplate.bits` and carried in `MiningTask.target`. Each
-# call to `mine()` is one structural inference per `MiningTask`:
-# ψ_9 deterministically κ-derives a wire-format header candidate
-# from the typed input (one σ-projection, no enumeration); the host
-# boundary checks σ(header) ≤ target. On `DidNotAdmit`, the bitcoind
-# boundary rolls the extranonce and re-invokes.
+# `getblocktemplate.bits` and carried in the model's `TargetCommitment`.
+# Each addressing inference folds the 80-byte header carrier through the
+# `sha256d` σ-axis to the block-hash κ-label; foundation's `run_route`
+# checks `block_hash ≤ target` via the commitment. `mine()` scans the
+# nonce space; on `DidNotAdmit`, the bitcoind boundary rolls the
+# extranonce and re-invokes.
 testnet4-mine BLOCKS="1" DURATION_SEC="300":
     #!/usr/bin/env bash
     set -euo pipefail

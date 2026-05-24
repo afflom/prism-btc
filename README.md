@@ -1,11 +1,12 @@
 # prism-btc
 
-Bitcoin proof-of-work as **pure-prism structural inference** — a Prism
+Bitcoin proof-of-work as a **UOR-ADDR realization** — a Prism
 application of the [UOR Foundation](https://github.com/UOR-Foundation/UOR-Framework).
-prism-btc declares Bitcoin's typed feature primitives, composes them
-hierarchically via foundation's tensor algebras, and lets the ψ-pipeline
-generate the wire-format-valid block bytes as the structural label.
-No σ-enumeration in the verb body; mining is not an algorithm.
+prism-btc content-addresses Bitcoin block headers through uor-addr's
+shared addressing surface: a block header is the canonical-form input,
+the `sha256d` σ-axis is the content-addressing primitive, and the κ-label
+the ψ-pipeline emits — `sha256d:<64hex>` — is the conventional Bitcoin
+block hash. No σ-enumeration in the verb body; mining is not an algorithm.
 
 > **Normative architecture:** see [ARCHITECTURE.md](ARCHITECTURE.md). The
 > repository is reconciled to it; ARCHITECTURE.md is the pure-prism
@@ -13,9 +14,10 @@ No σ-enumeration in the verb body; mining is not an algorithm.
 >
 > **Substrate:** [UOR-Framework wiki](https://github.com/UOR-Foundation/UOR-Framework/wiki)
 > (ADR-024 verb declarations, ADR-030 canonical hash axis, ADR-035
-> ψ-chain Term variants + ψ-residuals discipline, ADR-036 `ResolverTuple`,
-> ADR-037 `HostBounds`-parametric capacity ceilings, ADR-041
-> typed-coordinate resolver carriers). Foundation's SDK enforces the
+> ψ-chain Term variants + ψ-residuals discipline, ADR-036 shared
+> `AddressResolverTuple`, ADR-037 `HostBounds`-parametric capacity
+> ceilings, ADR-041 typed-coordinate resolver carriers, ADR-060 borrowed
+> canonical-form carrier, ADR-061 composition framework). Foundation's SDK enforces the
 > ψ-residuals discipline at proc-macro expansion: `<=` / `<` / `>=` /
 > `>` / `concat(...)` / `first_admit(...)` / `hash(...)` are rejected
 > in verb bodies with error messages naming `k_invariants(homotopy_groups(
@@ -27,23 +29,22 @@ No σ-enumeration in the verb body; mining is not an algorithm.
 
 prism-btc implements the prism conceptual model without compromise. We
 declare Bitcoin's typed primitives (`Version`, `PrevHash`, `MerkleRoot`,
-`Timestamp`, `Bits`, `Nonce`, `Target`), compose them hierarchically into
-typed feature shapes (`TemplatePrefix`, `Header`, `MiningTask`,
-`MiningResult`) via foundation's tensor algebras (`partition:PartitionProduct`,
-`operad:OperadComposition`, `monoidal:MonoidalProduct`), and apply the
-ψ-pipeline transform's k-invariant branch (`nerve → postnikov_tower →
-homotopy_groups → k_invariants`) to derive the structural label.
+`Timestamp`, `Bits`, `Nonce`, `Target`), serialize a block header to its
+80-byte wire form (the ADR-060 canonical form), wrap it in a borrowed
+`BlockHeaderCarrier`, and run the **shared** uor-addr ψ-tower's
+k-invariant branch (`nerve → postnikov_tower → homotopy_groups →
+k_invariants`) to mint the content-address κ-label.
 
 What's *not* in prism-btc: σ-enumeration, FirstAdmit-shaped search,
 hash-rate metrics, "CPU mining time" framing. Those are algorithmic
-framings. prism declares relationships, applies parametric tensor-algebra
-functors, and generates labels.
+framings. prism declares relationships, folds the canonical-form carrier
+through the shared ψ-tower, and generates κ-labels.
 
-## The mining transform
+## The block-address transform
 
 ```rust
 verb! {
-    pub fn mining_inference(input: MiningTask) -> MiningResult {
+    pub fn block_address_inference(input: BlockHeaderCarrier<'_>) -> BlockAddressLabel {
         k_invariants(homotopy_groups(postnikov_tower(nerve(input))))
     }
 }
@@ -52,34 +53,34 @@ verb! {
 The verb body lowers to the ψ-Term variants `Term::Nerve` (ψ_1) →
 `Term::PostnikovTower` (ψ_7) → `Term::HomotopyGroups` (ψ_8) →
 `Term::KInvariants` (ψ_9) — the **k-invariant branch** of the ψ-pipeline.
-Foundation's catamorphism evaluates the chain end-to-end, dispatching
-each ψ-stage through prism-btc's `BitcoinResolverTuple`. The terminal
-ψ_9 resolver performs the **structural κ-derivation**: it projects the
-typed `MiningTask` to a 32-byte content-address via the canonical hash
-axis and pins the four nonce-byte sites (positions 76..80) to the
-leading four bytes in canonical Bitcoin little-endian. One σ-projection
-per `forward()` — deterministic in the typed input, no enumeration.
-The emitted 80 bytes ARE the wire-format Bitcoin header by construction
-(architecture §4, §6).
+Foundation's catamorphism evaluates the chain end-to-end through uor-addr's
+**shared, format-independent** `AddressResolverTuple` ψ-tower. Under
+ADR-060, ψ₁–ψ₈ thread the borrowed header carrier through unchanged, and
+the terminal ψ_9 folds the carrier through the `sha256d` σ-axis and emits
+the `sha256d:<64hex>` κ-label — the conventional Bitcoin block hash in
+display order. Canonicalization (wire serialization) happens at the host
+boundary, not in a resolver. One σ-fold per `forward()` — deterministic
+in the typed input, no enumeration. prism-btc carries no resolver code;
+it binds the shared tower (architecture §4, §6).
 
-## The mining model
+## The block-address model
 
 ```rust
 prism_model! {
-    pub struct BitcoinMiningModel;
-    pub struct BitcoinMiningRoute;
+    pub struct BitcoinAddressModel;
+    pub struct BitcoinAddressRoute;
     impl PrismModel<
         DefaultHostTypes,
         PrismBtcBounds,
         Sha256dHasher,
-        BitcoinResolverTuple<Sha256dHasher>,
+        uor_addr::AddressResolverTuple<Sha256dHasher>,
         TargetCommitment                      // ← ADR-048 5th-position
-    > for BitcoinMiningModel {
-        type Input = MiningTask;
-        type Output = MiningResult;
-        type Route = BitcoinMiningRoute;
+    > for BitcoinAddressModel {
+        type Input = BlockHeaderCarrier<'a>;
+        type Output = BlockAddressLabel;
+        type Route = BitcoinAddressRoute;
         fn route(input: Self::Input) -> Self::Output {
-            mining_inference(input)
+            block_address_inference(input)
         }
         fn commitment() -> TargetCommitment {
             target_commitment(current_thread_target())
@@ -88,27 +89,27 @@ prism_model! {
 }
 ```
 
-`BitcoinMiningModel::forward(task: MiningTask) -> Result<Grounded<MiningResult>, _>`
+`BitcoinAddressModel::forward(carrier: BlockHeaderCarrier) -> Result<Grounded<BlockAddressLabel>, _>`
 is the canonical typed-iso surface (wiki ADR-020 + ADR-036 + ADR-048
-5-position form, foundation 0.4.12). The 5th-position
-`C = TargetCommitment` is foundation's alias for
-`SingletonCommitment<LexicographicLessEqThreshold>` (wiki ADR-040 +
-ADR-049). **Bitcoin proof-of-work is realized as a typed admission
-relation inside the typed-iso surface:** the catamorphism seals a
-`Grounded<MiningResult>` only when `LexicographicLessEqThreshold`
+5-position form). The 5th-position `C = TargetCommitment` is foundation's
+alias for `SingletonCommitment<LexicographicLessEqThreshold>` (wiki
+ADR-040 + ADR-049). **Bitcoin proof-of-work is realized as a typed
+admission relation inside the typed-iso surface:** the catamorphism seals
+a `Grounded<BlockAddressLabel>` only when `LexicographicLessEqThreshold`
 holds on the κ-label, so the existence of the sealed value is
-**constructive proof that Bitcoin's `digest ≤ target` admission
-relation holds at the framework level.** There is no separate
-"verify admission" step — admission is a premise of the type being
-constructed. The seal is the certificate; its `output_bytes()` carry
-the 32-byte SHA-256d κ-label.
+**constructive proof that Bitcoin's `block_hash ≤ target` admission
+relation holds at the framework level** (the target is expressed in
+κ-label form, and equal-length lowercase-hex lexicographic order is
+big-endian integer order). There is no separate "verify admission" step —
+admission is a premise of the type being constructed. The seal is the
+certificate; ψ_9's output is the 72-byte `sha256d:<64hex>` κ-label.
 
 ## Workspace
 
 | Crate | Role |
 |---|---|
-| [`prism-btc`](crates/prism-btc/) | The pure-prism domain layer. Declares Bitcoin's typed feature hierarchy, the ψ-chain verb, `BitcoinMiningModel`, `BitcoinResolverTuple`, and the public `mine()` entry point. Pure-Rust SHA-256 for the canonical hash axis. |
-| [`prism-btc-node`](crates/prism-btc-node/) | bitcoind RPC boundary. `getblocktemplate → BitcoinMiningModel::forward → submitblock`. `prism-mine` CLI binary. |
+| [`prism-btc`](crates/prism-btc/) | The pure-prism domain layer. Declares Bitcoin's typed primitives, the `BlockHeaderCarrier` input + `BlockAddressLabel` output shapes, the ψ-chain verb, `BitcoinAddressModel` (binding the shared uor-addr ψ-tower), the ADR-061 `sha256d` composition reference impl, and the public `mine()` entry point. Pure-Rust SHA-256 for the `sha256d` σ-axis. |
+| [`prism-btc-node`](crates/prism-btc-node/) | bitcoind RPC boundary. `getblocktemplate → BitcoinAddressModel::forward → submitblock`. `prism-mine` CLI binary. |
 | [`prism-btc-wasm`](crates/prism-btc-wasm/) | `wasm-bindgen` JS surface around `prism_btc::mine`. |
 | [`prism-btc-lean/`](prism-btc-lean/) | Lean 4 formal proofs: ring identity (W8/W32), triadic coordinates, FreeRank protocol, shape-constraint monotonicity, convergence protocol. |
 
@@ -117,32 +118,33 @@ the 32-byte SHA-256d κ-label.
 | Axis | prism-btc selection |
 |---|---|
 | `HostTypes` | `DefaultHostTypes` (foundation default) |
-| `HostBounds` | [`PrismBtcBounds`](crates/prism-btc/src/shapes/bounds.rs) — `WITT_LEVEL_MAX_BITS = 32`, `FINGERPRINT_{MIN,MAX}_BYTES = 32`, `TRACE_MAX_EVENTS = 64`, `NERVE_SITES_MAX = 80`, `NERVE_CONSTRAINTS_MAX = 128`, `BETTI_DIMENSION_MAX = 80` |
-| `Hasher` | [`Sha256dHasher`](crates/prism-btc/src/shapes/hasher.rs) — pure-Rust SHA-256-then-SHA-256. The canonical hash axis is a **content-addressing primitive**, not an algorithm prism-btc runs. |
-| `ResolverTuple` | [`BitcoinResolverTuple`](crates/prism-btc/src/resolvers.rs) — Bitcoin-specific realization of the eight resolver-bound ψ-stages (ψ_1, ψ_2, ψ_3, ψ_5, ψ_6, ψ_7, ψ_8, ψ_9; ψ_4 Betti is resolver-free). |
+| `HostBounds` | [`PrismBtcBounds`](crates/prism-btc/src/shapes/bounds.rs) — a type alias for the shared [`uor_addr::AddrBounds`](crates/prism-btc/src/shapes/bounds.rs) profile. Under ADR-060 there are no fixed per-ψ-stage byte ceilings; the carrier is a source-polymorphic `TermValue`. |
+| `Hasher` | [`Sha256dHasher`](crates/prism-btc/src/shapes/hasher.rs) — pure-Rust SHA-256-then-SHA-256, finalizing in Bitcoin display order. The `sha256d` σ-axis is a **content-addressing primitive**, not an algorithm prism-btc runs; it implements foundation `Hasher<32>` **and** `uor_addr::AddrHash`. |
+| `ResolverTuple` | [`uor_addr::AddressResolverTuple<Sha256dHasher>`](crates/prism-btc/src/model.rs) — uor-addr's **shared, format-independent** ψ-tower (ADR-036). prism-btc owns no resolver code; under ADR-060 ψ₁–ψ₈ are pass-throughs and ψ₉ folds the carrier through `sha256d`. |
 
 ## Witness construction + bit-identicality (architecture §6)
 
 `mine(header, target)` is the canonical entry. Internally it
-publishes the target on the thread-local commitment slot and invokes
-`BitcoinMiningModel::forward(task)`. **The catamorphism constructs a
-sealed `Grounded<MiningResult>` only when admission holds** — the
-seal itself is the witness that Bitcoin's PoW admission relation
-held on this κ-label. There is no host-boundary recomputation of the
-σ-projection. Foundation's `Grounded<MiningResult>` carries the
-32-byte SHA-256d κ-label as `output_bytes()`; the 80-byte wire-format
-Bitcoin header is reconstructed for `submitblock` at the prism-btc
-boundary and surfaced on the success path as
-`MiningOutcome.wire_format_header: [u8; 80]`.
+publishes the target's κ-label form on the thread-local commitment slot,
+serializes `(header, nonce)` to the 80-byte wire form, wraps it in a
+`BlockHeaderCarrier`, and invokes `BitcoinAddressModel::forward(carrier)`.
+**The catamorphism constructs a sealed `Grounded<BlockAddressLabel>` only
+when admission holds** — the replayable TC-05 `AddressWitness` it carries
+is the witness that Bitcoin's PoW admission relation held on this κ-label.
+The `sha256d:<64hex>` κ-label ψ_9 emits is the conventional block hash;
+the 80-byte wire-format header is surfaced on the success path as
+`MiningOutcome.wire_format_header: [u8; 80]` for the `submitblock` path,
+and the 32-byte display-order digest as `MiningOutcome.digest`.
 
 When the catamorphism does not seal, foundation reports
 `PipelineFailure::ShapeViolation` with the
 `commitment/TypedCommitment/VIOLATED` shape IRI and prism-btc
 classifies that as
-`Err(MiningFailure::DidNotAdmit { observables, nonce, digest })`. The
-host boundary varies the template (extranonce roll → distinct
-`MiningTask` → distinct κ-derivation) and retries, folding each
-attempt's typed property landscape into a `CampaignStats` aggregate.
+`Err(MiningFailure::DidNotAdmit { observables, nonce, digest })`. `mine`
+varies the nonce and retries; the host boundary varies the template
+(extranonce roll → distinct merkle root → distinct κ-label) and retries,
+folding each attempt's typed property landscape into a `CampaignStats`
+aggregate.
 
 **The receiver-side typed lens (`KappaObservables`) is total** —
 present on `Ok(MiningOutcome)` and on `DidNotAdmit` alike. Every
@@ -151,19 +153,19 @@ giving the host operator typed visibility into the search at session
 granularity.
 
 **Fail-closed by construction.** `mine()` never returns an outcome
-whose κ-label does not admit, because the type `MiningOutcome`
-itself can only be constructed from a sealed `Grounded<MiningResult>`,
-and the seal is contingent on the catamorphism's admission predicate.
-The typed-iso gate is not a runtime check the implementation could
-forget; it is a premise of the return type's existence.
+whose κ-label does not admit, because `MiningOutcome` can only be
+constructed from a sealed `Grounded<BlockAddressLabel>`, and the seal is
+contingent on the catamorphism's admission predicate. The typed-iso gate
+is not a runtime check the implementation could forget; it is a premise
+of the return type's existence.
 
 prism-btc's transform is structural: the typed-iso surface maps
-`MiningTask → 32-byte κ-label` deterministically via the ψ-pipeline,
-and the catamorphism seals iff `TargetCommitment` admits. There is
-no inner search loop, no nonce enumeration, no "hashrate" metric.
-The reconstructed wire-format header (`outcome.wire_format_header`)
-is byte-for-byte what Bitcoin Core's `submitblock` accepts because
-both reach the same canonical serialization.
+`BlockHeaderCarrier → 72-byte sha256d κ-label` deterministically via the
+ψ-pipeline, and the catamorphism seals iff `TargetCommitment` admits.
+`mine` scans the nonce space; there is no inner σ-enumeration in the verb
+body, no "hashrate" metric. The wire-format header
+(`outcome.wire_format_header`) is byte-for-byte what Bitcoin Core's
+`submitblock` accepts because both reach the same canonical serialization.
 
 **Cost-model = proof-of-work, by construction.** The Lean theorem
 `Commitment.prf_prob_tight_wellFormed` (wiki ADR-047 U6) says
@@ -178,44 +180,41 @@ axis (Blake3, Keccak, post-quantum) preserves the framework-level
 admission proof — Bitcoin is the realization-witness that the cost
 model holds at a deployed PoW protocol at mainnet difficulty.
 
-**Network-invariant.** Same `BitcoinMiningModel`, same ψ-pipeline verb
-body, same `BitcoinResolverTuple`, same κ-derivation, same
-`TargetCommitment` shape across regtest, signet, testnet, testnet4,
+**Network-invariant.** Same `BitcoinAddressModel`, same ψ-pipeline verb
+body, same shared `AddressResolverTuple` ψ-tower, same `sha256d` σ-axis,
+same `TargetCommitment` shape across regtest, signet, testnet, testnet4,
 and mainnet. The network-dependent value is the byte threshold from
 the template's `Bits` field; that threshold pins the
-`LexicographicLessEqThreshold::target` for the call. From outside,
-`forward()` is **one structural inference per `MiningTask`** at
-constant cost — the network-dependent quantity is the number of
-template variations the host attempts, not the cost per attempt.
+`LexicographicLessEqThreshold::target` (in κ-label form) for the call.
+From outside, `forward()` is **one structural inference per
+`BlockHeaderCarrier`** at constant cost — the network-dependent quantity
+is the number of nonce/template variations the host attempts, not the
+cost per attempt.
 
 ## Algebraic-closure encoding
 
-`MiningResult::CONSTRAINTS` declares 32 disjoint `ConstraintRef::Site`
-instances — one per κ-label digest byte. The constraint nerve has 32
-isolated vertices with no higher simplices; β_0 = 32, β_k = 0 for
-k ≥ 1, χ = SITE_COUNT = 32 — the UOR Index Theorem IT_7d
+`BlockAddressLabel::CONSTRAINTS` declares 72 disjoint `ConstraintRef::Site`
+instances — one per κ-label ASCII byte (`sha256d:<64hex>`). The constraint
+nerve has 72 isolated vertices with no higher simplices; β_0 = 72, β_k = 0
+for k ≥ 1, χ = SITE_COUNT = 72 — the UOR Index Theorem IT_7d
 algebraic-closure criterion is satisfied at the declaration level
-(architecture §2.3). All 32 sites are **κ-pinned by ψ_9
-simultaneously**: ψ_9 structurally κ-derives the 4-byte nonce from
-the typed `MiningTask` via the canonical hash axis, reconstructs the
-80-byte wire-format Bitcoin header from `(template_prefix,
-derived_nonce)`, and emits `SHA-256d(wire_format_header)` as the
-32-byte κ-label. `FreeRank` drops from 32 to 0 in this single
-terminal stage; convergence at the typed-iso surface is then handed
-to foundation's `run_route` for the `TargetCommitment::evaluate` gate.
+(architecture §2.3). The nonce is an explicit input field of the header
+carrier, not a structurally-derived site. ψ_9 folds the borrowed carrier
+through the `sha256d` σ-axis and emits the display-order κ-label;
+convergence at the typed-iso surface is then handed to foundation's
+`run_route` for the `TargetCommitment::evaluate` gate.
 
-## Diagnostic surface
+## Witness surface
 
-ψ_9 records a [`ResolutionState`](crates/prism-btc/src/diagnostics.rs)
-for every `forward()` call — `free_rank` (always 0 at the terminal
-ψ-stage's convergence) plus `derived_nonce` (the κ-derivation that
-pinned the four nonce-byte sites). Available via
-`MiningOutcome.resolution` (the `Ok` path) and the public
-`take_resolution_state()` function (the `Err` path and direct
-`forward()` callers). `prism-btc-node`'s `MinedBlock` summary
-includes the resolution state plus the host-boundary
-`extranonce_attempts` counter for end-to-end observability across
-the typed-iso surface + the template-variation loop.
+Every admitting `forward()` yields a replayable TC-05
+[`AddressWitness<72, 32>`](crates/prism-btc/src/pipeline.rs) (alias
+`MiningWitness`) — it owns its derivation trace plus content fingerprint,
+and `.verify()` re-certifies the κ-label without re-invoking the σ-axis.
+This witness **is** the proof-of-work witness — the catamorphism's seal.
+It is surfaced on the `Ok` path as `MiningOutcome.witness`.
+`prism-btc-node`'s `MinedBlock` summary includes the winning nonce plus
+the host-boundary `extranonce_attempts` counter for end-to-end
+observability across the typed-iso surface + the template-variation loop.
 
 ## Quick start
 
@@ -311,10 +310,10 @@ prism-mine \
   --blocks 1
 ```
 
-The mining inference is identical across regtest, signet, testnet,
-testnet4, and mainnet: same `BitcoinMiningModel`, same ψ-pipeline verb
-body, same `BitcoinResolverTuple`. The network-dependent value is the
-runtime byte threshold encoded in the template's `Bits` field.
+The block-address inference is identical across regtest, signet, testnet,
+testnet4, and mainnet: same `BitcoinAddressModel`, same ψ-pipeline verb
+body, same shared `AddressResolverTuple` ψ-tower. The network-dependent
+value is the runtime byte threshold encoded in the template's `Bits` field.
 
 **Safety airlocks:**
 - **Chain-mismatch guard**: refuses to mine if `getblockchaininfo.chain`
