@@ -244,11 +244,11 @@ fn cs4_foundation_observable_predicates_cover_five_canonical_families() {
 
 #[test]
 fn cs5_mining_outcome_carries_observables() {
-    // CS-5: every MiningOutcome carries `observables: KappaObservables`
-    // as a non-optional field — the receiver-side typed lens is always
-    // present.
+    // CS-5: every MiningOutcome exposes `observables: KappaObservables`
+    // — the receiver-side typed lens is always available as a projection
+    // of the witness + canonical-form bytes (L3, L5).
     fn project_observables(outcome: prism_btc::MiningOutcome) -> KappaObservables {
-        outcome.observables
+        outcome.observables()
     }
     let header = permissive_header(1_700_000_000);
     let target = Target::new(REGTEST_NBITS);
@@ -306,7 +306,7 @@ fn cd1_mine_admits_under_target_commitment() {
         let header = permissive_header(1_700_000_000_u32.wrapping_add(ts));
         if let Some(outcome) = admit_within(&header, target, 1024) {
             assert!(
-                target.is_satisfied_by_bytes(&outcome.digest),
+                target.is_satisfied_by_bytes(&outcome.digest()),
                 "CD-1: mine_at() Ok ⇒ digest must satisfy target"
             );
             admitted = true;
@@ -398,13 +398,12 @@ fn cd3_observables_agree_with_per_primitive_computation() {
     for ts in 0u32..16 {
         let header = permissive_header(1_700_000_000_u32.wrapping_add(ts));
         if let Some(outcome) = admit_within(&header, target, 1024) {
-            let canonical = TriadicCoords::from_hash(&outcome.digest);
-            assert_eq!(outcome.observables.coords, canonical);
+            let digest = outcome.digest();
+            let observables = outcome.observables();
+            let canonical = TriadicCoords::from_hash(&digest);
+            assert_eq!(observables.coords, canonical);
             for (i, &p) in CANONICAL_PRIMES.iter().enumerate() {
-                assert_eq!(
-                    outcome.observables.p_adic[i],
-                    p_adic_valuation(&outcome.digest, p),
-                );
+                assert_eq!(observables.p_adic[i], p_adic_valuation(&digest, p),);
             }
             checked += 1;
         }
@@ -635,9 +634,7 @@ fn mining_failure_is_typed_and_carries_total_observability_lens() {
         }
     }
     let mock_did_not_admit = MiningFailure::DidNotAdmit {
-        observables: KappaObservables::from_digest(&[0u8; 32]),
-        nonce: 0,
-        digest: [0u8; 32],
+        wire_format_header: [0u8; 80],
     };
     assert_eq!(
         exhaustive_failure_match(mock_did_not_admit),

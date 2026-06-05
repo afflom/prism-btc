@@ -35,10 +35,11 @@ pub fn mine_block(js_header: &JsBlockHeader, nbits: u32) -> Result<JsBlockAddres
     for nonce in 0u32..=u32::MAX {
         match mine_at(&header, target, nonce) {
             Ok(outcome) => {
+                let coords = outcome.observables().coords;
                 return Ok(JsBlockAddress::new(
-                    outcome.observables.coords.datum,
-                    outcome.observables.coords.stratum,
-                    outcome.observables.coords.spectrum,
+                    coords.datum,
+                    coords.stratum,
+                    coords.spectrum,
                 ));
             }
             Err(MiningFailure::DidNotAdmit { .. }) => continue,

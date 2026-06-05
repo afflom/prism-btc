@@ -150,7 +150,7 @@ impl PrismMiner {
 
             match scan_template_nonces(&job.header, job.target, &mut campaign)? {
                 Some(outcome) => {
-                    let nonce = outcome.nonce;
+                    let nonce = outcome.nonce();
                     let witness = outcome.witness;
                     let block = job.assemble(nonce);
                     self.client
@@ -230,11 +230,9 @@ fn scan_template_nonces(
                 campaign.record_admission(&outcome);
                 return Ok(Some(outcome));
             }
-            Err(MiningFailure::DidNotAdmit {
-                observables,
-                digest,
-                ..
-            }) => {
+            Err(f @ MiningFailure::DidNotAdmit { .. }) => {
+                let digest = f.digest().expect("DidNotAdmit carries a digest");
+                let observables = f.observables().expect("DidNotAdmit carries observables");
                 campaign.record_attempt(&observables, &digest);
             }
             Err(MiningFailure::PipelineFailure) => {

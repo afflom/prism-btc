@@ -122,14 +122,17 @@ fn admit_by_nonce_scan_lands_a_witness_against_permissive_target() {
     let target = Target::new(0x207fffff);
     let outcome = admit_by_nonce_scan(&header, target);
 
-    assert!(target.is_satisfied_by_bytes(&outcome.digest));
-    assert!(outcome.address.starts_with("sha256d:"));
-    assert_eq!(outcome.address.len(), 72);
+    assert!(target.is_satisfied_by_bytes(&outcome.digest()));
+    assert!(outcome.address().starts_with("sha256d:"));
+    assert_eq!(outcome.address().len(), 72);
     assert_eq!(outcome.wire_format_header.len(), 80);
     // The replayable witness re-certifies to the same κ-label (TC-05).
-    assert_eq!(outcome.witness.verify().expect("replays"), outcome.address);
+    assert_eq!(
+        outcome.witness.verify().expect("replays"),
+        outcome.address()
+    );
     // The receiver-side lens projects the block hash's UOR coordinates.
-    assert_eq!(outcome.observables.coords.datum, outcome.digest);
+    assert_eq!(outcome.observables().coords.datum, outcome.digest());
 }
 
 #[test]
@@ -141,9 +144,9 @@ fn mine_at_re_recognizes_the_winning_nonce() {
     let target = Target::new(0x207fffff);
     let scanned = admit_by_nonce_scan(&header, target);
     let pinned =
-        mine_at(&header, target, scanned.nonce).expect("mine_at re-recognizes the winning nonce");
-    assert_eq!(pinned.address.as_str(), scanned.address.as_str());
-    assert_eq!(pinned.digest, scanned.digest);
+        mine_at(&header, target, scanned.nonce()).expect("mine_at re-recognizes the winning nonce");
+    assert_eq!(pinned.address().as_str(), scanned.address().as_str());
+    assert_eq!(pinned.digest(), scanned.digest());
 }
 
 #[test]
@@ -152,18 +155,16 @@ fn mine_at_did_not_admit_is_typed_for_restrictive_target() {
     // template; DidNotAdmit carries the total receiver-side lens.
     let header = easy_header();
     let target = Target::new(0x1d00ffff);
-    match mine_at(&header, target, 0) {
-        Err(MiningFailure::DidNotAdmit {
-            nonce,
-            digest,
-            observables,
-        }) => {
-            assert_eq!(nonce, 0);
-            assert!(!target.is_satisfied_by_bytes(&digest));
-            assert_eq!(observables.coords.datum, digest);
-        }
-        other => panic!("expected DidNotAdmit at nonce 0, got {other:?}"),
-    }
+    let failure = mine_at(&header, target, 0).expect_err("restrictive target rejects nonce 0");
+    assert!(matches!(failure, MiningFailure::DidNotAdmit { .. }));
+    let nonce = failure.nonce().expect("DidNotAdmit carries a nonce");
+    let digest = failure.digest().expect("DidNotAdmit carries a digest");
+    let observables = failure
+        .observables()
+        .expect("DidNotAdmit carries observables");
+    assert_eq!(nonce, 0);
+    assert!(!target.is_satisfied_by_bytes(&digest));
+    assert_eq!(observables.coords.datum, digest);
 }
 
 #[test]
@@ -182,7 +183,7 @@ fn wire_format_header_carries_prefix_and_nonce() {
     );
     assert_eq!(
         &outcome.wire_format_header[76..80],
-        &outcome.nonce.to_le_bytes(),
+        &outcome.nonce().to_le_bytes(),
         "trailing 4 bytes are the winning nonce (canonical LE)"
     );
 }

@@ -145,12 +145,13 @@ fn v_mine_admits_for_permissive_target() {
 
     // The κ-label IS the sha256d:<64hex> address; the hex is the display-
     // order block hash. Re-derive from the reconstructed wire-format header.
-    assert!(admitted.address.starts_with("sha256d:"));
-    assert_eq!(admitted.address.len(), 72);
+    assert!(admitted.address().starts_with("sha256d:"));
+    assert_eq!(admitted.address().len(), 72);
     let re_derived = sha256d_display(&admitted.wire_format_header);
     assert_eq!(
-        admitted.digest, re_derived,
-        "outcome.digest must equal SHA-256d(wire_format_header) in display order"
+        admitted.digest(),
+        re_derived,
+        "outcome.digest() must equal SHA-256d(wire_format_header) in display order"
     );
     assert!(
         target.is_satisfied_by_bytes(&re_derived),
@@ -180,8 +181,8 @@ fn v_mine_outcome_digest_actually_satisfies_target_when_admitted() {
         if let Some(outcome) = admitted {
             admitted_count += 1;
             assert!(
-                target.is_satisfied_by_bytes(&outcome.digest),
-                "fail-closed: outcome.digest must satisfy target whenever mine_at() returns Ok"
+                target.is_satisfied_by_bytes(&outcome.digest()),
+                "fail-closed: outcome.digest() must satisfy target whenever mine_at() returns Ok"
             );
         }
     }
@@ -235,7 +236,7 @@ fn v_kappa_label_is_sha256d_of_reconstructed_wire_format_header() {
     // The reconstructed wire-format header is byte-for-byte
     // serialize_header(header, winning_nonce). This is the bytes
     // `submitblock` accepts.
-    let manual_wire = serialize_header(&header, outcome.nonce);
+    let manual_wire = serialize_header(&header, outcome.nonce());
     assert_eq!(
         outcome.wire_format_header, manual_wire,
         "MiningOutcome.wire_format_header must be the canonical 80-byte serialization"
@@ -243,9 +244,10 @@ fn v_kappa_label_is_sha256d_of_reconstructed_wire_format_header() {
 
     // The κ-label hex is the display-order digest of that header.
     let expected_digest = sha256d_display(&manual_wire);
-    assert_eq!(outcome.digest, expected_digest);
+    assert_eq!(outcome.digest(), expected_digest);
     // The 64-hex tail of the κ-label encodes the display-order digest.
-    let hex_tail = &outcome.address.as_str()[8..];
+    let address = outcome.address();
+    let hex_tail = &address.as_str()[8..];
     let mut expected_hex = String::with_capacity(64);
     for b in expected_digest {
         expected_hex.push_str(&format!("{b:02x}"));
@@ -274,7 +276,7 @@ fn v_wire_format_header_preserves_the_host_supplied_prefix() {
     );
     assert_eq!(
         &outcome.wire_format_header[76..80],
-        &outcome.nonce.to_le_bytes(),
+        &outcome.nonce().to_le_bytes(),
         "wire_format_header's trailing 4 bytes are the winning nonce (canonical LE)"
     );
 }
@@ -316,10 +318,11 @@ fn v_model_declarations_invariant_across_network_byte_thresholds() {
         // is a valid 32-byte block hash.
         match mine_at(&header, target, 0) {
             Ok(outcome) => {
-                assert!(outcome.address.starts_with("sha256d:"));
-                assert_eq!(outcome.address.len(), 72);
+                assert!(outcome.address().starts_with("sha256d:"));
+                assert_eq!(outcome.address().len(), 72);
             }
-            Err(prism_btc::MiningFailure::DidNotAdmit { digest, .. }) => {
+            Err(ref f @ prism_btc::MiningFailure::DidNotAdmit { .. }) => {
+                let digest = f.digest().expect("DidNotAdmit carries a digest");
                 assert_eq!(digest.len(), 32);
             }
             Err(prism_btc::MiningFailure::PipelineFailure) => {
@@ -343,10 +346,11 @@ fn v_witness_replays_to_the_attested_kappa_label() {
 
     let replayed = outcome.witness.verify().expect("witness replays");
     assert_eq!(
-        replayed, outcome.address,
+        replayed,
+        outcome.address(),
         "witness re-certifies to the κ-label"
     );
-    assert_eq!(outcome.witness.kappa_label(), outcome.address);
+    assert_eq!(outcome.witness.kappa_label(), outcome.address());
     assert_eq!(outcome.witness.content_fingerprint().len(), 32);
 }
 

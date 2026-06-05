@@ -118,19 +118,17 @@ fn cm2_pipeline_inference_succeeds_at_every_mainnet_difficulty() {
             let header = synthetic_mainnet_header(nbits, seed);
             match mine_at(&header, target, TRIAL_NONCE) {
                 Ok(outcome) => {
+                    let address = outcome.address();
                     assert_eq!(
-                        outcome.address.len(),
+                        address.len(),
                         72,
                         "CM-2 nBits=0x{nbits:08x}: κ-label must be the 72-byte sha256d address"
                     );
-                    assert!(outcome.address.starts_with("sha256d:"));
+                    assert!(address.starts_with("sha256d:"));
                     admitted_or_observed += 1;
                 }
-                Err(MiningFailure::DidNotAdmit {
-                    observables: _,
-                    nonce: _,
-                    digest,
-                }) => {
+                Err(ref f @ MiningFailure::DidNotAdmit { .. }) => {
+                    let digest = f.digest().expect("DidNotAdmit carries a digest");
                     // Total lens: the rejected candidate has a digest,
                     // therefore the structural inference succeeded.
                     assert_eq!(
@@ -182,11 +180,9 @@ fn cm3_aggregate_observatory_matches_prf_baseline_at_n_10000() {
             Ok(outcome) => {
                 campaign.record_admission(&outcome);
             }
-            Err(MiningFailure::DidNotAdmit {
-                observables,
-                digest,
-                ..
-            }) => {
+            Err(ref f @ MiningFailure::DidNotAdmit { .. }) => {
+                let digest = f.digest().expect("DidNotAdmit carries a digest");
+                let observables = f.observables().expect("DidNotAdmit carries observables");
                 campaign.record_attempt(&observables, &digest);
             }
             Err(MiningFailure::PipelineFailure) => {
@@ -330,11 +326,11 @@ fn cm5_empirical_alpha_converges_to_theoretical_at_n_10000() {
 fn record_one(campaign: &mut CampaignStats, header: &BlockHeader, target: Target) {
     match mine_at(header, target, TRIAL_NONCE) {
         Ok(outcome) => campaign.record_admission(&outcome),
-        Err(MiningFailure::DidNotAdmit {
-            observables,
-            digest,
-            ..
-        }) => campaign.record_attempt(&observables, &digest),
+        Err(ref f @ MiningFailure::DidNotAdmit { .. }) => {
+            let digest = f.digest().expect("DidNotAdmit carries a digest");
+            let observables = f.observables().expect("DidNotAdmit carries observables");
+            campaign.record_attempt(&observables, &digest);
+        }
         Err(MiningFailure::PipelineFailure) => {
             panic!("PipelineFailure unreachable on synthetic mainnet input")
         }

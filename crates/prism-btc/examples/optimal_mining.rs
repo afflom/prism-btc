@@ -60,7 +60,7 @@ fn mine_one_admitting_block() -> ([u8; 32], u32) {
         let header = permissive_header(1_700_000_000_u32.wrapping_add(ts));
         for nonce in 0u32..4096 {
             match mine_at(&header, target, nonce) {
-                Ok(outcome) => return (outcome.digest, outcome.nonce),
+                Ok(outcome) => return (outcome.digest(), outcome.nonce()),
                 Err(MiningFailure::DidNotAdmit { .. }) => continue,
                 Err(MiningFailure::PipelineFailure) => {
                     panic!("ψ-pipeline shape violation — unreachable")

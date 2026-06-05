@@ -120,7 +120,8 @@ impl CampaignStats {
     /// both `attempts` and `admissions`.
     #[inline]
     pub fn record_admission(&mut self, outcome: &MiningOutcome) {
-        self.record_attempt(&outcome.observables, &outcome.digest);
+        let digest = outcome.digest();
+        self.record_attempt(&outcome.observables(), &digest);
         self.admissions = self.admissions.saturating_add(1);
     }
 

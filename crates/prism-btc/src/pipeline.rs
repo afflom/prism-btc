@@ -58,71 +58,133 @@ use crate::ops::sha256::sha256d_display;
 /// κ-label byte width for the `sha256d` σ-axis (`sha256d:<64hex>` = 72).
 const LABEL: usize = BLOCK_ADDRESS_LABEL_BYTES;
 
-/// The recognized result of a [`mine_at`] inference — a **witness
-/// projection**.
+/// The recognized result of a [`mine_at`] inference.
 ///
-/// `(witness, wire_format_header)` are the canonical pair; every other
-/// field is derivable from those two by replaying the σ-axis (L3, L5).
-/// The eagerly-stored projections — `address`, `nonce`, `digest`,
-/// `observables` — exist for caller ergonomics; they are *not*
-/// independent truth, and any of them can be re-derived from the pair:
+/// Carries exactly the **canonical pair**: a `witness` (the obstruction
+/// trivialization — admission's Σ₁ certificate that `run_route`'s
+/// `TargetCommitment` evaluation succeeded) and `wire_format_header`
+/// (the 80-byte canonical-form input it certifies). Nothing else is
+/// stored. Every observable about this outcome — the κ-label, the
+/// nonce, the 32-byte digest, the UOR property landscape — is a
+/// **projection** derivable from the pair by re-running the σ-axis
+/// (L3 "the seal is memory", L5 "verify by re-derivation"), exposed as
+/// accessor methods.
 ///
-/// - `address == witness.kappa_label()`
-/// - `digest == sha256d_display(&wire_format_header)`
-/// - `nonce == u32::from_le_bytes(wire_format_header[76..80])`
-/// - `observables == KappaObservables::from_digest(&digest)`
-///
-/// `Ok(MiningOutcome)` is returned only when foundation's `run_route`
-/// admits — the witness existence *is* the admission relation.
+/// The witness *is* the admission relation: `Ok(MiningOutcome)` is
+/// returned only when foundation's `run_route` seals a `Grounded`, so
+/// the type cannot be inhabited without admission.
 #[derive(Debug)]
 pub struct MiningOutcome {
-    /// The replayable TC-05 proof-of-work witness (owns its trace +
-    /// fingerprint). [`AddressWitness::verify`] re-certifies the
-    /// derivation without re-invoking the σ-axis.
+    /// The replayable TC-05 proof-of-work witness — the obstruction
+    /// trivialization for `TargetCommitment` admission on this κ-label.
+    /// Owns its derivation trace + content fingerprint;
+    /// [`AddressWitness::verify`] re-certifies the κ-label without
+    /// re-invoking the σ-axis.
     pub witness: AddressWitness<LABEL, 32>,
-    /// The 80-byte wire-format header that re-derives to `digest`. The
-    /// canonical-form companion to the witness; together they admit
-    /// total re-derivation of every other field (L5).
+    /// The 80-byte wire-format canonical-form input the witness
+    /// trivializes. With `witness` it admits total re-derivation of
+    /// every projection (L5).
     pub wire_format_header: [u8; 80],
-    /// Projection: the `sha256d:<64hex>` κ-label — equal to
-    /// `witness.kappa_label()`.
-    pub address: KappaLabel<LABEL>,
-    /// Projection: the recognized nonce (canonical Bitcoin LE) — equal
-    /// to `u32::from_le_bytes(wire_format_header[76..80])`.
-    pub nonce: u32,
-    /// Projection: the 32-byte block hash in display order — equal to
-    /// `sha256d_display(&wire_format_header)`.
-    pub digest: [u8; 32],
-    /// Projection: canonical UOR property landscape of the block hash —
-    /// triadic coordinates (stratum + spectrum) plus p-adic valuations.
-    /// Equal to `KappaObservables::from_digest(&digest)`.
-    pub observables: KappaObservables,
+}
+
+impl MiningOutcome {
+    /// The `sha256d:<64hex>` κ-label this outcome admits. Derived from
+    /// the witness — equal to [`AddressWitness::kappa_label`].
+    #[must_use]
+    pub fn address(&self) -> KappaLabel<LABEL> {
+        self.witness.kappa_label()
+    }
+
+    /// The recognized nonce (canonical Bitcoin LE). Derived from
+    /// `wire_format_header[76..80]`.
+    #[must_use]
+    pub fn nonce(&self) -> u32 {
+        u32::from_le_bytes([
+            self.wire_format_header[76],
+            self.wire_format_header[77],
+            self.wire_format_header[78],
+            self.wire_format_header[79],
+        ])
+    }
+
+    /// The 32-byte block hash in display order. Derived by replaying
+    /// `sha256d_display` on the wire bytes (L5).
+    #[must_use]
+    pub fn digest(&self) -> [u8; 32] {
+        sha256d_display(&self.wire_format_header)
+    }
+
+    /// The UOR property landscape of the block hash — triadic
+    /// coordinates (stratum + spectrum) plus p-adic valuations. Derived
+    /// from `digest()`.
+    #[must_use]
+    pub fn observables(&self) -> KappaObservables {
+        KappaObservables::from_digest(&self.digest())
+    }
 }
 
 /// Failure modes from [`mine_at`].
 ///
+/// `DidNotAdmit` carries the non-admitting candidate's 80-byte
+/// canonical-form bytes — the same shape `MiningOutcome` uses, minus
+/// the trivialization. Every observable (nonce, digest, receiver-side
+/// lens) is a derived projection of those bytes (L3/L5), exposed as
+/// accessor methods.
+///
 /// The receiver-side typed lens [`KappaObservables`] is **total** —
-/// present on `Ok(MiningOutcome)` and on `DidNotAdmit` alike, so host
-/// loops can aggregate every attempt into a
-/// [`CampaignStats`](crate::campaign::CampaignStats) observatory.
+/// available on `Ok(MiningOutcome)` and on `DidNotAdmit` alike via
+/// the same projection, so host loops can aggregate every attempt into
+/// a [`CampaignStats`](crate::campaign::CampaignStats) observatory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MiningFailure {
     /// ψ₉ minted a κ-label, but the `TargetCommitment` did not admit it
     /// inside foundation's `run_route` — the block hash did not satisfy
     /// the target under `LexicographicLessEqThreshold`. The host varies
-    /// the nonce (or template) and retries.
+    /// the nonce (or template) and re-recognizes.
     DidNotAdmit {
-        /// The non-admitting block hash's UOR property decomposition.
-        observables: KappaObservables,
-        /// The nonce of this candidate (canonical LE).
-        nonce: u32,
-        /// The candidate block hash in display order.
-        digest: [u8; 32],
+        /// The 80-byte wire-format canonical-form input that did not
+        /// admit. With this single field every observable about the
+        /// rejected candidate — nonce, digest, receiver-side lens —
+        /// re-derives by replaying the σ-axis.
+        wire_format_header: [u8; 80],
     },
     /// Defensive: foundation's catamorphism or a resolver returned a shape
     /// violation **before** the commitment stage. Unreachable for
     /// well-formed headers — the ψ-pipeline is total over the carrier.
     PipelineFailure,
+}
+
+impl MiningFailure {
+    /// On `DidNotAdmit`, the rejected candidate's nonce (canonical LE).
+    /// Derived from `wire_format_header[76..80]`.
+    #[must_use]
+    pub fn nonce(&self) -> Option<u32> {
+        match self {
+            MiningFailure::DidNotAdmit {
+                wire_format_header: w,
+            } => Some(u32::from_le_bytes([w[76], w[77], w[78], w[79]])),
+            MiningFailure::PipelineFailure => None,
+        }
+    }
+
+    /// On `DidNotAdmit`, the rejected candidate's 32-byte digest
+    /// (display order). Derived by replaying `sha256d_display`.
+    #[must_use]
+    pub fn digest(&self) -> Option<[u8; 32]> {
+        match self {
+            MiningFailure::DidNotAdmit {
+                wire_format_header: w,
+            } => Some(sha256d_display(w)),
+            MiningFailure::PipelineFailure => None,
+        }
+    }
+
+    /// On `DidNotAdmit`, the rejected candidate's UOR property
+    /// landscape. Derived from `digest()`.
+    #[must_use]
+    pub fn observables(&self) -> Option<KappaObservables> {
+        self.digest().map(|d| KappaObservables::from_digest(&d))
+    }
 }
 
 // ─── Per-thread target slot (implementation detail) ────────────────────
@@ -230,7 +292,10 @@ pub fn mine_at(
 }
 
 /// One inference at `nonce`, assuming the target is already published on
-/// the thread-local slot.
+/// the thread-local slot. The body is the **σ-axis projection**:
+/// canonical bytes → carrier → trivialization attempt; outcome carries
+/// only (witness, wire), failure carries only the rejected wire. No
+/// derived projection is computed eagerly.
 fn address_at(header: &BlockHeader, nonce: u32) -> Result<MiningOutcome, MiningFailure> {
     use prism::pipeline::PrismModel;
 
@@ -241,14 +306,9 @@ fn address_at(header: &BlockHeader, nonce: u32) -> Result<MiningOutcome, MiningF
         Ok(grounded) => {
             let outcome = AddressOutcome::<LABEL, 32>::from_grounded(&grounded)
                 .map_err(|_| MiningFailure::PipelineFailure)?;
-            let digest = sha256d_display(&wire);
             Ok(MiningOutcome {
                 witness: outcome.witness,
                 wire_format_header: wire,
-                address: outcome.address,
-                nonce,
-                digest,
-                observables: KappaObservables::from_digest(&digest),
             })
         }
         Err(failure) => {
@@ -257,15 +317,13 @@ fn address_at(header: &BlockHeader, nonce: u32) -> Result<MiningOutcome, MiningF
                 prism::pipeline::PipelineFailure::ShapeViolation { report }
                     if report.shape_iri == "https://uor.foundation/commitment/TypedCommitment/VIOLATED"
             );
-            if !is_commitment_violation {
-                return Err(MiningFailure::PipelineFailure);
+            if is_commitment_violation {
+                Err(MiningFailure::DidNotAdmit {
+                    wire_format_header: wire,
+                })
+            } else {
+                Err(MiningFailure::PipelineFailure)
             }
-            let digest = sha256d_display(&wire);
-            Err(MiningFailure::DidNotAdmit {
-                observables: KappaObservables::from_digest(&digest),
-                nonce,
-                digest,
-            })
         }
     }
 }
@@ -308,10 +366,13 @@ mod tests {
         let target = Target::new(0x207fffff);
         let header = permissive_header(1_700_000_000);
         let outcome = admit_by_nonce_scan(&header, target);
-        assert!(outcome.address.starts_with("sha256d:"));
-        assert_eq!(outcome.address.len(), 72);
+        assert!(outcome.address().starts_with("sha256d:"));
+        assert_eq!(outcome.address().len(), 72);
         assert_eq!(outcome.wire_format_header.len(), 80);
-        assert_eq!(outcome.witness.verify().expect("replays"), outcome.address);
+        assert_eq!(
+            outcome.witness.verify().expect("replays"),
+            outcome.address()
+        );
     }
 
     #[test]
@@ -320,7 +381,7 @@ mod tests {
         let header = permissive_header(1_700_000_001);
         let outcome = admit_by_nonce_scan(&header, target);
         // The display-order digest is ≤ the target value.
-        assert!(target.is_satisfied_by_bytes(&outcome.digest));
+        assert!(target.is_satisfied_by_bytes(&outcome.digest()));
     }
 
     #[test]
@@ -329,17 +390,16 @@ mod tests {
         // template; the receiver-side lens is total.
         let target = Target::new(0x1d00ffff);
         let header = permissive_header(1_700_000_000);
-        match mine_at(&header, target, 0) {
-            Err(MiningFailure::DidNotAdmit {
-                observables,
-                digest,
-                nonce,
-            }) => {
-                assert_eq!(nonce, 0);
-                assert_eq!(observables, KappaObservables::from_digest(&digest));
-                assert!(!target.is_satisfied_by_bytes(&digest));
-            }
-            other => panic!("expected DidNotAdmit, got {other:?}"),
-        }
+        let failure = mine_at(&header, target, 0).expect_err("restrictive target rejects nonce 0");
+        assert!(matches!(failure, MiningFailure::DidNotAdmit { .. }));
+        // Every projection is derived from the wire bytes.
+        let nonce = failure.nonce().expect("DidNotAdmit carries a nonce");
+        let digest = failure.digest().expect("DidNotAdmit carries a digest");
+        let observables = failure
+            .observables()
+            .expect("DidNotAdmit carries observables");
+        assert_eq!(nonce, 0);
+        assert_eq!(observables, KappaObservables::from_digest(&digest));
+        assert!(!target.is_satisfied_by_bytes(&digest));
     }
 }

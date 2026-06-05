@@ -46,10 +46,6 @@
 //! go into the header's `merkle_root` field) is
 //! [`crate::ops::merkle::merkle_root_internal`].
 
-extern crate alloc;
-
-use alloc::vec::Vec;
-
 use prism::pipeline::{
     output_shape, prism_model, ConstrainedTypeShape, ConstraintRef, IntoBindingValue,
     PartitionProductFields,
@@ -233,14 +229,6 @@ fn hex_nibble(b: u8) -> Option<u8> {
     }
 }
 
-fn hex_lo(nibble: u8) -> u8 {
-    match nibble {
-        0..=9 => b'0' + nibble,
-        10..=15 => b'a' + (nibble - 10),
-        _ => unreachable!("nibble is `& 0x0F`"),
-    }
-}
-
 /// Decode an operand κ-label's raw 32-byte digest, validating its σ-axis
 /// is `sha256d`.
 fn decode_operand(operand: &KappaLabel<LABEL>) -> Result<[u8; 32], CompositionFailure> {
@@ -283,16 +271,15 @@ fn require_sha256d(axis: &str) -> Result<(), CompositionFailure> {
     }
 }
 
-/// Re-emit `sha256d:<lowercase-hex>` canonical-form bytes from a raw digest.
-fn emit_canonical(raw: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(SHA256D_AXIS.len() + 1 + 2 * raw.len());
-    out.extend_from_slice(SHA256D_AXIS.as_bytes());
-    out.push(b':');
-    for &byte in raw {
-        out.push(hex_lo(byte >> 4));
-        out.push(hex_lo(byte & 0x0F));
-    }
-    out
+/// Re-emit the `sha256d:<lowercase-hex>` canonical-form bytes of a raw
+/// 32-byte digest into a stack-allocated [u8; LABEL] buffer. The
+/// `sha256d` σ-axis is fixed-width (`len("sha256d") + 1 + 64 = 72`), so
+/// the canonical-form size is a const known at compile time —
+/// [`crate::commitment::target_label_bytes`] is the byte-for-byte
+/// encoder.
+#[inline]
+fn emit_canonical(raw: [u8; 32]) -> [u8; LABEL] {
+    crate::commitment::target_label_bytes(raw)
 }
 
 const DEGREE_5_TAG: u8 = 0x05;
@@ -356,14 +343,10 @@ pub fn compose_g2_product(
             .ok_or(CompositionFailure::MalformedOperand)?,
     )?;
     let (l, r) = (left.as_bytes(), right.as_bytes());
-    let mut canon = Vec::with_capacity(2 * LABEL);
-    if l <= r {
-        canon.extend_from_slice(l);
-        canon.extend_from_slice(r);
-    } else {
-        canon.extend_from_slice(r);
-        canon.extend_from_slice(l);
-    }
+    let (lo, hi) = if l <= r { (l, r) } else { (r, l) };
+    let mut canon = [0u8; 2 * LABEL];
+    canon[..LABEL].copy_from_slice(lo);
+    canon[LABEL..].copy_from_slice(hi);
     ground::<CompositionModelG2>(&canon)
 }
 
@@ -378,7 +361,8 @@ pub fn compose_f4_quotient(
     let raw = decode_operand(operand)?;
     let complement: [u8; 32] = core::array::from_fn(|i| !raw[i]);
     let canon_raw = if raw <= complement { raw } else { complement };
-    ground::<CompositionModelF4>(&emit_canonical(&canon_raw))
+    let canon = emit_canonical(canon_raw);
+    ground::<CompositionModelF4>(&canon)
 }
 
 /// **CS-E6** — degree-partition filtration: prepend a one-byte degree tag
@@ -395,9 +379,9 @@ pub fn compose_e6_filtration(
         0..=7 => DEGREE_5_TAG,
         _ => DEGREE_6_TAG,
     };
-    let mut canon = Vec::with_capacity(1 + LABEL);
-    canon.push(tag);
-    canon.extend_from_slice(operand.as_bytes());
+    let mut canon = [0u8; 1 + LABEL];
+    canon[0] = tag;
+    canon[1..].copy_from_slice(operand.as_bytes());
     ground::<CompositionModelE6>(&canon)
 }
 
@@ -411,27 +395,21 @@ pub fn compose_e7_augmentation(
     operand: &KappaLabel<LABEL>,
 ) -> Result<CompositionOutcome, CompositionFailure> {
     let raw = decode_operand(operand)?;
-    let q = raw.len() / 4; // 8
-    let quarters: [&[u8]; 4] = [
-        &raw[0..q],
-        &raw[q..2 * q],
-        &raw[2 * q..3 * q],
-        &raw[3 * q..],
-    ];
-    let mut canon: Option<Vec<u8>> = None;
+    const Q: usize = 8; // quarter byte-width (raw is [u8; 32] = 4 × 8)
+    let mut canon_raw = [0u8; 32];
+    let mut candidate = [0u8; 32];
+    let mut found = false;
     for perm in S4_PERMUTATIONS.iter() {
-        let mut candidate = Vec::with_capacity(raw.len());
-        for &idx in perm.iter() {
-            candidate.extend_from_slice(quarters[idx]);
+        for (slot, &src) in perm.iter().enumerate() {
+            candidate[slot * Q..(slot + 1) * Q].copy_from_slice(&raw[src * Q..(src + 1) * Q]);
         }
-        match &canon {
-            None => canon = Some(candidate),
-            Some(current) if candidate < *current => canon = Some(candidate),
-            _ => {}
+        if !found || candidate < canon_raw {
+            canon_raw = candidate;
+            found = true;
         }
     }
-    let canon_raw = canon.expect("S4_PERMUTATIONS is non-empty");
-    ground::<CompositionModelE7>(&emit_canonical(&canon_raw))
+    let canon = emit_canonical(canon_raw);
+    ground::<CompositionModelE7>(&canon)
 }
 
 /// **CS-E8** — direct embedding (identity on canonical-form bytes). The
@@ -464,50 +442,85 @@ pub fn compose_ordered_product(
 ) -> Result<CompositionOutcome, CompositionFailure> {
     let l = decode_operand(left)?;
     let r = decode_operand(right)?;
-    let mut canon = Vec::with_capacity(64);
-    canon.extend_from_slice(&l);
-    canon.extend_from_slice(&r);
+    let mut canon = [0u8; 64];
+    canon[..32].copy_from_slice(&l);
+    canon[32..].copy_from_slice(&r);
     ground::<CompositionModelOrdered>(&canon)
 }
 
-/// **Bitcoin merkle root as iterated composition.** The structural
-/// recurrence on the canonical-form definition:
-///
-/// > `merkle_root([root]) = root`
-/// > `merkle_root(leaves) = merkle_root(pair_up(leaves))`
-///
-/// where `pair_up` folds each adjacent pair with
-/// [`compose_ordered_product`], duplicating the last element when the
-/// arity is odd (Bitcoin's discipline). The base case is a one-leaf
-/// tree; the recursive case is a level descent on the structural form,
-/// not a procedural while-loop with mutable level state.
+/// Stack depth ceiling for [`merkle_root`]'s tournament reduction —
+/// supports trees with up to `2^31` leaves, well above any block within
+/// Bitcoin consensus limits (~`2^16` transactions even at maximum
+/// block weight).
+pub const MERKLE_STACK_DEPTH: usize = 32;
+
+/// **Bitcoin merkle root as the idempotent closure of pair-promotion.**
+/// The canonical merkle definition is the fixed point of "pair adjacent
+/// nodes; duplicate odd tails; repeat" — a Kleene-star closure under
+/// the [`compose_ordered_product`] operation. This body realizes that
+/// closure as a **tournament reduction**: each leaf folds into a
+/// stack of `(level, partial_root)` entries, same-level top entries
+/// merge eagerly (the natural pair-promotion), and finalize collapses
+/// the residual odd-tailed entries by duplicate-and-rehash (Bitcoin's
+/// odd-tail discipline). Stack-allocated throughout — no `Vec`, no
+/// per-level heap materialization; the canonical-form bytes of every
+/// intermediate live in [`MERKLE_STACK_DEPTH`]-bounded stack space.
 ///
 /// This is the display-order κ-label algebra; for the byte-exact
 /// protocol merkle root (internal byte order) see
 /// [`crate::ops::merkle::merkle_root_internal`].
 ///
 /// # Errors
-/// [`CompositionFailure::MalformedOperand`] if `leaves` is empty, or any
-/// operand is malformed / non-`sha256d`.
+/// [`CompositionFailure::MalformedOperand`] if `leaves` is empty, if
+/// the stack depth would overflow [`MERKLE_STACK_DEPTH`], or any operand
+/// is malformed / non-`sha256d`.
 pub fn merkle_root(leaves: &[KappaLabel<LABEL>]) -> Result<KappaLabel<LABEL>, CompositionFailure> {
-    match leaves {
-        [] => Err(CompositionFailure::MalformedOperand),
-        [root] => Ok(*root),
-        more => {
-            let next: Vec<KappaLabel<LABEL>> = more
-                .chunks(2)
-                .map(|pair| {
-                    let (left, right) = match pair {
-                        [l, r] => (l, r),
-                        [l] => (l, l),
-                        _ => unreachable!("chunks(2) yields slices of length 1 or 2"),
-                    };
-                    compose_ordered_product(left, right).map(|out| out.address)
-                })
-                .collect::<Result<_, _>>()?;
-            merkle_root(&next)
+    if leaves.is_empty() {
+        return Err(CompositionFailure::MalformedOperand);
+    }
+
+    let mut stack: [(u8, KappaLabel<LABEL>); MERKLE_STACK_DEPTH] =
+        [(0u8, leaves[0]); MERKLE_STACK_DEPTH];
+    let mut depth: usize = 0;
+
+    for &leaf in leaves {
+        if depth >= MERKLE_STACK_DEPTH {
+            return Err(CompositionFailure::MalformedOperand);
+        }
+        stack[depth] = (0, leaf);
+        depth += 1;
+        // Eagerly merge same-level top entries — the natural promotion
+        // step of the tournament reduction.
+        while depth >= 2 && stack[depth - 1].0 == stack[depth - 2].0 {
+            let right = stack[depth - 1].1;
+            let left = stack[depth - 2].1;
+            let level = stack[depth - 1].0;
+            stack[depth - 2] = (level + 1, compose_ordered_product(&left, &right)?.address);
+            depth -= 1;
         }
     }
+
+    // Finalize: collapse the residual stack with Bitcoin's odd-tail
+    // discipline. A top entry at a lower level than its successor is
+    // an odd tail; it self-pairs to promote.
+    while depth > 1 {
+        let top_level = stack[depth - 1].0;
+        let next_level = stack[depth - 2].0;
+        if top_level == next_level {
+            let right = stack[depth - 1].1;
+            let left = stack[depth - 2].1;
+            stack[depth - 2] = (
+                top_level + 1,
+                compose_ordered_product(&left, &right)?.address,
+            );
+            depth -= 1;
+        } else {
+            let top = stack[depth - 1].1;
+            stack[depth - 1] = (top_level + 1, compose_ordered_product(&top, &top)?.address);
+        }
+    }
+
+    Ok(stack[0].1)
 }
 
 /// Ground canonical-form bytes through composition model `M`, extracting
