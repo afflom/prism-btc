@@ -35,9 +35,9 @@
 //! Run: `cargo run --release --example optimal_mining`.
 
 use prism_btc::{
-    decode_payload, leak_target, mine_at, payload_commitment_k2, payload_commitment_k4,
+    admit, decode_payload, leak_target, payload_commitment_k2, payload_commitment_k4,
     payload_commitment_k8, target_commitment, AndCommitment, Bits, BlockHeader, MerkleRoot,
-    MiningFailure, SingletonCommitment, Stratum, Target, Timestamp, TypedCommitment, Version,
+    SingletonCommitment, Stratum, Target, Timestamp, TypedCommitment, Version,
 };
 
 const REGTEST_NBITS: u32 = 0x207fffff;
@@ -52,23 +52,19 @@ fn permissive_header(timestamp: u32) -> BlockHeader {
     }
 }
 
-/// Drive the kernel's single-recognition `mine_at` over the nonce
-/// space — the bridge-layer admission stream the kernel does not own.
+/// Realize the admission closure across a stream of permissive
+/// template variations. Each variation's [`admit`] is the Kleene-star
+/// fixed point over its [`NonceOrbit`]; the first variation that lands
+/// a witness is taken.
 fn mine_one_admitting_block() -> ([u8; 32], u32) {
     let target = Target::new(REGTEST_NBITS);
-    for ts in 0u32..512 {
-        let header = permissive_header(1_700_000_000_u32.wrapping_add(ts));
-        for nonce in 0u32..4096 {
-            match mine_at(&header, target, nonce) {
-                Ok(outcome) => return (outcome.digest(), outcome.nonce()),
-                Err(MiningFailure::DidNotAdmit { .. }) => continue,
-                Err(MiningFailure::PipelineFailure) => {
-                    panic!("ψ-pipeline shape violation — unreachable")
-                }
-            }
-        }
-    }
-    panic!("permissive regtest target must admit within 512×4096 candidates");
+    let outcome = (0u32..512)
+        .find_map(|ts| {
+            let header = permissive_header(1_700_000_000_u32.wrapping_add(ts));
+            admit(&header, target)
+        })
+        .expect("permissive regtest target must admit within 512 template variations");
+    (outcome.digest(), outcome.nonce())
 }
 
 fn main() {

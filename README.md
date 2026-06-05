@@ -108,9 +108,9 @@ certificate; ψ_9's output is the 72-byte `sha256d:<64hex>` κ-label.
 
 | Crate | Role |
 |---|---|
-| [`prism-btc`](crates/prism-btc/) | The pure-prism domain layer. Declares Bitcoin's typed primitives, the `BlockHeaderCarrier` input + `BlockAddressLabel` output shapes, the ψ-chain verb, `BitcoinAddressModel` (binding the shared uor-addr ψ-tower), the ADR-061 `sha256d` composition reference impl, and `mine_at` — the kernel's sole admission-recognition entry. Pure-Rust SHA-256 for the `sha256d` σ-axis. |
-| [`prism-btc-node`](crates/prism-btc-node/) | bitcoind RPC boundary. `getblocktemplate → BitcoinAddressModel::forward → submitblock`. Owns the bridge-layer nonce scan and extranonce roll. `prism-mine` CLI binary. |
-| [`prism-btc-wasm`](crates/prism-btc-wasm/) | `wasm-bindgen` JS surface around `prism_btc::mine_at`; owns its own nonce-scan bridge in `mine_block`. |
+| [`prism-btc`](crates/prism-btc/) | The pure-prism domain layer. Declares Bitcoin's typed primitives, the `BlockHeaderCarrier` input + `BlockAddressLabel` output shapes, the ψ-chain verb, `BitcoinAddressModel` (binding the shared uor-addr ψ-tower), the ADR-061 `sha256d` composition reference impl, and the admission stack — `mine_at` (single recognition `W`), `NonceOrbit` (lazy `Iterator` enumeration of `W` over the 32-bit space), and `admit` (the Kleene-star closure `W*` as `NonceOrbit::find_map(Result::ok)`). Pure-Rust SHA-256 for the `sha256d` σ-axis. |
+| [`prism-btc-node`](crates/prism-btc-node/) | bitcoind RPC boundary. `getblocktemplate → admission closure → submitblock`. The bridge composes `NonceOrbit` with `Iterator::inspect` (campaign side-effect) and `Iterator::find_map` (admission selector); no explicit nonce loops, extranonce roll on orbit exhaustion. `prism-mine` CLI binary. |
+| [`prism-btc-wasm`](crates/prism-btc-wasm/) | `wasm-bindgen` JS surface around `prism_btc::admit` — the wasm `mine_block` is one call to the admission closure, no explicit loop. |
 | [`prism-btc-lean/`](prism-btc-lean/) | Lean 4 formal proofs: ring identity (W8/W32), triadic coordinates, FreeRank protocol, shape-constraint monotonicity, convergence protocol. |
 
 ## Substitution axes

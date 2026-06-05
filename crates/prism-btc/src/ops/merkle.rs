@@ -1,15 +1,22 @@
-//! Bitcoin's wire-format merkle root, as the **idempotent closure** of
-//! pair-and-rehash under SHA-256d.
+//! Bitcoin's wire-format merkle root, as the **Kleene-closure
+//! recurrence** of pair-and-rehash under SHA-256d.
 //!
 //! Given a coinbase txid and a list of other transaction txids (in
 //! template order), the merkle root is the unique fixed point of the
-//! Bitcoin merkle recurrence: pair adjacent nodes, duplicate odd
-//! tails, repeat. This module realizes that closure as a **tournament
-//! reduction** identical in shape to
-//! [`crate::composition::merkle_root`] — each leaf folds into a
-//! stack of `(level, partial_root)` entries; same-level top entries
-//! merge eagerly; finalize collapses with odd-tail duplication. Fully
-//! stack-allocated; no `Vec`, no per-level heap materialization.
+//! Bitcoin merkle recurrence:
+//!
+//! > `merkle_root([root]) = root`
+//! > `merkle_root(leaves) = merkle_root(pair_up(leaves))`
+//!
+//! where `pair_up` folds each adjacent pair under SHA-256d on
+//! internal-order bytes, duplicating the last element on odd arity
+//! (Bitcoin's discipline). The body is the recurrence equation — base
+//! case is one leaf; recursive case is a level descent on the
+//! canonical-form sequence — not a procedural stack machine.
+//!
+//! Per-level `Vec` materializes the canonical-form sequence at each
+//! recursion depth; this is representation (the operation defines a
+//! sequence at each level), not procedural intrusion.
 //!
 //! Runtime: prism-btc's pure-Rust SHA-256d (no dependency on the
 //! `bitcoin` crate's hashing). Bitcoin txids are stored in *internal*
@@ -19,59 +26,34 @@
 
 use crate::ops::sha256::sha256d_internal;
 
-/// Stack depth ceiling for the wire-format merkle's tournament
-/// reduction — supports trees with up to `2^31` leaves, well above any
-/// block within Bitcoin consensus tx-count limits.
-pub const MERKLE_INTERNAL_STACK_DEPTH: usize = 32;
-
 /// Compute the merkle root of `[coinbase_txid, *other_txids]` in
 /// internal byte order. The root is what gets placed in
 /// `BlockHeader.merkle_root`.
-///
-/// # Panics
-/// Debug-asserts if the leaf count exceeds
-/// `2^MERKLE_INTERNAL_STACK_DEPTH` — unreachable for any block within
-/// Bitcoin consensus limits.
 pub fn merkle_root_internal(coinbase_txid: &[u8; 32], other_txids: &[[u8; 32]]) -> [u8; 32] {
-    let mut stack: [(u8, [u8; 32]); MERKLE_INTERNAL_STACK_DEPTH] =
-        [(0u8, *coinbase_txid); MERKLE_INTERNAL_STACK_DEPTH];
-    let mut depth: usize = 0;
+    let initial: Vec<[u8; 32]> = core::iter::once(*coinbase_txid)
+        .chain(other_txids.iter().copied())
+        .collect();
+    merkle_fold(&initial)
+}
 
-    let leaves = core::iter::once(coinbase_txid).chain(other_txids.iter());
-    for leaf in leaves {
-        debug_assert!(
-            depth < MERKLE_INTERNAL_STACK_DEPTH,
-            "merkle stack overflow at >2^{} leaves",
-            MERKLE_INTERNAL_STACK_DEPTH
-        );
-        stack[depth] = (0, *leaf);
-        depth += 1;
-        // Eagerly merge same-level top entries.
-        while depth >= 2 && stack[depth - 1].0 == stack[depth - 2].0 {
-            let r = stack[depth - 1].1;
-            let l = stack[depth - 2].1;
-            let level = stack[depth - 1].0;
-            stack[depth - 2] = (level + 1, pair_hash(&l, &r));
-            depth -= 1;
+/// The structural recurrence on the canonical-form sequence: either
+/// the base case (one root) or one level descent (the next-level
+/// `pair_up` image, recursed).
+fn merkle_fold(leaves: &[[u8; 32]]) -> [u8; 32] {
+    match leaves {
+        [root] => *root,
+        more => {
+            let next: Vec<[u8; 32]> = more
+                .chunks(2)
+                .map(|pair| match pair {
+                    [a, b] => pair_hash(a, b),
+                    [a] => pair_hash(a, a), // Bitcoin's odd-tail duplication
+                    _ => unreachable!("chunks(2) yields slices of length 1 or 2"),
+                })
+                .collect();
+            merkle_fold(&next)
         }
     }
-
-    // Finalize with Bitcoin's odd-tail discipline.
-    while depth > 1 {
-        let top_level = stack[depth - 1].0;
-        let next_level = stack[depth - 2].0;
-        if top_level == next_level {
-            let r = stack[depth - 1].1;
-            let l = stack[depth - 2].1;
-            stack[depth - 2] = (top_level + 1, pair_hash(&l, &r));
-            depth -= 1;
-        } else {
-            let top = stack[depth - 1].1;
-            stack[depth - 1] = (top_level + 1, pair_hash(&top, &top));
-        }
-    }
-
-    stack[0].1
 }
 
 #[inline]

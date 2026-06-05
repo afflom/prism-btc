@@ -46,6 +46,8 @@
 //! go into the header's `merkle_root` field) is
 //! [`crate::ops::merkle::merkle_root_internal`].
 
+extern crate alloc;
+
 use prism::pipeline::{
     output_shape, prism_model, ConstrainedTypeShape, ConstraintRef, IntoBindingValue,
     PartitionProductFields,
@@ -448,79 +450,53 @@ pub fn compose_ordered_product(
     ground::<CompositionModelOrdered>(&canon)
 }
 
-/// Stack depth ceiling for [`merkle_root`]'s tournament reduction —
-/// supports trees with up to `2^31` leaves, well above any block within
-/// Bitcoin consensus limits (~`2^16` transactions even at maximum
-/// block weight).
-pub const MERKLE_STACK_DEPTH: usize = 32;
-
-/// **Bitcoin merkle root as the idempotent closure of pair-promotion.**
-/// The canonical merkle definition is the fixed point of "pair adjacent
-/// nodes; duplicate odd tails; repeat" — a Kleene-star closure under
-/// the [`compose_ordered_product`] operation. This body realizes that
-/// closure as a **tournament reduction**: each leaf folds into a
-/// stack of `(level, partial_root)` entries, same-level top entries
-/// merge eagerly (the natural pair-promotion), and finalize collapses
-/// the residual odd-tailed entries by duplicate-and-rehash (Bitcoin's
-/// odd-tail discipline). Stack-allocated throughout — no `Vec`, no
-/// per-level heap materialization; the canonical-form bytes of every
-/// intermediate live in [`MERKLE_STACK_DEPTH`]-bounded stack space.
+/// **Bitcoin merkle root as the Kleene-closure recurrence.** The
+/// canonical merkle definition is the unique fixed point of the
+/// pair-and-rehash recurrence:
+///
+/// > `merkle_root([root]) = root`
+/// > `merkle_root(leaves) = merkle_root(pair_up(leaves))`
+///
+/// where `pair_up` folds each adjacent pair with
+/// [`compose_ordered_product`], duplicating the last element on odd
+/// arity (Bitcoin's discipline). The base case is one leaf; the
+/// recursive case is a level descent on the canonical-form
+/// structure. The body **is** the recurrence equation — no procedural
+/// while-loop over a stack, no mutable accumulator.
+///
+/// The per-level allocation materializes the canonical-form sequence
+/// at that recursion depth (the `pair_up` operation's image). This is
+/// representation work — the operation defines a canonical sequence
+/// of κ-labels at each level — not procedural intrusion. The
+/// recursion bound is `log2(|leaves|) + 1` (Bitcoin consensus puts
+/// this below ~16); each level halves the input.
 ///
 /// This is the display-order κ-label algebra; for the byte-exact
 /// protocol merkle root (internal byte order) see
 /// [`crate::ops::merkle::merkle_root_internal`].
 ///
 /// # Errors
-/// [`CompositionFailure::MalformedOperand`] if `leaves` is empty, if
-/// the stack depth would overflow [`MERKLE_STACK_DEPTH`], or any operand
-/// is malformed / non-`sha256d`.
+/// [`CompositionFailure::MalformedOperand`] if `leaves` is empty, or
+/// any operand is malformed / non-`sha256d`.
 pub fn merkle_root(leaves: &[KappaLabel<LABEL>]) -> Result<KappaLabel<LABEL>, CompositionFailure> {
-    if leaves.is_empty() {
-        return Err(CompositionFailure::MalformedOperand);
-    }
-
-    let mut stack: [(u8, KappaLabel<LABEL>); MERKLE_STACK_DEPTH] =
-        [(0u8, leaves[0]); MERKLE_STACK_DEPTH];
-    let mut depth: usize = 0;
-
-    for &leaf in leaves {
-        if depth >= MERKLE_STACK_DEPTH {
-            return Err(CompositionFailure::MalformedOperand);
-        }
-        stack[depth] = (0, leaf);
-        depth += 1;
-        // Eagerly merge same-level top entries — the natural promotion
-        // step of the tournament reduction.
-        while depth >= 2 && stack[depth - 1].0 == stack[depth - 2].0 {
-            let right = stack[depth - 1].1;
-            let left = stack[depth - 2].1;
-            let level = stack[depth - 1].0;
-            stack[depth - 2] = (level + 1, compose_ordered_product(&left, &right)?.address);
-            depth -= 1;
+    match leaves {
+        [] => Err(CompositionFailure::MalformedOperand),
+        [root] => Ok(*root),
+        more => {
+            let next: alloc::vec::Vec<KappaLabel<LABEL>> = more
+                .chunks(2)
+                .map(|pair| {
+                    let (left, right) = match pair {
+                        [l, r] => (l, r),
+                        [l] => (l, l),
+                        _ => unreachable!("chunks(2) yields slices of length 1 or 2"),
+                    };
+                    compose_ordered_product(left, right).map(|out| out.address)
+                })
+                .collect::<Result<_, _>>()?;
+            merkle_root(&next)
         }
     }
-
-    // Finalize: collapse the residual stack with Bitcoin's odd-tail
-    // discipline. A top entry at a lower level than its successor is
-    // an odd tail; it self-pairs to promote.
-    while depth > 1 {
-        let top_level = stack[depth - 1].0;
-        let next_level = stack[depth - 2].0;
-        if top_level == next_level {
-            let right = stack[depth - 1].1;
-            let left = stack[depth - 2].1;
-            stack[depth - 2] = (
-                top_level + 1,
-                compose_ordered_product(&left, &right)?.address,
-            );
-            depth -= 1;
-        } else {
-            let top = stack[depth - 1].1;
-            stack[depth - 1] = (top_level + 1, compose_ordered_product(&top, &top)?.address);
-        }
-    }
-
-    Ok(stack[0].1)
 }
 
 /// Ground canonical-form bytes through composition model `M`, extracting

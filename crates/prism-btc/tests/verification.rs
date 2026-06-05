@@ -26,9 +26,9 @@
 use prism::operation::Term;
 use prism::pipeline::{ConstrainedTypeShape, ConstraintRef, PrismModel};
 use prism_btc::{
-    mine_at, recognize_under_bytes, serialize_header, serialize_prefix, sha256d_display,
+    admit, mine_at, recognize_under_bytes, serialize_header, serialize_prefix, sha256d_display,
     uor_addr::AddressOutcome, BitcoinAddressModel, Bits, BlockAddressLabel, BlockHeader,
-    BlockHeaderCarrier, MerkleRoot, MiningFailure, MiningOutcome, Target, Timestamp, Version,
+    BlockHeaderCarrier, MerkleRoot, NonceOrbit, Target, Timestamp, Version,
     VERB_TERMS_BLOCK_ADDRESS_INFERENCE,
 };
 
@@ -63,21 +63,11 @@ fn forward_kappa_label(header: &BlockHeader, nonce: u32) -> String {
     })
 }
 
-/// Host-side admission stream — walks the nonce space invoking the
-/// kernel's single-recognition `mine_at` until it admits. The kernel
-/// never owns this iteration; the bridge does. Inlined here so V&V can
-/// exercise admitted outcomes against a real target.
-fn admit_by_nonce_scan(header: &BlockHeader, target: Target) -> MiningOutcome {
-    for nonce in 0u32..u32::MAX {
-        match mine_at(header, target, nonce) {
-            Ok(outcome) => return outcome,
-            Err(MiningFailure::DidNotAdmit { .. }) => continue,
-            Err(MiningFailure::PipelineFailure) => {
-                panic!("ψ-pipeline shape violation for canonical_header — unreachable")
-            }
-        }
-    }
-    panic!("permissive target should admit within the nonce space")
+/// V&V helper: the admission closure as a panic-on-exhaustion call.
+/// Equivalent to `prism_btc::admit(header, target).unwrap()`; named
+/// distinctly because tests want a guarantee, not an Option.
+fn admit_by_nonce_scan(header: &BlockHeader, target: Target) -> prism_btc::MiningOutcome {
+    admit(header, target).expect("permissive target should admit within the orbit")
 }
 
 // ─── §1. Structural verb-arena invariants ──────────────────────────────
@@ -164,31 +154,25 @@ fn v_mine_outcome_digest_actually_satisfies_target_when_admitted() {
     // Fail-closed across the input space: for every (header, target) pair
     // where mine_at returns Ok, the digest genuinely satisfies the target.
     let target = Target::new(0x207fffff);
-    let mut admitted_count = 0;
-    for ts_offset in 0u32..64 {
-        let header = canonical_header(1, 1_700_000_000_u32 + ts_offset, 0x207fffff);
-        // Recognize the first admitting nonce for this header (the
-        // bridge-layer scan, inlined). If admission lands, fail-closed
-        // requires the recognized digest actually satisfies the
-        // target.
-        let mut admitted = None;
-        for nonce in 0u32..1_000 {
-            if let Ok(outcome) = mine_at(&header, target, nonce) {
-                admitted = Some(outcome);
-                break;
-            }
-        }
-        if let Some(outcome) = admitted {
-            admitted_count += 1;
+    let admitted_count = (0u32..64)
+        .filter_map(|ts_offset| {
+            let header = canonical_header(1, 1_700_000_000_u32 + ts_offset, 0x207fffff);
+            // Bound the orbit to the first 1_000 candidates per ts_offset
+            // (the permissive target lands well within that window).
+            NonceOrbit::new(&header, target)
+                .take(1_000)
+                .find_map(Result::ok)
+        })
+        .inspect(|outcome| {
             assert!(
                 target.is_satisfied_by_bytes(&outcome.digest()),
-                "fail-closed: outcome.digest() must satisfy target whenever mine_at() returns Ok"
+                "fail-closed: outcome.digest() must satisfy target whenever admit returns Some"
             );
-        }
-    }
+        })
+        .count();
     assert!(
         admitted_count > 0,
-        "with a permissive target and 64 variations, at least one mine_at scan should admit"
+        "with a permissive target and 64 variations, the admission closure should land at least once"
     );
 }
 
@@ -213,14 +197,14 @@ fn v_kappa_label_is_distinct_for_distinct_typed_inputs() {
     // collision-resistant, so distinct headers content-address to
     // distinct sha256d block hashes.
     let header = canonical_header(1, 1_700_000_000, 0x207fffff);
-    let mut labels = std::collections::HashSet::new();
-    for nonce in 0u32..64 {
-        let label = forward_kappa_label(&header, nonce);
-        assert!(
-            labels.insert(label),
-            "κ-labels must be distinct across distinct typed inputs (no collisions in 64-sweep)"
-        );
-    }
+    let labels: std::collections::HashSet<String> = (0u32..64)
+        .map(|nonce| forward_kappa_label(&header, nonce))
+        .collect();
+    assert_eq!(
+        labels.len(),
+        64,
+        "κ-labels must be distinct across distinct typed inputs (no collisions in 64-sweep)"
+    );
 }
 
 // ─── §4. κ-label identity + wire-format reconstruction ─────────────────

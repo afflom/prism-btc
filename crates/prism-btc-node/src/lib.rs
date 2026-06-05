@@ -28,8 +28,8 @@ use bitcoincore_rpc::json::{
 use bitcoincore_rpc::{Auth, Client, RpcApi};
 
 use prism_btc::{
-    mine_at, Bits, BlockHeader, CampaignStats, MerkleRoot, MiningFailure, MiningOutcome,
-    MiningWitness, Target, Timestamp, Version,
+    Bits, BlockHeader, CampaignStats, MerkleRoot, MiningFailure, MiningOutcome, MiningWitness,
+    NonceOrbit, Target, Timestamp, Version,
 };
 
 const COINBASE_WITNESS_RESERVED: [u8; 32] = [0u8; 32];
@@ -207,42 +207,56 @@ pub struct MinedBlock {
     pub campaign: CampaignStats,
 }
 
-/// Walk the 32-bit nonce space for one template, recognizing each
-/// candidate through `prism_btc::mine_at`. Returns `Ok(Some(outcome))`
-/// on the first admission, `Ok(None)` when the nonce space exhausts
-/// (the bridge should then roll the extranonce), and `Err` on a
+/// Realize the admission closure over one template's [`NonceOrbit`],
+/// folding each per-nonce recognition into `campaign` as it streams by.
+///
+/// Returns `Ok(Some(outcome))` on the first admission, `Ok(None)` when
+/// the orbit exhausts without admission (the bridge then rolls the
+/// extranonce → distinct template → fresh orbit), and `Err` on a
 /// substrate-level shape violation (defensive — never observed for
 /// well-formed headers).
 ///
-/// This is the **bridge-layer iteration**. The kernel
-/// (`prism_btc::mine_at`) is single-recognition; the iteration is
-/// here. Every candidate's typed observables — admitting or not —
-/// fold into `campaign` (L3: the seal is memory; nothing is held
-/// beyond what the witness or its complement attests).
+/// **No explicit loop.** The body is the orbit composed with
+/// [`Iterator::inspect`] (campaign side-effect on every recognition,
+/// admit or reject) and [`Iterator::find_map`] (the Kleene-star
+/// fixed-point selector — `Some` to short-circuit, `None` to advance).
+/// Per L3 / L5 nothing is held beyond the witness and its canonical
+/// input; the campaign aggregate is the only host-side residue.
 fn scan_template_nonces(
     header: &BlockHeader,
     target: Target,
     campaign: &mut CampaignStats,
 ) -> Result<Option<MiningOutcome>> {
-    for nonce in 0u32..=u32::MAX {
-        match mine_at(header, target, nonce) {
-            Ok(outcome) => {
-                campaign.record_admission(&outcome);
-                return Ok(Some(outcome));
-            }
+    // The orbit's find_map yields one of three terminal states:
+    //   Some(Ok(outcome))  — admission landed; short-circuit
+    //   Some(Err(()))      — substrate violation; short-circuit
+    //   None               — orbit exhausted without admission
+    // (DidNotAdmit returns None from the closure → find_map advances.)
+    let stopped: Option<Result<Box<MiningOutcome>, ()>> = NonceOrbit::new(header, target)
+        .inspect(|recognition| match recognition {
+            Ok(outcome) => campaign.record_admission(outcome),
             Err(f @ MiningFailure::DidNotAdmit { .. }) => {
-                let digest = f.digest().expect("DidNotAdmit carries a digest");
-                let observables = f.observables().expect("DidNotAdmit carries observables");
-                campaign.record_attempt(&observables, &digest);
+                if let (Some(observables), Some(digest)) = (f.observables(), f.digest()) {
+                    campaign.record_attempt(&observables, &digest);
+                }
             }
-            Err(MiningFailure::PipelineFailure) => {
-                bail!(
-                    "ψ-pipeline shape violation — defensive failure mode, should not occur for well-formed block headers"
-                );
-            }
+            Err(MiningFailure::PipelineFailure) => {}
+        })
+        .find_map(|recognition| match recognition {
+            Ok(outcome) => Some(Ok(Box::new(outcome))),
+            Err(MiningFailure::PipelineFailure) => Some(Err(())),
+            Err(MiningFailure::DidNotAdmit { .. }) => None,
+        });
+
+    match stopped {
+        Some(Ok(outcome)) => Ok(Some(*outcome)),
+        Some(Err(())) => {
+            bail!(
+                "ψ-pipeline shape violation — defensive failure mode, should not occur for well-formed block headers"
+            )
         }
+        None => Ok(None),
     }
-    Ok(None)
 }
 
 /// All the per-template state a mining attempt needs.

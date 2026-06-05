@@ -19,7 +19,7 @@
 
 use prism::pipeline::PrismModel;
 use prism_btc::{
-    mine_at, recognize_under_bytes, serialize_prefix, uor_addr::AddressOutcome,
+    admit, mine_at, recognize_under_bytes, serialize_prefix, uor_addr::AddressOutcome,
     BitcoinAddressModel, Bits, BlockHeader, BlockHeaderCarrier, MerkleRoot, MiningFailure,
     MiningOutcome, Target, Timestamp, Version,
 };
@@ -60,18 +60,9 @@ fn forward_kappa_label(header: &BlockHeader, nonce: u32) -> String {
     })
 }
 
-/// Bridge-layer admission stream: walks the nonce space invoking the
-/// kernel's single-recognition `mine_at` until it admits. The kernel
-/// never owns this iteration.
+/// V&V helper: the admission closure as a panic-on-exhaustion call.
 fn admit_by_nonce_scan(header: &BlockHeader, target: Target) -> MiningOutcome {
-    for nonce in 0u32..u32::MAX {
-        match mine_at(header, target, nonce) {
-            Ok(outcome) => return outcome,
-            Err(MiningFailure::DidNotAdmit { .. }) => continue,
-            Err(MiningFailure::PipelineFailure) => panic!("pipeline failure"),
-        }
-    }
-    panic!("permissive target should admit within the nonce space")
+    admit(header, target).expect("permissive target should admit within the orbit")
 }
 
 #[test]

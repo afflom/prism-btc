@@ -1,22 +1,19 @@
-extern crate alloc;
-use alloc::format;
-
 use crate::types::{JsBlockAddress, JsBlockHeader};
-use prism_btc::{
-    mine_at, Bits, BlockHeader, MerkleRoot, MiningFailure, Target, Timestamp, Version,
-};
+use prism_btc::{admit, Bits, BlockHeader, MerkleRoot, Target, Timestamp, Version};
 use wasm_bindgen::prelude::*;
 
 /// Mine a block header from JavaScript.
 ///
-/// The kernel exposes one admission body — `prism_btc::mine_at` — which
-/// recognizes one `(header, nonce)` candidate. This wasm bridge owns
-/// the iteration: it walks the 32-bit nonce space invoking `mine_at`
-/// per candidate and projects the first admitting outcome's
-/// observables back to JS.
+/// Realizes [`prism_btc::admit`] — the kernel's admission closure
+/// (the Kleene-star fixed point of per-nonce recognition over the
+/// [`prism_btc::NonceOrbit`]) — and projects the recognized outcome's
+/// receiver-side observables to JS. **No explicit loop**: the closure
+/// is the declarative stream-fold the kernel exposes; the wasm bridge
+/// is the JS-side projection of its result.
 ///
 /// Returns a `JsBlockAddress` on success, or throws a JS error string
-/// on failure.
+/// on failure (orbit exhaustion: vary the template — timestamp /
+/// extranonce — and retry).
 ///
 /// # Arguments
 /// * `js_header` — block header fields (version, prev_hash, merkle_root, timestamp, bits)
@@ -30,25 +27,15 @@ pub fn mine_block(js_header: &JsBlockHeader, nbits: u32) -> Result<JsBlockAddres
         timestamp: Timestamp(js_header.timestamp),
         bits: Bits(js_header.bits),
     };
-    let target = Target::new(nbits);
 
-    for nonce in 0u32..=u32::MAX {
-        match mine_at(&header, target, nonce) {
-            Ok(outcome) => {
-                let coords = outcome.observables().coords;
-                return Ok(JsBlockAddress::new(
-                    coords.datum,
-                    coords.stratum,
-                    coords.spectrum,
-                ));
-            }
-            Err(MiningFailure::DidNotAdmit { .. }) => continue,
-            Err(e @ MiningFailure::PipelineFailure) => {
-                return Err(JsValue::from_str(&format!("{:?}", e)));
-            }
-        }
-    }
-    Err(JsValue::from_str(
-        "nonce space exhausted without admission — vary the template (timestamp / extranonce) and retry",
-    ))
+    admit(&header, Target::new(nbits))
+        .map(|outcome| {
+            let coords = outcome.observables().coords;
+            JsBlockAddress::new(coords.datum, coords.stratum, coords.spectrum)
+        })
+        .ok_or_else(|| {
+            JsValue::from_str(
+                "nonce orbit exhausted without admission — vary the template (timestamp / extranonce) and retry",
+            )
+        })
 }

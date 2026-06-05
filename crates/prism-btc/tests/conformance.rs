@@ -25,27 +25,23 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use prism_btc::{
-    decode_payload, leak_target, mine_at, p_adic_valuation, payload_bit, payload_commitment_k2,
+    decode_payload, leak_target, p_adic_valuation, payload_bit, payload_commitment_k2,
     payload_commitment_k4, payload_commitment_k8, sha256d_display, target_commitment, AffineParity,
     AndCommitment, Bits, BlockHeader, EmptyCommitment, KappaObservables,
-    LexicographicLessEqThreshold, MerkleRoot, MiningFailure, MiningOutcome, ObservablePredicate,
-    SingletonCommitment, Stratum, Target, TargetCommitment, Timestamp, TriadicCoords,
-    TypedCommitment, UltrametricCloseTo, Version, WalshHadamardParity, CANONICAL_PRIMES,
+    LexicographicLessEqThreshold, MerkleRoot, MiningFailure, MiningOutcome, NonceOrbit,
+    ObservablePredicate, SingletonCommitment, Stratum, Target, TargetCommitment, Timestamp,
+    TriadicCoords, TypedCommitment, UltrametricCloseTo, Version, WalshHadamardParity,
+    CANONICAL_PRIMES,
 };
 
-/// Bridge-layer admission stream — drives the nonce space invoking the
-/// kernel's single-recognition `mine_at` until it admits. Returns
-/// `Some(outcome)` on admission or `None` after `max_nonce` candidates
-/// without admission (for permissive targets a small cap suffices).
+/// V&V helper: bound the admission closure to the first `max_nonce`
+/// candidates of the orbit. The kernel's [`NonceOrbit`] is the
+/// Kleene-closure form; [`Iterator::take`] truncates it, and
+/// [`Iterator::find_map`] selects the admitting witness.
 fn admit_within(header: &BlockHeader, target: Target, max_nonce: u32) -> Option<MiningOutcome> {
-    for nonce in 0u32..max_nonce {
-        match mine_at(header, target, nonce) {
-            Ok(outcome) => return Some(outcome),
-            Err(MiningFailure::DidNotAdmit { .. }) => continue,
-            Err(MiningFailure::PipelineFailure) => return None,
-        }
-    }
-    None
+    NonceOrbit::new(header, target)
+        .take(max_nonce as usize)
+        .find_map(Result::ok)
 }
 
 const REGTEST_NBITS: u32 = 0x207fffff;

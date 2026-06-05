@@ -47,13 +47,21 @@
 //!
 //! ## Quick reference
 //!
-//! - [`mine_at`] — the kernel's sole admission‑recognition entry. One
-//!   inference at a given nonce: serializes the header to its 80‑byte
+//! - [`mine_at`] — the single‑step recognition operator `W`: one
+//!   inference at a given nonce. Serializes the header to its 80‑byte
 //!   wire form, wraps it in a [`BlockHeaderCarrier`], and asks
 //!   foundation's `run_route` to recognize it under the pinned
-//!   [`TargetCommitment`]. **The kernel does not search**; if no nonce
-//!   in the host's stream admits, the host varies its stream
-//!   (extranonce / timestamp / next template) and re‑recognizes.
+//!   [`TargetCommitment`].
+//! - [`NonceOrbit`] — the canonical-form **lazy enumeration** of `W`
+//!   over the 32‑bit nonce space, as a standard `Iterator`. The orbit
+//!   does not iterate; consumers iterate it via standard combinators
+//!   ([`Iterator::find_map`], [`Iterator::inspect`], [`Iterator::take`]).
+//! - [`admit`] — the **admission closure** `W*` over [`NonceOrbit`]:
+//!   the Kleene-star fixed point of per-nonce recognition, returning
+//!   the unique admitting witness if one exists. Idempotent; the
+//!   characteristic-1 closure form. **The kernel does not own a
+//!   search loop** — `admit` is `NonceOrbit::new(...)
+//!   .find_map(Result::ok)`, a declarative stream-fold.
 //! - [`recognize_under`] — scope a target threshold around a closure
 //!   that drives [`BitcoinAddressModel`]'s `forward` directly (V&V tests
 //!   that exercise the ψ‑pipeline without an admission relation).
@@ -160,7 +168,10 @@ pub use model::{
     VERB_TERMS_BLOCK_ADDRESS_INFERENCE,
 };
 pub use observables::{ExtendedObservables, KappaObservables, CANONICAL_PRIMES};
-pub use pipeline::{mine_at, recognize_under, recognize_under_bytes, MiningFailure, MiningOutcome};
+pub use pipeline::{
+    admit, mine_at, recognize_under, recognize_under_bytes, MiningFailure, MiningOutcome,
+    NonceOrbit,
+};
 pub use shapes::{PrismBtcBounds, Sha256dHasher};
 
 // The shared UOR-ADDR outcome surface, re-exported for downstream use.

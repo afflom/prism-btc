@@ -291,6 +291,86 @@ pub fn mine_at(
     address_at(header, nonce)
 }
 
+/// The **nonce orbit** for a fixed `(header, target)` pair — the lazy
+/// `Iterator` enumeration of per-nonce recognitions over the 32-bit
+/// nonce space.
+///
+/// In the characteristic-1 reading of the kernel, [`mine_at`] is the
+/// single-step recognition operator `W` and the orbit is the canonical
+/// form of `W` lifted to all candidates: a sequence whose `k`-th
+/// element is `W` applied at nonce `k`. The orbit is **declarative** —
+/// it does not iterate; consumers iterate it via standard combinators
+/// ([`Iterator::find_map`], [`Iterator::inspect`], [`Iterator::take`])
+/// to realize the **admission closure** (next item below).
+///
+/// The orbit owns no admission state; it is a pure projection of
+/// `(header, target)` into the lazy stream of recognitions.
+#[derive(Debug)]
+pub struct NonceOrbit<'a> {
+    header: &'a BlockHeader,
+    target: Target,
+    cursor: Option<u32>,
+}
+
+impl<'a> NonceOrbit<'a> {
+    /// Construct an orbit starting at nonce 0.
+    #[must_use]
+    pub fn new(header: &'a BlockHeader, target: Target) -> Self {
+        Self {
+            header,
+            target,
+            cursor: Some(0),
+        }
+    }
+
+    /// Construct an orbit starting at a specific nonce — for resuming a
+    /// partially-walked orbit. The campaign aggregate is
+    /// path-independent (CM-4), so split orbits over the same
+    /// `(header, target)` compose into the same final state.
+    #[must_use]
+    pub fn starting_at(header: &'a BlockHeader, target: Target, nonce: u32) -> Self {
+        Self {
+            header,
+            target,
+            cursor: Some(nonce),
+        }
+    }
+}
+
+impl<'a> Iterator for NonceOrbit<'a> {
+    type Item = Result<MiningOutcome, MiningFailure>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let nonce = self.cursor?;
+        let result = mine_at(self.header, self.target, nonce);
+        self.cursor = nonce.checked_add(1);
+        Some(result)
+    }
+}
+
+/// **The admission closure** for `(header, target)` — the unique
+/// admitting [`MiningOutcome`] over the 32-bit nonce orbit (the smallest
+/// nonce that admits, by orbit order), or `None` if the orbit is
+/// exhausted without admission. Idempotent: re-running on the same
+/// canonical inputs returns the same witness by re-derivation (L5).
+///
+/// This is the **Kleene-star fixed point of [`mine_at`] over the
+/// [`NonceOrbit`]** — the characteristic-1 closure of per-nonce
+/// recognition, realized declaratively as
+/// `NonceOrbit::new(header, target).find_map(Result::ok)`. The kernel
+/// neither owns nor exposes a search loop; the closure is a stream-fold
+/// over the orbit, expressed in standard iterator combinators.
+///
+/// The recognized witness's `wire_format_header` is **byte-identical**
+/// to the canonical Bitcoin wire-format header any honest miner finding
+/// that same admitting nonce would emit — the closure's output is
+/// uniquely determined by `(header, target)`, regardless of the
+/// implementation that realizes it.
+#[must_use]
+pub fn admit(header: &BlockHeader, target: Target) -> Option<MiningOutcome> {
+    NonceOrbit::new(header, target).find_map(Result::ok)
+}
+
 /// One inference at `nonce`, assuming the target is already published on
 /// the thread-local slot. The body is the **σ-axis projection**:
 /// canonical bytes → carrier → trivialization attempt; outcome carries
@@ -343,29 +423,14 @@ mod tests {
         }
     }
 
-    /// Host-side admission stream — vary the nonce until [`mine_at`]
-    /// admits. This is the **bridge layer** in miniature: the kernel
-    /// never owns the iteration; here it's inlined to drive a sweep
-    /// for the test fixture's permissive target.
-    fn admit_by_nonce_scan(header: &BlockHeader, target: Target) -> MiningOutcome {
-        for nonce in 0u32..u32::MAX {
-            match mine_at(header, target, nonce) {
-                Ok(outcome) => return outcome,
-                Err(MiningFailure::DidNotAdmit { .. }) => continue,
-                Err(MiningFailure::PipelineFailure) => panic!("pipeline failure"),
-            }
-        }
-        panic!("permissive target should admit within nonce space");
-    }
-
     #[test]
-    fn mine_at_admits_for_permissive_target() {
-        // The permissive regtest target (~50% admission) yields an
-        // admitting block hash within a few nonces under any host
-        // iteration discipline; here the host inlines a scan.
+    fn admit_yields_a_witness_for_permissive_target() {
+        // The permissive regtest target (~50% admission) admits within
+        // a few nonces of the orbit; [`admit`] is the Kleene-star
+        // closure that realizes the admitting witness declaratively.
         let target = Target::new(0x207fffff);
         let header = permissive_header(1_700_000_000);
-        let outcome = admit_by_nonce_scan(&header, target);
+        let outcome = admit(&header, target).expect("permissive target admits");
         assert!(outcome.address().starts_with("sha256d:"));
         assert_eq!(outcome.address().len(), 72);
         assert_eq!(outcome.wire_format_header.len(), 80);
@@ -379,7 +444,7 @@ mod tests {
     fn admitted_block_hash_satisfies_target() {
         let target = Target::new(0x207fffff);
         let header = permissive_header(1_700_000_001);
-        let outcome = admit_by_nonce_scan(&header, target);
+        let outcome = admit(&header, target).expect("admits");
         // The display-order digest is ≤ the target value.
         assert!(target.is_satisfied_by_bytes(&outcome.digest()));
     }
