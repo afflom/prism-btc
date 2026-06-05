@@ -168,9 +168,9 @@ testnet4-status:
 # `getblocktemplate.bits` and carried in the model's `TargetCommitment`.
 # Each addressing inference folds the 80-byte header carrier through the
 # `sha256d` σ-axis to the block-hash κ-label; foundation's `run_route`
-# checks `block_hash ≤ target` via the commitment. `mine()` scans the
-# nonce space; on `DidNotAdmit`, the bitcoind boundary rolls the
-# extranonce and re-invokes.
+# checks `block_hash ≤ target` via the commitment. The kernel
+# (`mine_at`) recognizes one `(header, nonce)` candidate; the prism-mine
+# bridge walks the nonce space and rolls the extranonce on exhaustion.
 testnet4-mine BLOCKS="1" DURATION_SEC="300":
     #!/usr/bin/env bash
     set -euo pipefail

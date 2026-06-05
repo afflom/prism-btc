@@ -1,26 +1,49 @@
-//! prism-btc's public entry point — the ψ-pipeline block-address
-//! inference, as a UOR-ADDR realization.
+//! prism-btc's public entry — the ψ-pipeline **recognition** of an
+//! admitted block-address inference, as a UOR-ADDR realization.
 //!
-//! 1. The host serializes a [`BlockHeader`] + candidate nonce to the
-//!    80-byte wire form ([`crate::ops::header::serialize_header`]) — the
-//!    ADR-060 canonical form — and wraps it in a
-//!    [`BlockHeaderCarrier`](crate::model::BlockHeaderCarrier).
-//! 2. [`set_thread_target`] publishes the difficulty target's κ-label form
-//!    on a thread-local slot, then [`BitcoinAddressModel::forward`] runs
-//!    the shared ψ-tower: ψ₁–ψ₈ thread the borrowed carrier through, and
-//!    ψ₉ folds it through the `sha256d` σ-axis to mint the
-//!    `sha256d:<64hex>` κ-label (the block hash in display order).
-//! 3. Foundation's `run_route` evaluates the model's `C = TargetCommitment`
-//!    on the κ-label: admission `kappa_label ≤ target_label` is Bitcoin's
-//!    PoW relation `block_hash ≤ target`. On non-admission, run_route
-//!    returns `PipelineFailure::ShapeViolation`; on admission it seals a
-//!    `Grounded`, from which [`AddressOutcome`](uor_addr::AddressOutcome)
-//!    extracts the κ-label + replayable TC-05
-//!    [`AddressWitness`](uor_addr::AddressWitness) — **the proof-of-work
-//!    witness**.
+//! The kernel exposes **one admission body**, [`mine_at`]: a single
+//! recognition of `(header, nonce)` against `target`. There is no scan
+//! loop here — the act of admitting is the act of *recognizing* one
+//! canonical-form candidate; if the candidate is rejected, the host
+//! varies its stream (next nonce, next extranonce, next template) and
+//! calls back. The kernel never owns the iteration.
 //!
-//! [`mine_at`] is a single inference at one nonce; [`mine`] scans the
-//! 32-bit nonce space and returns the first admitting outcome.
+//! Body of one recognition:
+//!
+//! 1. Serialize `(header, nonce)` to the 80-byte ADR-060 wire form
+//!    ([`crate::ops::header::serialize_header`]) and wrap it in a
+//!    [`BlockHeaderCarrier`].
+//! 2. Publish the target's κ-label form on a per-thread slot
+//!    (implementation detail — `pub(crate)` and never visible on the
+//!    public surface). Foundation's macro-emitted
+//!    [`BitcoinAddressModel::commitment()`](crate::model::BitcoinAddressModel)
+//!    body reads this slot to construct the pinned `TargetCommitment`
+//!    each `forward()` evaluates.
+//! 3. [`BitcoinAddressModel`]'s `forward` runs the shared ψ-tower:
+//!    ψ₁–ψ₈ thread the borrowed carrier through; ψ₉ folds it through
+//!    the `sha256d` σ-axis to mint the `sha256d:<64hex>` κ-label
+//!    (the block hash in display order).
+//! 4. Foundation's `run_route` evaluates the model's
+//!    `C = TargetCommitment` on the κ-label: admission
+//!    `kappa_label ≤ target_label` is Bitcoin's PoW relation. On
+//!    non-admission, run_route returns
+//!    `PipelineFailure::ShapeViolation`; on admission it seals a
+//!    `Grounded`, from which
+//!    [`AddressOutcome`] extracts the
+//!    κ-label + replayable TC-05
+//!    [`AddressWitness`] — **the
+//!    proof-of-work witness**.
+//!
+//! The [`MiningOutcome`] returned is a **witness projection**: every
+//! field is derivable from `(witness, wire_format_header)` by replaying
+//! the σ-axis (L3, L5). The fields exist for ergonomics, not as
+//! independent truth.
+//!
+//! For V&V tests that drive [`BitcoinAddressModel`]'s `forward` directly
+//! to inspect structural properties without an admission relation, use
+//! [`recognize_under`] — a scoped helper that publishes the target,
+//! runs a closure, and is the only public way to enter the ψ-pipeline
+//! outside [`mine_at`].
 
 use core::cell::Cell;
 
@@ -35,33 +58,48 @@ use crate::ops::sha256::sha256d_display;
 /// κ-label byte width for the `sha256d` σ-axis (`sha256d:<64hex>` = 72).
 const LABEL: usize = BLOCK_ADDRESS_LABEL_BYTES;
 
-/// The result of a successful [`mine`] / [`mine_at`] inference. The
-/// `block_hash` (κ-label / 32-byte display digest) is guaranteed to
-/// satisfy the host-supplied target — `Ok(MiningOutcome)` is returned only
-/// when foundation's `run_route` admits.
+/// The recognized result of a [`mine_at`] inference — a **witness
+/// projection**.
+///
+/// `(witness, wire_format_header)` are the canonical pair; every other
+/// field is derivable from those two by replaying the σ-axis (L3, L5).
+/// The eagerly-stored projections — `address`, `nonce`, `digest`,
+/// `observables` — exist for caller ergonomics; they are *not*
+/// independent truth, and any of them can be re-derived from the pair:
+///
+/// - `address == witness.kappa_label()`
+/// - `digest == sha256d_display(&wire_format_header)`
+/// - `nonce == u32::from_le_bytes(wire_format_header[76..80])`
+/// - `observables == KappaObservables::from_digest(&digest)`
+///
+/// `Ok(MiningOutcome)` is returned only when foundation's `run_route`
+/// admits — the witness existence *is* the admission relation.
 #[derive(Debug)]
 pub struct MiningOutcome {
     /// The replayable TC-05 proof-of-work witness (owns its trace +
     /// fingerprint). [`AddressWitness::verify`] re-certifies the
     /// derivation without re-invoking the σ-axis.
     pub witness: AddressWitness<LABEL, 32>,
-    /// The `sha256d:<64hex>` κ-label — the conventional Bitcoin block hash
-    /// (display order) as a typed reference.
-    pub address: KappaLabel<LABEL>,
-    /// The winning nonce (canonical Bitcoin LE).
-    pub nonce: u32,
-    /// The 32-byte block hash in display order (big-endian).
-    pub digest: [u8; 32],
-    /// The 80-byte wire-format header that addresses to `digest` — for the
-    /// host-boundary `submitblock` path.
+    /// The 80-byte wire-format header that re-derives to `digest`. The
+    /// canonical-form companion to the witness; together they admit
+    /// total re-derivation of every other field (L5).
     pub wire_format_header: [u8; 80],
-    /// Canonical UOR property landscape of the block hash — triadic
-    /// coordinates (stratum + spectrum) plus p-adic valuations. The
-    /// receiver-side typed lens; always computed, stack-resident.
+    /// Projection: the `sha256d:<64hex>` κ-label — equal to
+    /// `witness.kappa_label()`.
+    pub address: KappaLabel<LABEL>,
+    /// Projection: the recognized nonce (canonical Bitcoin LE) — equal
+    /// to `u32::from_le_bytes(wire_format_header[76..80])`.
+    pub nonce: u32,
+    /// Projection: the 32-byte block hash in display order — equal to
+    /// `sha256d_display(&wire_format_header)`.
+    pub digest: [u8; 32],
+    /// Projection: canonical UOR property landscape of the block hash —
+    /// triadic coordinates (stratum + spectrum) plus p-adic valuations.
+    /// Equal to `KappaObservables::from_digest(&digest)`.
     pub observables: KappaObservables,
 }
 
-/// Failure modes from [`mine`] / [`mine_at`].
+/// Failure modes from [`mine_at`].
 ///
 /// The receiver-side typed lens [`KappaObservables`] is **total** —
 /// present on `Ok(MiningOutcome)` and on `DidNotAdmit` alike, so host
@@ -87,54 +125,94 @@ pub enum MiningFailure {
     PipelineFailure,
 }
 
-// ─── Thread-local target slot ──────────────────────────────────────────
+// ─── Per-thread target slot (implementation detail) ────────────────────
 //
 // `LexicographicLessEqThreshold::target` requires `&'static [u8]`. The
 // macro-emitted `BitcoinAddressModel::commitment()` body reads the active
-// target κ-label from this slot, so `mine`/`mine_at` publish it before
-// invoking `forward`. Concurrent miners on independent threads have
-// independent slots.
+// target κ-label from this slot, so [`mine_at`] and [`recognize_under`]
+// publish it before invoking `forward`. The slot is `pub(crate)` — it is
+// **not** part of the kernel's public surface, and the public API never
+// exposes "set the target" as a separate step. Concurrent miners on
+// independent threads have independent slots.
 
 thread_local! {
     static THREAD_TARGET: Cell<Option<&'static [u8]>> = const { Cell::new(None) };
 }
 
-/// Publish the thread-local active target as its κ-label-form threshold
-/// (`sha256d:<targethex>`). Idempotent — repeated calls with the same
-/// target resolve to the same `&'static [u8]` via the leak registry.
-///
-/// The public entry points call this automatically; callers invoking
-/// [`BitcoinAddressModel::forward`] directly must call it first so the
-/// model's `commitment()` body can read the target.
-pub fn set_thread_target(target: &Target) {
+/// Pin a target's κ-label-form threshold on this thread's slot.
+/// Idempotent — repeated calls with the same target resolve to the same
+/// `&'static [u8]` via the leak registry.
+pub(crate) fn set_thread_target(target: &Target) {
     let pinned = crate::commitment::leak_target(target.to_bytes());
     THREAD_TARGET.with(|cell| cell.set(Some(pinned)));
 }
 
-/// Like [`set_thread_target`] but takes raw 32-byte (display-order) target
-/// bytes — useful for tests constructing a target directly.
-pub fn set_thread_target_bytes(bytes: [u8; 32]) {
+/// Like [`set_thread_target`] but takes raw 32-byte (display-order)
+/// target bytes — used by [`recognize_under`].
+pub(crate) fn set_thread_target_bytes(bytes: [u8; 32]) {
     let pinned = crate::commitment::leak_target(bytes);
     THREAD_TARGET.with(|cell| cell.set(Some(pinned)));
 }
 
 /// Read the thread-local active target κ-label. Panics if none has been
-/// set — every entry point sets it before invoking `forward`, so the panic
-/// path indicates a direct `forward()` call without a target preface.
+/// set — every entry point publishes it before invoking `forward`, so a
+/// panic here indicates a direct `forward()` call from inside the crate
+/// without a recognition preface.
 #[must_use]
-pub fn current_thread_target() -> &'static [u8] {
+pub(crate) fn current_thread_target() -> &'static [u8] {
     THREAD_TARGET.with(|cell| {
         cell.get()
-            .expect("prism-btc: no active target on this thread; call mine() / set_thread_target() before forward()")
+            .expect("prism-btc: no active target on this thread; call mine_at() / recognize_under() before forward()")
     })
+}
+
+/// Scope a target threshold around `f`, the only public way to drive
+/// [`BitcoinAddressModel`]'s `forward` directly without going through
+/// [`mine_at`]. V&V tests inspecting ψ-pipeline structural properties
+/// without an admission relation pass a permissive target (`[0xff;
+/// 32]`) here.
+///
+/// The target is published on this thread's slot for the duration of
+/// `f`; the slot is **not** cleared on exit (subsequent calls overwrite
+/// it). This matches the contract of [`mine_at`]: the kernel does not
+/// own a "target lifetime" concept — only a "the most recent
+/// recognition pinned this target" invariant.
+///
+/// # Examples
+///
+/// ```ignore
+/// use prism_btc::{recognize_under, BitcoinAddressModel, BlockHeaderCarrier, Target};
+/// use prism::pipeline::PrismModel;
+///
+/// let wire: [u8; 80] = /* canonical-form header bytes */;
+/// let label = recognize_under(Target::new(0x207fffff), || {
+///     let carrier = BlockHeaderCarrier::new(&wire);
+///     BitcoinAddressModel::forward(carrier).unwrap()
+/// });
+/// ```
+pub fn recognize_under<R>(target: Target, f: impl FnOnce() -> R) -> R {
+    set_thread_target(&target);
+    f()
+}
+
+/// Like [`recognize_under`] but takes raw 32-byte (display-order)
+/// threshold bytes — for V&V tests that need a threshold that is not
+/// representable as nBits (e.g. `[0xff; 32]` to admit every κ-label).
+pub fn recognize_under_bytes<R>(threshold: [u8; 32], f: impl FnOnce() -> R) -> R {
+    set_thread_target_bytes(threshold);
+    f()
 }
 
 /// **A single ψ-pipeline block-address inference** at a specific nonce.
 ///
-/// Serializes `(header, nonce)`, addresses it through
-/// [`BitcoinAddressModel`], and reports whether the resulting block hash
-/// satisfies `target` (evaluated inside foundation's `run_route` via the
-/// pinned `C = TargetCommitment`).
+/// Serializes `(header, nonce)` to canonical form, addresses it through
+/// [`BitcoinAddressModel`], and reports whether the resulting κ-label
+/// is admitted by `target` (evaluated inside foundation's `run_route`
+/// via the pinned `C = TargetCommitment`).
+///
+/// This is the kernel's sole admission-recognition entry. The kernel
+/// does **not** scan: if this nonce is not admitted, the host varies
+/// its stream (next nonce, extranonce, next template) and re-invokes.
 ///
 /// # Errors
 ///
@@ -151,40 +229,8 @@ pub fn mine_at(
     address_at(header, nonce)
 }
 
-/// **prism-btc's public mining entry point** — scan the 32-bit nonce space
-/// for an admitting block hash.
-///
-/// Publishes `target` once, then addresses `(header, nonce)` for
-/// `nonce = 0, 1, …` until the κ-label satisfies the target, returning the
-/// first admitting [`MiningOutcome`]. If the whole nonce space is exhausted
-/// without admission, returns [`MiningFailure::DidNotAdmit`] carrying the
-/// final candidate (the host then varies the template — timestamp /
-/// extranonce — and retries).
-///
-/// # Errors
-///
-/// - [`MiningFailure::DidNotAdmit`] — no nonce in `[0, u32::MAX]` admitted.
-/// - [`MiningFailure::PipelineFailure`] — a substrate-level shape violation.
-pub fn mine(header: &BlockHeader, target: Target) -> Result<MiningOutcome, MiningFailure> {
-    set_thread_target(&target);
-    let mut nonce: u32 = 0;
-    loop {
-        match address_at(header, nonce) {
-            Ok(outcome) => return Ok(outcome),
-            Err(MiningFailure::PipelineFailure) => return Err(MiningFailure::PipelineFailure),
-            Err(did_not_admit) => {
-                if nonce == u32::MAX {
-                    return Err(did_not_admit);
-                }
-                nonce += 1;
-            }
-        }
-    }
-}
-
 /// One inference at `nonce`, assuming the target is already published on
-/// the thread-local slot. Factored out so [`mine`]'s scan publishes the
-/// target only once.
+/// the thread-local slot.
 fn address_at(header: &BlockHeader, nonce: u32) -> Result<MiningOutcome, MiningFailure> {
     use prism::pipeline::PrismModel;
 
@@ -198,10 +244,10 @@ fn address_at(header: &BlockHeader, nonce: u32) -> Result<MiningOutcome, MiningF
             let digest = sha256d_display(&wire);
             Ok(MiningOutcome {
                 witness: outcome.witness,
+                wire_format_header: wire,
                 address: outcome.address,
                 nonce,
                 digest,
-                wire_format_header: wire,
                 observables: KappaObservables::from_digest(&digest),
             })
         }
@@ -239,14 +285,29 @@ mod tests {
         }
     }
 
+    /// Host-side admission stream — vary the nonce until [`mine_at`]
+    /// admits. This is the **bridge layer** in miniature: the kernel
+    /// never owns the iteration; here it's inlined to drive a sweep
+    /// for the test fixture's permissive target.
+    fn admit_by_nonce_scan(header: &BlockHeader, target: Target) -> MiningOutcome {
+        for nonce in 0u32..u32::MAX {
+            match mine_at(header, target, nonce) {
+                Ok(outcome) => return outcome,
+                Err(MiningFailure::DidNotAdmit { .. }) => continue,
+                Err(MiningFailure::PipelineFailure) => panic!("pipeline failure"),
+            }
+        }
+        panic!("permissive target should admit within nonce space");
+    }
+
     #[test]
-    fn mine_admits_for_permissive_target() {
-        // The permissive regtest target (~50% admission) must yield an
-        // admitting block hash within a few nonces.
+    fn mine_at_admits_for_permissive_target() {
+        // The permissive regtest target (~50% admission) yields an
+        // admitting block hash within a few nonces under any host
+        // iteration discipline; here the host inlines a scan.
         let target = Target::new(0x207fffff);
         let header = permissive_header(1_700_000_000);
-        let outcome = mine(&header, target).expect("permissive target admits");
-        // The κ-label is the sha256d block hash; the witness re-verifies.
+        let outcome = admit_by_nonce_scan(&header, target);
         assert!(outcome.address.starts_with("sha256d:"));
         assert_eq!(outcome.address.len(), 72);
         assert_eq!(outcome.wire_format_header.len(), 80);
@@ -257,7 +318,7 @@ mod tests {
     fn admitted_block_hash_satisfies_target() {
         let target = Target::new(0x207fffff);
         let header = permissive_header(1_700_000_001);
-        let outcome = mine(&header, target).expect("admits");
+        let outcome = admit_by_nonce_scan(&header, target);
         // The display-order digest is ≤ the target value.
         assert!(target.is_satisfied_by_bytes(&outcome.digest));
     }

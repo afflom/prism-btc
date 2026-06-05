@@ -6,7 +6,7 @@
 //! - **ψ-pipeline structural form** — the verb arena composes only
 //!   ψ-stage Term variants (no σ-residuals; substrate-enforced at
 //!   compile time but pinned here for defense-in-depth).
-//! - **Fail-closed mining contract** — `mine()` only returns an
+//! - **Fail-closed mining contract** — `mine_at` only returns an
 //!   admitting `MiningOutcome`; the κ-label's display-order digest
 //!   actually satisfies the host-supplied target — admission is
 //!   evaluated inside foundation's `run_route` via the model's
@@ -26,9 +26,10 @@
 use prism::operation::Term;
 use prism::pipeline::{ConstrainedTypeShape, ConstraintRef, PrismModel};
 use prism_btc::{
-    mine, mine_at, serialize_header, serialize_prefix, set_thread_target_bytes, sha256d_display,
+    mine_at, recognize_under_bytes, serialize_header, serialize_prefix, sha256d_display,
     uor_addr::AddressOutcome, BitcoinAddressModel, Bits, BlockAddressLabel, BlockHeader,
-    BlockHeaderCarrier, MerkleRoot, Target, Timestamp, Version, VERB_TERMS_BLOCK_ADDRESS_INFERENCE,
+    BlockHeaderCarrier, MerkleRoot, MiningFailure, MiningOutcome, Target, Timestamp, Version,
+    VERB_TERMS_BLOCK_ADDRESS_INFERENCE,
 };
 
 fn canonical_header(version: u32, timestamp: u32, bits: u32) -> BlockHeader {
@@ -46,20 +47,37 @@ fn canonical_header(version: u32, timestamp: u32, bits: u32) -> BlockHeader {
     }
 }
 
-/// Drive `BitcoinAddressModel::forward` on a borrowed carrier after
-/// publishing a permissive thread-local target (`[0xff; 32]`) so admission
-/// holds for every κ-label — V&V tests exercise the ψ-pipeline's
-/// *structural* properties, not the admission relation. Returns the
-/// κ-label string.
+/// Recognize `(header, nonce)` under a permissive target (`[0xff;
+/// 32]`) — admission holds for every κ-label — and return the κ-label
+/// string. V&V tests use this to inspect the ψ-pipeline's *structural*
+/// properties without an admission relation.
 fn forward_kappa_label(header: &BlockHeader, nonce: u32) -> String {
-    set_thread_target_bytes([0xffu8; 32]);
-    let wire = serialize_header(header, nonce);
-    let carrier = BlockHeaderCarrier::new(&wire);
-    let grounded =
-        BitcoinAddressModel::forward(carrier).expect("ψ-pipeline must run on permissive target");
-    let outcome = AddressOutcome::<72, 32>::from_grounded(&grounded)
-        .expect("outcome extracts from the sealed Grounded");
-    outcome.address.as_str().to_owned()
+    recognize_under_bytes([0xffu8; 32], || {
+        let wire = serialize_header(header, nonce);
+        let carrier = BlockHeaderCarrier::new(&wire);
+        let grounded = BitcoinAddressModel::forward(carrier)
+            .expect("ψ-pipeline must run on permissive target");
+        let outcome = AddressOutcome::<72, 32>::from_grounded(&grounded)
+            .expect("outcome extracts from the sealed Grounded");
+        outcome.address.as_str().to_owned()
+    })
+}
+
+/// Host-side admission stream — walks the nonce space invoking the
+/// kernel's single-recognition `mine_at` until it admits. The kernel
+/// never owns this iteration; the bridge does. Inlined here so V&V can
+/// exercise admitted outcomes against a real target.
+fn admit_by_nonce_scan(header: &BlockHeader, target: Target) -> MiningOutcome {
+    for nonce in 0u32..u32::MAX {
+        match mine_at(header, target, nonce) {
+            Ok(outcome) => return outcome,
+            Err(MiningFailure::DidNotAdmit { .. }) => continue,
+            Err(MiningFailure::PipelineFailure) => {
+                panic!("ψ-pipeline shape violation for canonical_header — unreachable")
+            }
+        }
+    }
+    panic!("permissive target should admit within the nonce space")
 }
 
 // ─── §1. Structural verb-arena invariants ──────────────────────────────
@@ -115,7 +133,7 @@ fn v_verb_arena_implements_the_k_invariant_branch() {
 
 #[test]
 fn v_mine_admits_for_permissive_target() {
-    // Fail-closed invariant: mine() returns Ok only when the κ-label's
+    // Fail-closed invariant: mine_at returns Ok only when the κ-label's
     // display-order digest satisfies the target (evaluated inside
     // foundation's run_route via the pinned TargetCommitment).
     // Cryptographic re-derivation: recompute SHA-256d from the wire-format
@@ -123,7 +141,7 @@ fn v_mine_admits_for_permissive_target() {
     // target.
     let target = Target::new(0x207fffff);
     let header = canonical_header(1, 1_700_000_000, 0x207fffff);
-    let admitted = mine(&header, target).expect("permissive target must admit");
+    let admitted = admit_by_nonce_scan(&header, target);
 
     // The κ-label IS the sha256d:<64hex> address; the hex is the display-
     // order block hash. Re-derive from the reconstructed wire-format header.
@@ -143,22 +161,33 @@ fn v_mine_admits_for_permissive_target() {
 #[test]
 fn v_mine_outcome_digest_actually_satisfies_target_when_admitted() {
     // Fail-closed across the input space: for every (header, target) pair
-    // where mine() returns Ok, the digest genuinely satisfies the target.
+    // where mine_at returns Ok, the digest genuinely satisfies the target.
     let target = Target::new(0x207fffff);
     let mut admitted_count = 0;
     for ts_offset in 0u32..64 {
         let header = canonical_header(1, 1_700_000_000_u32 + ts_offset, 0x207fffff);
-        if let Ok(outcome) = mine(&header, target) {
+        // Recognize the first admitting nonce for this header (the
+        // bridge-layer scan, inlined). If admission lands, fail-closed
+        // requires the recognized digest actually satisfies the
+        // target.
+        let mut admitted = None;
+        for nonce in 0u32..1_000 {
+            if let Ok(outcome) = mine_at(&header, target, nonce) {
+                admitted = Some(outcome);
+                break;
+            }
+        }
+        if let Some(outcome) = admitted {
             admitted_count += 1;
             assert!(
                 target.is_satisfied_by_bytes(&outcome.digest),
-                "fail-closed: outcome.digest must satisfy target whenever mine() returns Ok"
+                "fail-closed: outcome.digest must satisfy target whenever mine_at() returns Ok"
             );
         }
     }
     assert!(
         admitted_count > 0,
-        "with a permissive target and 64 variations, at least one mine() should admit"
+        "with a permissive target and 64 variations, at least one mine_at scan should admit"
     );
 }
 
@@ -201,7 +230,7 @@ fn v_kappa_label_is_sha256d_of_reconstructed_wire_format_header() {
     // the wire-format Bitcoin header in display order. The 80-byte
     // wire-format header is carried as `outcome.wire_format_header`.
     let header = canonical_header(1, 1_700_000_000, 0x207fffff);
-    let outcome = mine(&header, Target::new(0x207fffff)).expect("permissive target must admit");
+    let outcome = admit_by_nonce_scan(&header, Target::new(0x207fffff));
 
     // The reconstructed wire-format header is byte-for-byte
     // serialize_header(header, winning_nonce). This is the bytes
@@ -235,7 +264,7 @@ fn v_wire_format_header_preserves_the_host_supplied_prefix() {
     // ψ-pipeline does not mutate the template-supplied bytes.
     let target = Target::new(0x207fffff);
     let header = canonical_header(1, 1_700_000_000, 0x207fffff);
-    let outcome = mine(&header, target).expect("permissive target must admit");
+    let outcome = admit_by_nonce_scan(&header, target);
 
     let prefix = serialize_prefix(&header);
     assert_eq!(
@@ -310,7 +339,7 @@ fn v_witness_replays_to_the_attested_kappa_label() {
     // address. The content fingerprint is the 32-byte σ-projection.
     let target = Target::new(0x207fffff);
     let header = canonical_header(1, 1_700_000_000, 0x207fffff);
-    let outcome = mine(&header, target).expect("permissive target must admit");
+    let outcome = admit_by_nonce_scan(&header, target);
 
     let replayed = outcome.witness.verify().expect("witness replays");
     assert_eq!(

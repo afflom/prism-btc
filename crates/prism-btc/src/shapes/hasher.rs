@@ -1,6 +1,6 @@
 //! `Sha256dHasher` — prism-btc's σ-axis: Bitcoin's double-SHA-256, as a
 //! foundation [`Hasher`] (ADR-007/ADR-010) **and** a uor-addr
-//! [`AddrHash`](uor_addr::AddrHash) σ-axis.
+//! [`AddrHash`] σ-axis.
 //!
 //! UOR-ADDR ships a pluggable σ-axis family (`sha256` / `blake3` /
 //! `sha3-256` / `keccak256` / `sha512`), but Bitcoin's content address is
@@ -11,8 +11,8 @@
 //!   the carrier through to compute the content fingerprint. The blanket
 //!   `impl<H: Hasher> AxisTuple for H` makes this the model's single
 //!   hash axis (kernel 0).
-//! - [`AddrHash`](uor_addr::AddrHash) — lets the **shared**
-//!   [`AddressResolverTuple`](uor_addr::AddressResolverTuple) ψ-tower carry
+//! - [`AddrHash`] — lets the **shared**
+//!   [`uor_addr::AddressResolverTuple`] ψ-tower carry
 //!   this axis: ψ₉ calls [`AddrHash::digest_carrier`] and formats the
 //!   `sha256d:<64hex>` κ-label.
 //!

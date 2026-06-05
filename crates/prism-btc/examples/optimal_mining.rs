@@ -4,7 +4,7 @@
 //! Demonstrates the cost-model commitment surface foundation publishes
 //! per wiki ADR-048 + ADR-049:
 //!
-//! 1. **Bare admission.** `mine()` goes through foundation's `run_route`
+//! 1. **Bare admission.** `mine_at` goes through foundation's `run_route`
 //!    with the model's pinned `C = TargetCommitment`. The returned
 //!    `MiningOutcome` carries a κ-label digest that, by construction,
 //!    satisfies `LexicographicLessEqThreshold` (regtest target).
@@ -35,9 +35,9 @@
 //! Run: `cargo run --release --example optimal_mining`.
 
 use prism_btc::{
-    decode_payload, leak_target, mine, payload_commitment_k2, payload_commitment_k4,
+    decode_payload, leak_target, mine_at, payload_commitment_k2, payload_commitment_k4,
     payload_commitment_k8, target_commitment, AndCommitment, Bits, BlockHeader, MerkleRoot,
-    SingletonCommitment, Stratum, Target, Timestamp, TypedCommitment, Version,
+    MiningFailure, SingletonCommitment, Stratum, Target, Timestamp, TypedCommitment, Version,
 };
 
 const REGTEST_NBITS: u32 = 0x207fffff;
@@ -52,15 +52,23 @@ fn permissive_header(timestamp: u32) -> BlockHeader {
     }
 }
 
+/// Drive the kernel's single-recognition `mine_at` over the nonce
+/// space — the bridge-layer admission stream the kernel does not own.
 fn mine_one_admitting_block() -> ([u8; 32], u32) {
     let target = Target::new(REGTEST_NBITS);
     for ts in 0u32..512 {
         let header = permissive_header(1_700_000_000_u32.wrapping_add(ts));
-        if let Ok(outcome) = mine(&header, target) {
-            return (outcome.digest, outcome.nonce);
+        for nonce in 0u32..4096 {
+            match mine_at(&header, target, nonce) {
+                Ok(outcome) => return (outcome.digest, outcome.nonce),
+                Err(MiningFailure::DidNotAdmit { .. }) => continue,
+                Err(MiningFailure::PipelineFailure) => {
+                    panic!("ψ-pipeline shape violation — unreachable")
+                }
+            }
         }
     }
-    panic!("permissive regtest target must admit within 512 template variations");
+    panic!("permissive regtest target must admit within 512×4096 candidates");
 }
 
 fn main() {
@@ -156,7 +164,7 @@ fn demo_composed_target_and_payload(digest: &[u8; 32]) {
     println!();
     println!("── §4. Composite admission ⊗ payload ───────────────────");
     println!();
-    // TargetCommitment against the regtest target — same bytes mine() used.
+    // TargetCommitment against the regtest target — same bytes the scan used.
     let target_static = leak_target(Target::new(REGTEST_NBITS).to_bytes());
     let target_c = target_commitment(target_static);
     let payload = payload_commitment_k4(decode_payload::<4>(digest));

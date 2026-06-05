@@ -11,14 +11,52 @@
 //! TC-05 [`AddressWitness`] the outcome carries **is** the proof-of-work
 //! witness — the catamorphism's seal. See [`ARCHITECTURE.md`].
 //!
+//! ## The laws
+//!
+//! Every public body of this crate is a witness to these five axioms.
+//! The crate carries no search algorithm, no value‑returning procedure
+//! that bypasses re‑derivation, and no shared mutable state at its
+//! public surface.
+//!
+//! - **L1 — identity is content.** Every typed output of the kernel is
+//!   the `sha256d:<64hex>` κ‑label of canonical bytes. Block hashes are
+//!   not values held by the host; they are addresses minted by the
+//!   ψ‑tower from canonical input.
+//! - **L2 — operate only on canonical forms.** The kernel admits
+//!   recognition only of the ADR‑060 carrier
+//!   ([`BlockHeaderCarrier`]) — the borrowed 80‑byte wire‑format
+//!   header. Field‑level [`BlockHeader`]s are host‑side ergonomics
+//!   that must be serialized to canonical form before they cross the
+//!   typed surface.
+//! - **L3 — the seal is memory.** A [`MiningOutcome`] is a projection
+//!   of `(witness, wire_format_header)`: every field it exposes is
+//!   derivable from those two by re‑running the σ‑axis. The kernel
+//!   stores no shadow state beyond what the witness already certifies.
+//! - **L4 — every output passes through the substrate.** Each κ‑label
+//!   the kernel emits is sealed by foundation's
+//!   [`BitcoinAddressModel`] (or by one of the six composition models
+//!   in [`composition`]) via the shared
+//!   [`AddressResolverTuple`](uor_addr::AddressResolverTuple). prism‑btc
+//!   carries no resolver code and no parallel σ‑axis.
+//! - **L5 — verify by re‑derivation.** Every value the kernel hands
+//!   back can be re‑checked by replaying the κ‑derivation:
+//!   [`AddressWitness::verify`] re‑certifies the sealed κ‑label, and
+//!   [`sha256d_display`] re‑derives the 32‑byte digest from the wire
+//!   bytes. No value is trusted on production; every value is
+//!   re‑derivable.
+//!
 //! ## Quick reference
 //!
-//! - [`mine`] / [`mine_at`] — the public entry points. [`mine`] scans the
-//!   nonce space for an admitting block hash; [`mine_at`] does one
-//!   inference at a given nonce. Both serialize the header to its 80-byte
-//!   wire form, wrap it in a [`BlockHeaderCarrier`], and run
-//!   [`BitcoinAddressModel`]; admission is evaluated **inside foundation's
-//!   `run_route`** via the pinned [`TargetCommitment`].
+//! - [`mine_at`] — the kernel's sole admission‑recognition entry. One
+//!   inference at a given nonce: serializes the header to its 80‑byte
+//!   wire form, wraps it in a [`BlockHeaderCarrier`], and asks
+//!   foundation's `run_route` to recognize it under the pinned
+//!   [`TargetCommitment`]. **The kernel does not search**; if no nonce
+//!   in the host's stream admits, the host varies its stream
+//!   (extranonce / timestamp / next template) and re‑recognizes.
+//! - [`recognize_under`] — scope a target threshold around a closure
+//!   that drives [`BitcoinAddressModel`]'s `forward` directly (V&V tests
+//!   that exercise the ψ‑pipeline without an admission relation).
 //! - [`BitcoinAddressModel`] — `PrismModel<DefaultHostTypes, PrismBtcBounds,
 //!   Sha256dHasher, uor_addr::AddressResolverTuple<Sha256dHasher>,
 //!   TargetCommitment>`. It binds uor-addr's **shared, format-independent**
@@ -122,10 +160,7 @@ pub use model::{
     VERB_TERMS_BLOCK_ADDRESS_INFERENCE,
 };
 pub use observables::{ExtendedObservables, KappaObservables, CANONICAL_PRIMES};
-pub use pipeline::{
-    current_thread_target, mine, mine_at, set_thread_target, set_thread_target_bytes,
-    MiningFailure, MiningOutcome,
-};
+pub use pipeline::{mine_at, recognize_under, recognize_under_bytes, MiningFailure, MiningOutcome};
 pub use shapes::{PrismBtcBounds, Sha256dHasher};
 
 // The shared UOR-ADDR outcome surface, re-exported for downstream use.

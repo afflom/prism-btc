@@ -11,14 +11,17 @@
 //! `kappa_label ≤ target_label` is Bitcoin's PoW relation.
 //!
 //! These tests pin the surface API: the κ-label shape, determinism,
-//! distinctness, and the fail-closed admission contract via the public
-//! [`mine`] / [`mine_at`] entry points.
+//! distinctness, and the fail-closed admission contract through
+//! [`mine_at`] — the kernel's sole admission-recognition entry. Host
+//! iteration over the nonce space is **bridge-layer**, inlined here as
+//! `admit_by_nonce_scan` to drive admitted outcomes against a real
+//! target.
 
 use prism::pipeline::PrismModel;
 use prism_btc::{
-    mine, mine_at, serialize_prefix, set_thread_target_bytes, uor_addr::AddressOutcome,
-    BitcoinAddressModel, Bits, BlockHeader, BlockHeaderCarrier, MerkleRoot, MiningFailure, Target,
-    Timestamp, Version,
+    mine_at, recognize_under_bytes, serialize_prefix, uor_addr::AddressOutcome,
+    BitcoinAddressModel, Bits, BlockHeader, BlockHeaderCarrier, MerkleRoot, MiningFailure,
+    MiningOutcome, Target, Timestamp, Version,
 };
 
 /// Permissive target: ~50% admission. Used for tests that exercise the
@@ -40,19 +43,35 @@ fn easy_header() -> BlockHeader {
     }
 }
 
-/// Drive `BitcoinAddressModel::forward` on a borrowed carrier after
-/// publishing a permissive thread-local target — the model's pinned
-/// `C = TargetCommitment` reads the target from this slot at every
-/// invocation (ADR-048). Returns the κ-label string.
+/// Recognize one `(header, nonce)` candidate under a permissive
+/// target — the only public way to drive `BitcoinAddressModel::forward`
+/// directly is via [`recognize_under_bytes`] (the model's pinned
+/// `C = TargetCommitment` reads the target the scope publishes — ADR-048).
+/// Returns the κ-label string.
 fn forward_kappa_label(header: &BlockHeader, nonce: u32) -> String {
-    set_thread_target_bytes(PERMISSIVE_TARGET_BYTES);
-    let wire = prism_btc::serialize_header(header, nonce);
-    let carrier = BlockHeaderCarrier::new(&wire);
-    let grounded =
-        BitcoinAddressModel::forward(carrier).expect("ψ-pipeline runs on permissive target");
-    let outcome = AddressOutcome::<72, 32>::from_grounded(&grounded)
-        .expect("outcome extracts from the sealed Grounded");
-    outcome.address.as_str().to_owned()
+    recognize_under_bytes(PERMISSIVE_TARGET_BYTES, || {
+        let wire = prism_btc::serialize_header(header, nonce);
+        let carrier = BlockHeaderCarrier::new(&wire);
+        let grounded =
+            BitcoinAddressModel::forward(carrier).expect("ψ-pipeline runs on permissive target");
+        let outcome = AddressOutcome::<72, 32>::from_grounded(&grounded)
+            .expect("outcome extracts from the sealed Grounded");
+        outcome.address.as_str().to_owned()
+    })
+}
+
+/// Bridge-layer admission stream: walks the nonce space invoking the
+/// kernel's single-recognition `mine_at` until it admits. The kernel
+/// never owns this iteration.
+fn admit_by_nonce_scan(header: &BlockHeader, target: Target) -> MiningOutcome {
+    for nonce in 0u32..u32::MAX {
+        match mine_at(header, target, nonce) {
+            Ok(outcome) => return outcome,
+            Err(MiningFailure::DidNotAdmit { .. }) => continue,
+            Err(MiningFailure::PipelineFailure) => panic!("pipeline failure"),
+        }
+    }
+    panic!("permissive target should admit within the nonce space")
 }
 
 #[test]
@@ -91,15 +110,17 @@ fn forward_kappa_label_is_distinct_for_distinct_inputs() {
 }
 
 #[test]
-fn mine_admits_within_a_few_template_variations_against_permissive_target() {
-    // mine() scans the nonce space; for a permissive target (regtest's
+fn admit_by_nonce_scan_lands_a_witness_against_permissive_target() {
+    // The bridge-layer scan walks the nonce space invoking the kernel's
+    // single-recognition mine_at. For the permissive target (regtest's
     // 0x207fffff, ~50% admission per κ-derivation) the first admitting
-    // nonce arrives almost immediately. Fail-closed: Ok means the digest
-    // genuinely satisfies the target (admission was evaluated inside
-    // foundation's run_route via the pinned TargetCommitment).
+    // nonce arrives almost immediately. Fail-closed: the kernel returns
+    // Ok only when the digest genuinely satisfies the target (admission
+    // was evaluated inside foundation's run_route via the pinned
+    // TargetCommitment).
     let header = easy_header();
     let target = Target::new(0x207fffff);
-    let outcome = mine(&header, target).expect("permissive target must admit");
+    let outcome = admit_by_nonce_scan(&header, target);
 
     assert!(target.is_satisfied_by_bytes(&outcome.digest));
     assert!(outcome.address.starts_with("sha256d:"));
@@ -112,15 +133,15 @@ fn mine_admits_within_a_few_template_variations_against_permissive_target() {
 }
 
 #[test]
-fn mine_at_single_inference_admits_for_permissive_target() {
-    // A single inference at one nonce against the permissive target.
+fn mine_at_re_recognizes_the_winning_nonce() {
+    // A single recognition at one nonce against the permissive target,
+    // re-running the bridge's winning nonce — re-derivation (L5) must
+    // produce a byte-identical κ-label and digest.
     let header = easy_header();
     let target = Target::new(0x207fffff);
-    // Find the first admitting nonce via mine(), then re-derive it at
-    // that nonce with mine_at() — they must agree.
-    let scanned = mine(&header, target).expect("permissive target admits");
+    let scanned = admit_by_nonce_scan(&header, target);
     let pinned =
-        mine_at(&header, target, scanned.nonce).expect("mine_at admits at the winning nonce");
+        mine_at(&header, target, scanned.nonce).expect("mine_at re-recognizes the winning nonce");
     assert_eq!(pinned.address.as_str(), scanned.address.as_str());
     assert_eq!(pinned.digest, scanned.digest);
 }
@@ -152,7 +173,7 @@ fn wire_format_header_carries_prefix_and_nonce() {
     // `submitblock` accepts.
     let header = easy_header();
     let target = Target::new(0x207fffff);
-    let outcome = mine(&header, target).expect("admits");
+    let outcome = admit_by_nonce_scan(&header, target);
     let prefix = serialize_prefix(&header);
     assert_eq!(
         &outcome.wire_format_header[..76],

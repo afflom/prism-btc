@@ -2,12 +2,21 @@ extern crate alloc;
 use alloc::format;
 
 use crate::types::{JsBlockAddress, JsBlockHeader};
-use prism_btc::{mine, Bits, BlockHeader, MerkleRoot, Target, Timestamp, Version};
+use prism_btc::{
+    mine_at, Bits, BlockHeader, MerkleRoot, MiningFailure, Target, Timestamp, Version,
+};
 use wasm_bindgen::prelude::*;
 
 /// Mine a block header from JavaScript.
 ///
-/// Returns a `JsBlockAddress` on success, or throws a JS error string on failure.
+/// The kernel exposes one admission body — `prism_btc::mine_at` — which
+/// recognizes one `(header, nonce)` candidate. This wasm bridge owns
+/// the iteration: it walks the 32-bit nonce space invoking `mine_at`
+/// per candidate and projects the first admitting outcome's
+/// observables back to JS.
+///
+/// Returns a `JsBlockAddress` on success, or throws a JS error string
+/// on failure.
 ///
 /// # Arguments
 /// * `js_header` — block header fields (version, prev_hash, merkle_root, timestamp, bits)
@@ -21,14 +30,24 @@ pub fn mine_block(js_header: &JsBlockHeader, nbits: u32) -> Result<JsBlockAddres
         timestamp: Timestamp(js_header.timestamp),
         bits: Bits(js_header.bits),
     };
+    let target = Target::new(nbits);
 
-    mine(&header, Target::new(nbits))
-        .map(|outcome| {
-            JsBlockAddress::new(
-                outcome.observables.coords.datum,
-                outcome.observables.coords.stratum,
-                outcome.observables.coords.spectrum,
-            )
-        })
-        .map_err(|e| JsValue::from_str(&format!("{:?}", e)))
+    for nonce in 0u32..=u32::MAX {
+        match mine_at(&header, target, nonce) {
+            Ok(outcome) => {
+                return Ok(JsBlockAddress::new(
+                    outcome.observables.coords.datum,
+                    outcome.observables.coords.stratum,
+                    outcome.observables.coords.spectrum,
+                ));
+            }
+            Err(MiningFailure::DidNotAdmit { .. }) => continue,
+            Err(e @ MiningFailure::PipelineFailure) => {
+                return Err(JsValue::from_str(&format!("{:?}", e)));
+            }
+        }
+    }
+    Err(JsValue::from_str(
+        "nonce space exhausted without admission — vary the template (timestamp / extranonce) and retry",
+    ))
 }

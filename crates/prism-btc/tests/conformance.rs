@@ -25,13 +25,28 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use prism_btc::{
-    decode_payload, leak_target, mine, p_adic_valuation, payload_bit, payload_commitment_k2,
+    decode_payload, leak_target, mine_at, p_adic_valuation, payload_bit, payload_commitment_k2,
     payload_commitment_k4, payload_commitment_k8, sha256d_display, target_commitment, AffineParity,
     AndCommitment, Bits, BlockHeader, EmptyCommitment, KappaObservables,
-    LexicographicLessEqThreshold, MerkleRoot, MiningFailure, ObservablePredicate,
+    LexicographicLessEqThreshold, MerkleRoot, MiningFailure, MiningOutcome, ObservablePredicate,
     SingletonCommitment, Stratum, Target, TargetCommitment, Timestamp, TriadicCoords,
     TypedCommitment, UltrametricCloseTo, Version, WalshHadamardParity, CANONICAL_PRIMES,
 };
+
+/// Bridge-layer admission stream — drives the nonce space invoking the
+/// kernel's single-recognition `mine_at` until it admits. Returns
+/// `Some(outcome)` on admission or `None` after `max_nonce` candidates
+/// without admission (for permissive targets a small cap suffices).
+fn admit_within(header: &BlockHeader, target: Target, max_nonce: u32) -> Option<MiningOutcome> {
+    for nonce in 0u32..max_nonce {
+        match mine_at(header, target, nonce) {
+            Ok(outcome) => return Some(outcome),
+            Err(MiningFailure::DidNotAdmit { .. }) => continue,
+            Err(MiningFailure::PipelineFailure) => return None,
+        }
+    }
+    None
+}
 
 const REGTEST_NBITS: u32 = 0x207fffff;
 
@@ -237,7 +252,7 @@ fn cs5_mining_outcome_carries_observables() {
     }
     let header = permissive_header(1_700_000_000);
     let target = Target::new(REGTEST_NBITS);
-    if let Ok(outcome) = mine(&header, target) {
+    if let Some(outcome) = admit_within(&header, target, 1024) {
         let obs: KappaObservables = project_observables(outcome);
         assert!(obs.coords.stratum <= 256);
         assert_eq!(obs.p_adic.len(), CANONICAL_PRIMES.len());
@@ -277,9 +292,10 @@ fn cs6_no_legacy_commitment_surface_references() {
 
 #[test]
 fn cd1_mine_admits_under_target_commitment() {
-    // CD-1 (revised for ADR-048 conformance): the canonical entry
-    // [`mine`] threads `TargetCommitment` through foundation's
-    // `run_route` as the model's pinned `C: TypedCommitment`. For a
+    // CD-1 (revised for ADR-048 conformance): the kernel's
+    // admission-recognition entry [`mine_at`] threads `TargetCommitment`
+    // through foundation's `run_route` as the model's pinned
+    // `C: TypedCommitment`. For a
     // permissive target, admission holds for some template
     // variation; the κ-label's digest satisfies the target by
     // construction (foundation's `run_route` gates `Grounded`
@@ -288,10 +304,10 @@ fn cd1_mine_admits_under_target_commitment() {
     let mut admitted = false;
     for ts in 0u32..32 {
         let header = permissive_header(1_700_000_000_u32.wrapping_add(ts));
-        if let Ok(outcome) = mine(&header, target) {
+        if let Some(outcome) = admit_within(&header, target, 1024) {
             assert!(
                 target.is_satisfied_by_bytes(&outcome.digest),
-                "CD-1: mine() Ok ⇒ digest must satisfy target"
+                "CD-1: mine_at() Ok ⇒ digest must satisfy target"
             );
             admitted = true;
             break;
@@ -381,7 +397,7 @@ fn cd3_observables_agree_with_per_primitive_computation() {
     let mut checked = 0;
     for ts in 0u32..16 {
         let header = permissive_header(1_700_000_000_u32.wrapping_add(ts));
-        if let Ok(outcome) = mine(&header, target) {
+        if let Some(outcome) = admit_within(&header, target, 1024) {
             let canonical = TriadicCoords::from_hash(&outcome.digest);
             assert_eq!(outcome.observables.coords, canonical);
             for (i, &p) in CANONICAL_PRIMES.iter().enumerate() {

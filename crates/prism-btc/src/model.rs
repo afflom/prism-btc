@@ -54,10 +54,11 @@ pub const BLOCK_ADDRESS_LABEL_BYTES: usize = 7 + 1 + 2 * 32;
 
 /// Borrowed canonical-form Bitcoin block-header handle (ADR-060 borrowed
 /// carrier). A thin, `Copy` borrow of the 80-byte wire-format header
-/// bytes; `as_binding_value` returns the `Borrowed` carrier zero-copy. The
-/// host's [`crate::pipeline::mine`] builds it from a
+/// bytes; `as_binding_value` returns the `Borrowed` carrier zero-copy.
+/// [`crate::pipeline::mine_at`] builds it from a
 /// [`crate::domain::BlockHeader`] + candidate nonce via
-/// [`crate::ops::header::serialize_header`].
+/// [`crate::ops::header::serialize_header`] as part of one
+/// admission-recognition.
 #[derive(Clone, Copy, Debug)]
 pub struct BlockHeaderCarrier<'a>(&'a [u8]);
 
@@ -160,8 +161,10 @@ pub mod verbs {
 // Foundation's `run_route` evaluates the commitment on ψ₉'s κ-label output
 // bytes: if `kappa_label ≤ target_label` fails, run_route returns
 // `PipelineFailure::ShapeViolation` and seals no `Grounded`. The per-call
-// target κ-label is published on a thread-local slot by
-// [`crate::pipeline::set_thread_target`] before each `forward()`.
+// target κ-label is published on a per-thread slot by [`mine_at`] (or by
+// the scoped helpers `recognize_under` / `recognize_under_bytes`) before
+// each `forward()`; the publication mechanism is `pub(crate)`
+// infrastructure and is not part of the kernel's public surface.
 prism_model! {
     pub struct BitcoinAddressModel;
     pub struct BitcoinAddressRoute;

@@ -1,8 +1,12 @@
 //! WebAssembly bindings for the prism-btc mining library.
 //!
-//! This crate exposes the [`mine`](crate::api::mine_block) function and supporting
-//! types to JavaScript via `wasm-bindgen`.  It is the only crate in the workspace
-//! with a `wasm-bindgen` dependency; all Bitcoin and UOR logic lives in `prism-btc`.
+//! This crate exposes the [`mine_block`] function and
+//! supporting types to JavaScript via `wasm-bindgen`.  `mine_block` is the
+//! **bridge layer** — it walks the 32-bit nonce space invoking the kernel's
+//! single-recognition `prism_btc::mine_at` per candidate, and projects the first
+//! admitting outcome's observables back to JS.  It is the only crate in the
+//! workspace with a `wasm-bindgen` dependency; all Bitcoin and UOR logic lives
+//! in `prism-btc`.
 //!
 //! ## JS surface
 //!

@@ -1,4 +1,4 @@
-//! prism-mine — drive `prism_btc::mine` against a real bitcoind.
+//! prism-mine — drive `prism_btc::mine_at` against a real bitcoind.
 //!
 //! Each addressing inference evaluates the `block_address_inference`
 //! verb (wiki ADR-024) — the ψ-pipeline's k-invariant branch
@@ -7,10 +7,11 @@
 //! `sha256d` σ-axis and emits the `sha256d:<64hex>` κ-label (the block
 //! hash). Foundation's `run_route` evaluates the admission relation
 //! `block_hash ≤ target` via the model's `TargetCommitment`. The host
-//! boundary (`prism_btc::mine`) scans the nonce space and varies the
-//! template (rolling extranonce) until admission lands; this binary then
-//! assembles the wire-format block from that header + the template's
-//! transactions and submits via `submitblock`.
+//! boundary (`prism_btc_node::PrismMiner::mine_one_block`) walks the
+//! 32-bit nonce space invoking `prism_btc::mine_at` per candidate and
+//! varies the template (rolling extranonce) until admission lands;
+//! this binary then assembles the wire-format block from that header +
+//! the template's transactions and submits via `submitblock`.
 
 use anyhow::{bail, Context, Result};
 use bitcoin::Network;

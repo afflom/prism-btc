@@ -28,8 +28,8 @@ use bitcoincore_rpc::json::{
 use bitcoincore_rpc::{Auth, Client, RpcApi};
 
 use prism_btc::{
-    mine, Bits, BlockHeader, CampaignStats, MerkleRoot, MiningFailure, MiningWitness, Target,
-    Timestamp, Version,
+    mine_at, Bits, BlockHeader, CampaignStats, MerkleRoot, MiningFailure, MiningOutcome,
+    MiningWitness, Target, Timestamp, Version,
 };
 
 const COINBASE_WITNESS_RESERVED: [u8; 32] = [0u8; 32];
@@ -74,17 +74,19 @@ impl PrismMiner {
     /// submit the admitting wire-format block via `submitblock`, return
     /// the summary.
     ///
-    /// `prism_btc::mine` scans the 32-bit nonce space for one header
-    /// template, addressing each `(header, nonce)` until the block hash
-    /// satisfies the target. The host boundary iterates the **extranonce
-    /// roll** (architecture §7) on top — each extranonce value produces a
-    /// distinct coinbase txid → distinct merkle root → distinct header
-    /// template → a fresh nonce scan. Under PRF baseline, expected total
+    /// The kernel exposes one admission body — `prism_btc::mine_at` —
+    /// which **recognizes** one `(header, nonce)` candidate. This
+    /// bridge layer owns the iteration: a **nonce scan** over the 32-bit
+    /// space for one template, plus an **extranonce roll** that
+    /// produces fresh templates (architecture §7) when the scan
+    /// exhausts. Each extranonce value produces a distinct coinbase
+    /// txid → distinct merkle root → distinct header template → a
+    /// fresh nonce scan. Under PRF baseline, expected total
     /// inferences before admission is `1/α` where `α` is the target's
     /// admission probability. The nonce space (2^32) plus the u64
     /// extranonce space covers every realistic network difficulty
-    /// (mainnet `α ≈ 2^-77`); exhaustion would indicate the network's `α`
-    /// is below the algorithmic floor and is not a pipeline bug.
+    /// (mainnet `α ≈ 2^-77`); exhaustion would indicate the network's
+    /// `α` is below the algorithmic floor and is not a pipeline bug.
     pub fn mine_one_block(&self) -> Result<MinedBlock> {
         let rules: &[GetBlockTemplateRules] = match self.network {
             Network::Signet => &[
@@ -129,14 +131,14 @@ impl PrismMiner {
 
         // Template-variation loop: each iteration produces a fresh header
         // template (distinct merkle root via the rolled extranonce) and a
-        // fresh nonce scan. mine() returns Ok when an addressed block hash
-        // admits; DidNotAdmit when the whole nonce space is exhausted.
-        // The receiver-side typed lens (KappaObservables) is **total**:
-        // present on every attempt regardless of admission. Folded
-        // into a CampaignStats aggregate across the session so the
-        // operator gets typed visibility into mining at scale (this
-        // is what makes the loop legible at mainnet difficulty — see
-        // CONFORMANCE.md CM-3, CM-5).
+        // fresh nonce sweep. `scan_template_nonces` walks the 32-bit
+        // nonce space invoking `mine_at` per candidate; admission is
+        // the kernel returning Ok. On exhaustion the bridge varies the
+        // extranonce. The receiver-side typed lens (KappaObservables)
+        // is **total**: present on every attempt regardless of
+        // admission. Folded into a CampaignStats aggregate across the
+        // session so the operator gets typed visibility into mining
+        // at scale (CONFORMANCE.md CM-3, CM-5).
         let mut extranonce: u64 = 0;
         let mut campaign = CampaignStats::new();
         loop {
@@ -146,45 +148,34 @@ impl PrismMiner {
                 extranonce,
             )?;
 
-            match mine(&job.header, job.target) {
-                Ok(outcome) => {
-                    campaign.record_admission(&outcome);
-                    let block = job.assemble(outcome.nonce);
+            match scan_template_nonces(&job.header, job.target, &mut campaign)? {
+                Some(outcome) => {
+                    let nonce = outcome.nonce;
+                    let witness = outcome.witness;
+                    let block = job.assemble(nonce);
                     self.client
                         .submit_block(&block)
                         .context("submitblock rejected")?;
                     return Ok(MinedBlock {
                         hash: block.block_hash(),
                         height: template.height,
-                        nonce: outcome.nonce,
-                        witness: outcome.witness,
+                        nonce,
+                        witness,
                         tx_count: block.txdata.len(),
                         extranonce_attempts: extranonce,
                         campaign,
                     });
                 }
-                Err(MiningFailure::DidNotAdmit {
-                    observables,
-                    digest,
-                    ..
-                }) => {
+                None => {
                     // No nonce for this template's header satisfied the
-                    // target. Record the final non-admitting candidate's
-                    // typed property landscape into the campaign aggregate,
-                    // then vary the extranonce → distinct MerkleRoot →
-                    // distinct header template → a fresh nonce scan.
-                    campaign.record_attempt(&observables, &digest);
+                    // target. Vary the extranonce → distinct MerkleRoot →
+                    // distinct header template → a fresh nonce sweep.
                     extranonce = extranonce.wrapping_add(1);
                     if extranonce == 0 {
                         anyhow::bail!(
                             "u64 extranonce space exhausted for this template without admission"
                         );
                     }
-                }
-                Err(MiningFailure::PipelineFailure) => {
-                    bail!(
-                        "ψ-pipeline shape violation — defensive failure mode, should not occur for well-formed block headers"
-                    );
                 }
             }
         }
@@ -214,6 +205,46 @@ pub struct MinedBlock {
     /// digest observed. The receiver-side typed lens at session
     /// granularity.
     pub campaign: CampaignStats,
+}
+
+/// Walk the 32-bit nonce space for one template, recognizing each
+/// candidate through `prism_btc::mine_at`. Returns `Ok(Some(outcome))`
+/// on the first admission, `Ok(None)` when the nonce space exhausts
+/// (the bridge should then roll the extranonce), and `Err` on a
+/// substrate-level shape violation (defensive — never observed for
+/// well-formed headers).
+///
+/// This is the **bridge-layer iteration**. The kernel
+/// (`prism_btc::mine_at`) is single-recognition; the iteration is
+/// here. Every candidate's typed observables — admitting or not —
+/// fold into `campaign` (L3: the seal is memory; nothing is held
+/// beyond what the witness or its complement attests).
+fn scan_template_nonces(
+    header: &BlockHeader,
+    target: Target,
+    campaign: &mut CampaignStats,
+) -> Result<Option<MiningOutcome>> {
+    for nonce in 0u32..=u32::MAX {
+        match mine_at(header, target, nonce) {
+            Ok(outcome) => {
+                campaign.record_admission(&outcome);
+                return Ok(Some(outcome));
+            }
+            Err(MiningFailure::DidNotAdmit {
+                observables,
+                digest,
+                ..
+            }) => {
+                campaign.record_attempt(&observables, &digest);
+            }
+            Err(MiningFailure::PipelineFailure) => {
+                bail!(
+                    "ψ-pipeline shape violation — defensive failure mode, should not occur for well-formed block headers"
+                );
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// All the per-template state a mining attempt needs.

@@ -115,7 +115,7 @@ impl Target {
 /// [`AddressWitness`](uor_addr::AddressWitness) over the 72-byte
 /// `sha256d:<64hex>` κ-label and the 32-byte content fingerprint.
 ///
-/// Produced by [`crate::pipeline::mine`] via
+/// Produced by [`crate::pipeline::mine_at`] via
 /// [`BitcoinAddressModel::forward`](crate::model::BitcoinAddressModel). It
 /// owns a replayable TC-05 `Trace` + the σ-projection fingerprint;
 /// [`AddressWitness::verify`](uor_addr::AddressWitness::verify) re-certifies
@@ -126,7 +126,7 @@ pub type MiningWitness = uor_addr::AddressWitness<{ crate::model::BLOCK_ADDRESS_
 /// PRISM triadic coordinates of a 32-byte block-hash digest.
 ///
 /// Foundation ships its own `Triad<L>` surface accessible via
-/// [`MiningWitness::triad`], whose coordinates are projected from the
+/// `MiningWitness::triad`, whose coordinates are projected from the
 /// `Grounded`'s `unit_address` (the metadata-domain identity). The
 /// `TriadicCoords` here is the **digest-domain** projection — `(stratum,
 /// spectrum)` over the 32 bytes of the admitted block hash itself. Both

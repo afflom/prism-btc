@@ -1,7 +1,7 @@
 //! `PrismBtcBounds` — prism-btc's `HostBounds` capacity profile.
 //!
 //! Per UOR-ADDR's "single capacity profile" commitment (ADR-037), every
-//! addressing realization binds the **same** [`AddrBounds`] profile. The
+//! addressing realization binds the **same** [`uor_addr::AddrBounds`] profile. The
 //! Bitcoin realization is no exception: `PrismBtcBounds` is a transparent
 //! alias for [`uor_addr::AddrBounds`], so prism-btc reuses the framework's
 //! capacity profile rather than declaring a parallel one.

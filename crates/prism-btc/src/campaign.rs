@@ -48,7 +48,7 @@ pub const PADIC_BINS: usize = 8;
 pub struct CampaignStats {
     /// Total ψ-pipeline inferences recorded — admitted + not-admitted.
     pub attempts: u64,
-    /// Subset of attempts that admitted (`mine()`'s Ok arm — foundation's
+    /// Subset of attempts that admitted (`mine_at`'s Ok arm — foundation's
     /// `run_route` evaluated the model's pinned `TargetCommitment` and
     /// sealed a `Grounded` block-address `AddressWitness`).
     pub admissions: u64,

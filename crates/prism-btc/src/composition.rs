@@ -10,13 +10,13 @@
 //! reference realization of ADR-061 for `sha256d`.
 //!
 //! Each operation takes one or two operand κ-labels (`sha256d:<64hex>`,
-//! produced by [`crate::mine`] or [`block_label_from_digest`]) and mints a
+//! produced by [`crate::mine_at`] or [`block_label_from_digest`]) and mints a
 //! new `sha256d` κ-label for the composed object by:
 //!
 //! 1. **canonicalize** — apply the operation's byte-level discipline
 //!    (ADR-061 §(3)) to the operand digests;
 //! 2. **ground** — fold the canonical form through the shared
-//!    [`AddressResolverTuple`](uor_addr::AddressResolverTuple) ψ-tower
+//!    [`AddressResolverTuple`] ψ-tower
 //!    bound to [`Sha256dHasher`], via a per-operation
 //!    [`PrismModel`](prism::pipeline::PrismModel) whose output IRI records
 //!    the operation's provenance (ADR-001 / ADR-017 typed-iso).
@@ -40,7 +40,7 @@
 //!
 //! Note on byte order: composition operates on **display-order**
 //! κ-labels (the σ-axis emits display order; see
-//! [`Sha256dHasher`](crate::shapes::hasher::Sha256dHasher)), so
+//! [`Sha256dHasher`]), so
 //! [`merkle_root`] is the display-order κ-label algebra. The byte-exact
 //! Bitcoin **protocol** merkle root (internal byte order, the bytes that
 //! go into the header's `merkle_root` field) is
@@ -470,40 +470,44 @@ pub fn compose_ordered_product(
     ground::<CompositionModelOrdered>(&canon)
 }
 
-/// **Bitcoin merkle root as iterated composition.** Folds the leaf
-/// κ-labels pairwise with [`compose_ordered_product`], duplicating the last
-/// node on odd levels (Bitcoin's discipline), until a single root κ-label
-/// remains.
+/// **Bitcoin merkle root as iterated composition.** The structural
+/// recurrence on the canonical-form definition:
 ///
-/// This is the display-order κ-label algebra; for the byte-exact protocol
-/// merkle root (internal byte order) see
+/// > `merkle_root([root]) = root`
+/// > `merkle_root(leaves) = merkle_root(pair_up(leaves))`
+///
+/// where `pair_up` folds each adjacent pair with
+/// [`compose_ordered_product`], duplicating the last element when the
+/// arity is odd (Bitcoin's discipline). The base case is a one-leaf
+/// tree; the recursive case is a level descent on the structural form,
+/// not a procedural while-loop with mutable level state.
+///
+/// This is the display-order κ-label algebra; for the byte-exact
+/// protocol merkle root (internal byte order) see
 /// [`crate::ops::merkle::merkle_root_internal`].
 ///
 /// # Errors
 /// [`CompositionFailure::MalformedOperand`] if `leaves` is empty, or any
 /// operand is malformed / non-`sha256d`.
 pub fn merkle_root(leaves: &[KappaLabel<LABEL>]) -> Result<KappaLabel<LABEL>, CompositionFailure> {
-    if leaves.is_empty() {
-        return Err(CompositionFailure::MalformedOperand);
-    }
-    let mut level: Vec<KappaLabel<LABEL>> = leaves.to_vec();
-    while level.len() > 1 {
-        let mut next: Vec<KappaLabel<LABEL>> = Vec::with_capacity(level.len().div_ceil(2));
-        let mut i = 0;
-        while i < level.len() {
-            let left = &level[i];
-            // Bitcoin duplicates the last node when the count is odd.
-            let right = if i + 1 < level.len() {
-                &level[i + 1]
-            } else {
-                &level[i]
-            };
-            next.push(compose_ordered_product(left, right)?.address);
-            i += 2;
+    match leaves {
+        [] => Err(CompositionFailure::MalformedOperand),
+        [root] => Ok(*root),
+        more => {
+            let next: Vec<KappaLabel<LABEL>> = more
+                .chunks(2)
+                .map(|pair| {
+                    let (left, right) = match pair {
+                        [l, r] => (l, r),
+                        [l] => (l, l),
+                        _ => unreachable!("chunks(2) yields slices of length 1 or 2"),
+                    };
+                    compose_ordered_product(left, right).map(|out| out.address)
+                })
+                .collect::<Result<_, _>>()?;
+            merkle_root(&next)
         }
-        level = next;
     }
-    Ok(level[0])
 }
 
 /// Ground canonical-form bytes through composition model `M`, extracting

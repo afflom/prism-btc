@@ -9,7 +9,7 @@
 //! * **CM-1**: `Target::new(nBits)` accepts the full range of mainnet
 //!   difficulty values (historical genesis-era to current epoch)
 //!   without panic or overflow.
-//! * **CM-2**: `mine()` on synthetic mainnet-difficulty headers
+//! * **CM-2**: `mine_at` on synthetic mainnet-difficulty headers
 //!   produces well-formed 80-byte κ-labels — the structural inference
 //!   succeeds, only admission fails. `PipelineFailure` is unreachable.
 //! * **CM-3**: The aggregate observatory ([`CampaignStats`]) across
@@ -38,10 +38,11 @@ use prism_btc::{
 // Each statistical trial is a *single* inference at a fixed nonce — one
 // Bernoulli(α) draw. The header varies per `seed` (distinct prev_hash /
 // merkle_root / timestamp → distinct κ-derivation), so successive trials
-// are independent. `mine()` (which scans the whole nonce space until it
-// admits) is the wrong primitive here: at a permissive target it would
-// admit at nonce 0 every call (empirical α ≡ 1), and at mainnet difficulty
-// it would scan 2³² nonces and never return.
+// are independent. A bridge-layer nonce scan over `mine_at` would admit
+// at nonce 0 every call on a permissive target (empirical α ≡ 1) and
+// would walk 2³² nonces without admission on mainnet difficulty — the
+// wrong primitive for a Bernoulli-style statistical trial. The kernel's
+// single-recognition `mine_at` is what we sample.
 const TRIAL_NONCE: u32 = 0;
 
 /// Representative mainnet-difficulty `nBits` values, spanning Bitcoin's
@@ -100,7 +101,7 @@ fn cm1_target_constructor_accepts_full_mainnet_difficulty_history() {
     }
 }
 
-// ─── CM-2: mine() produces 80-byte κ-labels at every difficulty ────────
+// ─── CM-2: mine_at produces 80-byte κ-labels at every difficulty ──────
 
 #[test]
 fn cm2_pipeline_inference_succeeds_at_every_mainnet_difficulty() {

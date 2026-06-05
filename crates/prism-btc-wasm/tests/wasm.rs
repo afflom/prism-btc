@@ -1,13 +1,14 @@
 //! `prism_btc_wasm` integration smoke tests.
 //!
-//! The wasm bindings expose [`prism_btc::mine`] to JavaScript callers
-//! via [`mine_block`]. These tests exercise the binding surface: header
-//! construction, mine() invocation, JsBlockAddress shape. The fail-
-//! closed mining contract (architecture §6) — `mine()` returns `Ok`
-//! only when the κ-derived wire-format header genuinely admits — is
-//! pinned by the prism-btc crate's integration + V&V suites; the wasm
-//! tests here verify the binding layer faithfully surfaces those
-//! semantics.
+//! The wasm bindings expose [`prism_btc::mine_at`] to JavaScript
+//! callers via [`mine_block`], which owns its own bridge-layer nonce
+//! scan over the kernel's single-recognition entry. These tests
+//! exercise the binding surface: header construction, `mine_block`
+//! invocation, JsBlockAddress shape. The fail-closed mining contract
+//! (architecture §6) — `mine_at` returns `Ok` only when the κ-derived
+//! wire-format header genuinely admits — is pinned by the prism-btc
+//! crate's integration + V&V suites; the wasm tests here verify the
+//! binding layer faithfully surfaces those semantics.
 
 use prism_btc_wasm::{mine_block, JsBlockHeader};
 use wasm_bindgen_test::*;

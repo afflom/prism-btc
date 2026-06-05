@@ -108,9 +108,9 @@ certificate; ψ_9's output is the 72-byte `sha256d:<64hex>` κ-label.
 
 | Crate | Role |
 |---|---|
-| [`prism-btc`](crates/prism-btc/) | The pure-prism domain layer. Declares Bitcoin's typed primitives, the `BlockHeaderCarrier` input + `BlockAddressLabel` output shapes, the ψ-chain verb, `BitcoinAddressModel` (binding the shared uor-addr ψ-tower), the ADR-061 `sha256d` composition reference impl, and the public `mine()` entry point. Pure-Rust SHA-256 for the `sha256d` σ-axis. |
-| [`prism-btc-node`](crates/prism-btc-node/) | bitcoind RPC boundary. `getblocktemplate → BitcoinAddressModel::forward → submitblock`. `prism-mine` CLI binary. |
-| [`prism-btc-wasm`](crates/prism-btc-wasm/) | `wasm-bindgen` JS surface around `prism_btc::mine`. |
+| [`prism-btc`](crates/prism-btc/) | The pure-prism domain layer. Declares Bitcoin's typed primitives, the `BlockHeaderCarrier` input + `BlockAddressLabel` output shapes, the ψ-chain verb, `BitcoinAddressModel` (binding the shared uor-addr ψ-tower), the ADR-061 `sha256d` composition reference impl, and `mine_at` — the kernel's sole admission-recognition entry. Pure-Rust SHA-256 for the `sha256d` σ-axis. |
+| [`prism-btc-node`](crates/prism-btc-node/) | bitcoind RPC boundary. `getblocktemplate → BitcoinAddressModel::forward → submitblock`. Owns the bridge-layer nonce scan and extranonce roll. `prism-mine` CLI binary. |
+| [`prism-btc-wasm`](crates/prism-btc-wasm/) | `wasm-bindgen` JS surface around `prism_btc::mine_at`; owns its own nonce-scan bridge in `mine_block`. |
 | [`prism-btc-lean/`](prism-btc-lean/) | Lean 4 formal proofs: ring identity (W8/W32), triadic coordinates, FreeRank protocol, shape-constraint monotonicity, convergence protocol. |
 
 ## Substitution axes
@@ -124,8 +124,8 @@ certificate; ψ_9's output is the 72-byte `sha256d:<64hex>` κ-label.
 
 ## Witness construction + bit-identicality (architecture §6)
 
-`mine(header, target)` is the canonical entry. Internally it
-publishes the target's κ-label form on the thread-local commitment slot,
+`mine_at(header, target, nonce)` is the kernel's sole
+admission-recognition entry — one inference at one nonce. It
 serializes `(header, nonce)` to the 80-byte wire form, wraps it in a
 `BlockHeaderCarrier`, and invokes `BitcoinAddressModel::forward(carrier)`.
 **The catamorphism constructs a sealed `Grounded<BlockAddressLabel>` only
@@ -133,18 +133,20 @@ when admission holds** — the replayable TC-05 `AddressWitness` it carries
 is the witness that Bitcoin's PoW admission relation held on this κ-label.
 The `sha256d:<64hex>` κ-label ψ_9 emits is the conventional block hash;
 the 80-byte wire-format header is surfaced on the success path as
-`MiningOutcome.wire_format_header: [u8; 80]` for the `submitblock` path,
-and the 32-byte display-order digest as `MiningOutcome.digest`.
+`MiningOutcome.wire_format_header: [u8; 80]` (the canonical-form
+companion to the witness, from which every other `MiningOutcome` field is
+derivable by replaying the σ-axis — L5).
 
 When the catamorphism does not seal, foundation reports
 `PipelineFailure::ShapeViolation` with the
 `commitment/TypedCommitment/VIOLATED` shape IRI and prism-btc
 classifies that as
-`Err(MiningFailure::DidNotAdmit { observables, nonce, digest })`. `mine`
-varies the nonce and retries; the host boundary varies the template
-(extranonce roll → distinct merkle root → distinct κ-label) and retries,
-folding each attempt's typed property landscape into a `CampaignStats`
-aggregate.
+`Err(MiningFailure::DidNotAdmit { observables, nonce, digest })`.
+**The kernel does not search.** The bridge layer (`prism-btc-node`,
+`prism-btc-wasm`) varies its candidate stream — next nonce, next
+extranonce → distinct merkle root → distinct κ-label — and
+re-recognizes, folding each attempt's typed property landscape into a
+`CampaignStats` aggregate.
 
 **The receiver-side typed lens (`KappaObservables`) is total** —
 present on `Ok(MiningOutcome)` and on `DidNotAdmit` alike. Every
@@ -152,7 +154,7 @@ present on `Ok(MiningOutcome)` and on `DidNotAdmit` alike. Every
 giving the host operator typed visibility into the search at session
 granularity.
 
-**Fail-closed by construction.** `mine()` never returns an outcome
+**Fail-closed by construction.** `mine_at` never returns an outcome
 whose κ-label does not admit, because `MiningOutcome` can only be
 constructed from a sealed `Grounded<BlockAddressLabel>`, and the seal is
 contingent on the catamorphism's admission predicate. The typed-iso gate
@@ -162,10 +164,11 @@ of the return type's existence.
 prism-btc's transform is structural: the typed-iso surface maps
 `BlockHeaderCarrier → 72-byte sha256d κ-label` deterministically via the
 ψ-pipeline, and the catamorphism seals iff `TargetCommitment` admits.
-`mine` scans the nonce space; there is no inner σ-enumeration in the verb
-body, no "hashrate" metric. The wire-format header
-(`outcome.wire_format_header`) is byte-for-byte what Bitcoin Core's
-`submitblock` accepts because both reach the same canonical serialization.
+There is no inner σ-enumeration in the verb body, no "hashrate" metric;
+the bridge layer iterates candidates and the kernel recognizes each one.
+The wire-format header (`outcome.wire_format_header`) is byte-for-byte
+what Bitcoin Core's `submitblock` accepts because both reach the same
+canonical serialization.
 
 **Cost-model = proof-of-work, by construction.** The Lean theorem
 `Commitment.prf_prob_tight_wellFormed` (wiki ADR-047 U6) says
@@ -276,10 +279,11 @@ traditional cryptanalysis, and ADR-style framework proposals.
 [ARCHITECTURE.md §14](ARCHITECTURE.md) — **UOR-optimal mining**.
 The cryptanalysis identifies the Pareto frontier
 `cost(B) = 2^B × α^-1`; prism-btc realizes it via foundation's
-sealed `TypedCommitment` catalog (wiki ADR-048 + ADR-049). `mine()`
-is the only public mining entry; admission is evaluated inside
-foundation's `run_route` catamorphism via the model's pinned
-`TargetCommitment`. For typed-bandwidth commitments beyond bare
+sealed `TypedCommitment` catalog (wiki ADR-048 + ADR-049). `mine_at`
+is the kernel's sole admission-recognition entry; admission is
+evaluated inside foundation's `run_route` catamorphism via the
+model's pinned `TargetCommitment`. For typed-bandwidth commitments
+beyond bare
 admission, applications compose `AndCommitment<TargetCommitment,
 payload>` using prism-btc's `payload_commitment_k2 / k4 / k8`
 helpers (each producing an `AndCommitment` tree of

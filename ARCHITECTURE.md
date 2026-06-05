@@ -322,15 +322,17 @@ a premise of the type being constructed. The seal is the certificate.
 On rejection, the catamorphism does not seal: `run_route` returns
 `PipelineFailure::ShapeViolation` with the
 `commitment/TypedCommitment/VIOLATED` shape IRI, which
-[`crate::pipeline::mine`] classifies as
+[`crate::pipeline::mine_at`] classifies as
 `Err(MiningFailure::DidNotAdmit { observables, nonce, digest })`. The
 receiver-side typed lens is **total** — every inference exposes the
 candidate's typed property landscape regardless of admission, so the
 host loop can fold each attempt into a
-[`crate::campaign::CampaignStats`] aggregate observatory. `mine` scans
-the nonce space; the host boundary varies the template (extranonce roll
-→ distinct merkle root → distinct header carrier → distinct κ-label)
-until a κ-candidate admits and the framework constructs the witness.
+[`crate::campaign::CampaignStats`] aggregate observatory.
+**The kernel does not search**: `mine_at` recognizes one candidate.
+The bridge layer (prism-btc-node, prism-btc-wasm) varies the candidate
+stream — next nonce, next extranonce → distinct merkle root → distinct
+header carrier → distinct κ-label — and re-recognizes until the
+framework constructs the witness.
 
 **Witness surface.** Every admitting `forward()` carries a replayable
 TC-05 [`AddressWitness<72, 32>`] (alias `MiningWitness`): it owns the
@@ -423,7 +425,7 @@ canonical Bitcoin LE. ψ_9 emits the `sha256d:<64hex>` κ-label (carrying
 the SHA-256d display-order *digest* of this header) per wiki
 ADR-048/049's natural cost-model framing.
 
-**Three outcomes from the catamorphism.** `[crate::pipeline::mine]`
+**Three outcomes from the catamorphism.** [`crate::pipeline::mine_at`]
 surfaces foundation's catamorphism result as one of three typed cases:
 
 - `Ok(MiningOutcome)` — the catamorphism sealed a
@@ -437,16 +439,16 @@ surfaces foundation's catamorphism result as one of three typed cases:
   constructed because the κ-candidate did not satisfy `target` under
   `LexicographicLessEqThreshold`. The candidate's typed property
   landscape is exposed in the payload; the receiver-side lens is total.
-  `mine` varies the nonce; the host (architecture §7) varies the
-  template (extranonce roll), folding each attempt's observables into a
-  `CampaignStats` aggregate.
+  The bridge layer varies its candidate stream — next nonce, then
+  template (extranonce roll, architecture §7) — and re-recognizes,
+  folding each attempt's observables into a `CampaignStats` aggregate.
 - `Err(MiningFailure::PipelineFailure)` — defensive: a substrate-level
   shape violation surfaced *before* the commitment stage. Unreachable
   for well-formed header carriers (the ψ-pipeline is total over the
   carrier); conformance test CM-2 pins this unreachability across the
   mainnet difficulty history.
 
-**Fail-closed by construction.** `mine()` never returns a
+**Fail-closed by construction.** `mine_at` never returns a
 `MiningOutcome` whose κ-label does not admit, because such a
 `MiningOutcome` is uninhabited — the type cannot be constructed
 without the catamorphism's seal, and the seal is contingent on
@@ -501,10 +503,12 @@ outcome (admission is evaluated inside `run_route`, not here — see §6).
    template's transaction list.
 5. Build a `BlockHeader` from `(version, prev_hash, merkle_root,
    timestamp, bits)` and decode the target from `bits`.
-6. Call `prism_btc::mine(header, target)`, which scans the nonce
-   space; foundation's `run_route` evaluates `TargetCommitment` on the
-   κ-label inside the catamorphism for each candidate, and prism-btc
-   classifies:
+6. Walk the 32-bit nonce space invoking `prism_btc::mine_at(header,
+   target, nonce)` per candidate. The kernel does not own this
+   iteration — `mine_at` recognizes one `(header, nonce)` candidate;
+   the bridge layer is what walks the stream. Foundation's `run_route`
+   evaluates `TargetCommitment` on the κ-label inside the catamorphism
+   for each call, and prism-btc classifies:
    - `Ok(outcome)` ⇒ fold `outcome.observables` into the session's
      `CampaignStats`, assemble the wire-format Block from
      `outcome.wire_format_header` + the template's transaction list,
@@ -512,18 +516,18 @@ outcome (admission is evaluated inside `run_route`, not here — see §6).
      aggregate).
    - `Err(MiningFailure::DidNotAdmit { observables, digest, .. })` ⇒
      foundation's `run_route` reported the commitment-violation shape
-     IRI; no nonce for this `(header, target)` satisfied `target`.
-     Fold the candidate's observables into the campaign (the
-     receiver-side lens is total), then increment `extranonce` and goto
-     step 3. The chain has typically advanced first, so the caller
-     fetches a new template.
+     IRI; this nonce did not admit. Fold the candidate's observables
+     into the campaign (the receiver-side lens is total), advance to
+     the next nonce; on nonce-space exhaustion, increment `extranonce`
+     and goto step 3.
    - `Err(MiningFailure::PipelineFailure)` ⇒ defensive surface for a
      substrate-level shape violation *before* the commitment stage.
      Unreachable in normal flow (CM-2).
 
 The boundary's outer loop is the wire-format adaptation — coinbase
-construction, merkle derivation, RPC plumbing — plus the
-classification of `mine()`'s typed result. From `forward()`'s
+construction, merkle derivation, RPC plumbing — the bridge-layer
+nonce/extranonce iteration over `mine_at`, and the classification of
+each call's typed result. From `forward()`'s
 perspective every call is one structural inference at constant cost;
 the boundary loop is where target-restrictiveness shows up as more
 nonce/template variations, never as more work per `forward()`.
@@ -567,12 +571,15 @@ pub use composition::{compose_g2_product, compose_f4_quotient,
                       merkle_root, block_label_from_digest,
                       CompositionOutcome, CompositionFailure};
 
-// Public entry points — mine() scans the nonce space, mine_at() is one
-// inference. Admission is evaluated inside foundation's run_route via
-// the model's pinned TargetCommitment.
-pub use pipeline::{mine, mine_at, MiningOutcome, MiningFailure,
-                   set_thread_target, set_thread_target_bytes,
-                   current_thread_target};
+// Public entry — mine_at() is one admission recognition at a given
+// nonce. The kernel does not search; the bridge layer iterates the
+// candidate stream. recognize_under / recognize_under_bytes scope a
+// target threshold around closures that drive BitcoinAddressModel's
+// forward directly (V&V tests that exercise the ψ-pipeline without an
+// admission relation). Admission is evaluated inside foundation's
+// run_route via the model's pinned TargetCommitment.
+pub use pipeline::{mine_at, recognize_under, recognize_under_bytes,
+                   MiningOutcome, MiningFailure};
 
 // Cost-model commitment surface — foundation's canonical
 // TypedCommitment catalog (ADR-048) + the five ObservablePredicate
@@ -607,32 +614,41 @@ pub use domain::{p_adic_valuation, ultrametric_valuation, walsh_hadamard_parity_
                  TriadicCoords};
 ```
 
-### 8.1 `mine` — the public mining entry
+### 8.1 `mine_at` — the kernel's admission-recognition entry
 
-`mine(header: &BlockHeader, target: Target) → Result<MiningOutcome, MiningFailure>`
-is the canonical entry (`mine_at(header, target, nonce)` is a single
-inference at one nonce). `mine`:
+`mine_at(header: &BlockHeader, target: Target, nonce: u32) →
+Result<MiningOutcome, MiningFailure>` is the kernel's sole admission
+body. **One recognition, one call.** The kernel does not search — the
+bridge layer (architecture §7, prism-btc-node, prism-btc-wasm) walks
+the candidate stream. `mine_at`:
 
 1. Promotes `target.to_bytes()` to its κ-label-form `&'static [u8]`
    threshold via [`leak_target`] (deduplicating against a
-   process-lifetime registry) and publishes it on the thread-local
-   commitment slot via [`set_thread_target`].
-2. For each candidate nonce, serializes `(header, nonce)` to the 80-byte
-   wire form and wraps it in a `BlockHeaderCarrier`.
+   process-lifetime registry) and publishes it on the per-thread
+   commitment slot. The publication is `pub(crate)` infrastructure —
+   it does not appear on the kernel's public surface.
+2. Serializes `(header, nonce)` to the 80-byte wire form and wraps it
+   in a `BlockHeaderCarrier`.
 3. Invokes `BitcoinAddressModel::forward(carrier)`, which delegates to
    foundation's `run_route<H, B, A, M, R, TargetCommitment>`.
 4. Classifies the result:
    - `Ok(grounded)` ⇒ extracts the `AddressOutcome` (the 72-byte
      `sha256d:<64hex>` κ-label + replayable `AddressWitness`) as
-     `MiningOutcome`, surfaces the 80-byte
-     `wire_format_header: [u8; 80]` and the 32-byte display-order
-     `digest`, decodes `KappaObservables`.
+     `MiningOutcome` — a **witness projection** carrying
+     `(witness, wire_format_header)` and the derivable projections
+     `address`, `nonce`, `digest`, `observables`.
    - `Err(ShapeViolation { commitment-IRI })` ⇒
-     `MiningFailure::DidNotAdmit { observables, nonce, digest }`; `mine`
-     advances to the next nonce.
+     `MiningFailure::DidNotAdmit { observables, nonce, digest }`. The
+     bridge advances its stream and re-recognizes.
    - Any earlier substrate-level violation ⇒
      `MiningFailure::PipelineFailure` (unreachable on well-formed
      inputs).
+
+For V&V tests that drive `BitcoinAddressModel::forward` directly to
+inspect the ψ-pipeline's structural properties without an admission
+relation, the kernel exposes [`recognize_under(target, |…|)`] and
+[`recognize_under_bytes(bytes, |…|)`] — scoped helpers that publish
+the threshold for the closure's body and have no other effect.
 
 Admission is **one foundation `TypedCommitment::evaluate` invocation
 inside the catamorphism** — not a host-boundary recomputation of the
@@ -860,9 +876,9 @@ application's instantiation of the foundation classes.
 
 | Crate | Role |
 |---|---|
-| [`prism-btc`](crates/prism-btc/) | The pure-prism domain layer. Declares Bitcoin's typed primitives, the `BlockHeaderCarrier` input + `BlockAddressLabel` output shapes, the ψ-chain verb body, `BitcoinAddressModel` (binding the shared uor-addr ψ-tower), the ADR-061 `sha256d` composition reference impl, and the public `mine()` entry point. Pure-Rust SHA-256 for the `sha256d` σ-axis. No external crypto dep. |
-| [`prism-btc-node`](crates/prism-btc-node/) | bitcoind RPC boundary. `getblocktemplate → BitcoinAddressModel::forward → submitblock`. `prism-mine` CLI binary. Adapts between Bitcoin Core's JSON-RPC and prism's typed-iso surface. |
-| [`prism-btc-wasm`](crates/prism-btc-wasm/) | `wasm-bindgen` surface around `prism_btc::mine`. |
+| [`prism-btc`](crates/prism-btc/) | The pure-prism domain layer. Declares Bitcoin's typed primitives, the `BlockHeaderCarrier` input + `BlockAddressLabel` output shapes, the ψ-chain verb body, `BitcoinAddressModel` (binding the shared uor-addr ψ-tower), the ADR-061 `sha256d` composition reference impl, and `mine_at` — the kernel's sole admission-recognition entry. Pure-Rust SHA-256 for the `sha256d` σ-axis. No external crypto dep. |
+| [`prism-btc-node`](crates/prism-btc-node/) | bitcoind RPC boundary. `getblocktemplate → BitcoinAddressModel::forward → submitblock`. Owns the bridge-layer nonce scan + extranonce roll over `mine_at`. `prism-mine` CLI binary. Adapts between Bitcoin Core's JSON-RPC and prism's typed-iso surface. |
+| [`prism-btc-wasm`](crates/prism-btc-wasm/) | `wasm-bindgen` surface around `prism_btc::mine_at`; the wasm `mine_block` owns its own nonce-scan bridge. |
 | [`prism-btc-lean/`](prism-btc-lean/) | Lean 4 formal proofs: ring identity (W8/W32), triadic coordinates, FreeRank protocol, shape constraint monotonicity, convergence protocol. The proofs are anchored to foundation's algebraic structure. |
 
 ## 14. UOR-optimal mining: foundation's typed-commitment surface
@@ -981,13 +997,14 @@ matching positions.
 
 Applications that want admission ∧ K-bit payload follow QS-06's
 exemplar shape: declare a derived `PrismModel<…, C>` with `C` pinned
-to the composed shape, then invoke its `forward()` from a thread
-with the target's `&'static` bytes published.
+to the composed shape, then invoke its `forward()` from a closure
+that scopes the target via [`recognize_under`] (or
+[`recognize_under_bytes`] for raw thresholds).
 
 ```rust
 use prism_btc::{
     PayloadK4, PrismBtcBounds, Sha256dHasher, BlockHeaderCarrier, BlockAddressLabel,
-    TargetCommitment, leak_target, payload_commitment_k4, set_thread_target_bytes,
+    TargetCommitment, leak_target, payload_commitment_k4, recognize_under,
 };
 use prism_btc::uor_addr::AddressResolverTuple;
 use prism::pipeline::{prism_model, AndCommitment};
@@ -1194,7 +1211,7 @@ The architectural levers that keep per-`forward()` cost minimal:
 - **Streaming, heap-free σ-axis.** `Sha256dHasher` folds the carrier
   online with a fixed-size struct (state + 64-byte partial-block
   buffer + counters); no allocation per fold.
-- **No heap allocations in `mine()`.** The `MiningOutcome` and the
+- **No heap allocations in `mine_at`.** The `MiningOutcome` and the
   `AddressOutcome` it wraps are constructed on the stack.
 
 The cost of the σ-fold inside ψ_9 (one streaming SHA-256d of the

@@ -56,12 +56,13 @@ unit tests across the prism-btc crate's modules:
   serialization round-trip.
 
 - **`crates/prism-btc/src/pipeline.rs::tests`** (3 tests) — the
-  public mining entry (`mine` / `mine_at`) under foundation's
+  kernel's admission-recognition entry (`mine_at`) under foundation's
   typed-commitment surface (wiki ADR-048):
-  - `mine()` admits within a small nonce-scan window for a permissive
-    regtest target — foundation's `run_route` evaluates
-    `TargetCommitment` on the κ-label inside the catamorphism; the
-    `AddressWitness` re-verifies to the same 72-byte κ-label.
+  - A bridge-layer nonce-scan over `mine_at` admits within a small
+    window for a permissive regtest target — foundation's
+    `run_route` evaluates `TargetCommitment` on the κ-label inside
+    the catamorphism; the `AddressWitness` re-verifies to the same
+    72-byte κ-label.
   - On `Ok`, the κ-label is the `sha256d:<64hex>` address (carrying
     the 32-byte display-order digest, wiki ADR-048/049 cost-model
     surface); the 80-byte wire-format header is surfaced on the side
@@ -120,7 +121,7 @@ per-test rationale.
 |---|---|---|
 | 1 | `v_verb_arena_composes_only_psi_stages_no_sigma_residuals` | Pure-prism commitment: verb body contains only ψ-Terms + Variable/Literal scaffolding |
 | 2 | `v_verb_arena_implements_the_k_invariant_branch` | ψ_1 → ψ_7 → ψ_8 → ψ_9 — the canonical block-address transform (architecture §4) |
-| 3 | `v_mine_admits_for_permissive_target` | `mine()` admits within a small nonce-scan window for a permissive regtest target — admission decided by foundation's `run_route` via the model's `TargetCommitment` |
+| 3 | `v_mine_admits_for_permissive_target` | A bridge-layer scan over `mine_at` admits within a small nonce-scan window for a permissive regtest target — admission decided by foundation's `run_route` via the model's `TargetCommitment` |
 | 4 | `v_mine_outcome_digest_actually_satisfies_target_when_admitted` | Fail-closed: every `Ok` outcome's digest genuinely satisfies the target (the typed-iso gate is inside `run_route`) |
 | 5 | `v_psi_pipeline_is_pure_function_of_typed_input` | Determinism: repetitions of the same header carrier produce byte-identical κ-labels |
 | 6 | `v_kappa_label_is_distinct_for_distinct_typed_inputs` | Distinctness: distinct inputs produce distinct κ-labels |
@@ -146,9 +147,9 @@ statements; tests are ID'd against it.
 | Class | Count | What it asserts |
 |---|---|---|
 | **CS** (structural) | 6 | No `Vec<Predicate>` / `dyn TypedCommitment` / `Box<dyn …>` in `src/`; `TypedCommitment: Copy + Sealed` enforced (foundation supertrait, wiki ADR-048); foundation's five canonical `ObservablePredicate` impls (`Stratum<P>`, `WalshHadamardParity`, `UltrametricCloseTo<P>`, `AffineParity`, `LexicographicLessEqThreshold`) reachable + closed catalog pinned (ADR-049); `MiningOutcome.observables: KappaObservables` always present; no legacy commitment-surface identifiers (`MiningCommitment`, `mine_with(`, `PayloadCommitment<`, `enum Predicate`, `enum Support`, …) in `src/`. |
-| **CD** (dynamic) | 3 | `mine()` returns `Ok` ⇒ digest satisfies the model's pinned `TargetCommitment` (admission was evaluated inside `run_route`); `payload_commitment_k*` helpers round-trip at K ∈ {1, 2, 4, 8}; `MiningOutcome.observables` agrees with the per-primitive `TriadicCoords::from_hash` / `p_adic_valuation` computation. |
+| **CD** (dynamic) | 3 | `mine_at` returns `Ok` ⇒ digest satisfies the model's pinned `TargetCommitment` (admission was evaluated inside `run_route`); `payload_commitment_k*` helpers round-trip at K ∈ {1, 2, 4, 8}; `MiningOutcome.observables` agrees with the per-primitive `TriadicCoords::from_hash` / `p_adic_valuation` computation. |
 | **CP** (probabilistic scaling) | 4 | `α⁻¹ × 2^K` cost identity holds within ±30% (≈4σ at N=200) across (a) K-sweep over four decades [0..12] at fixed α, (b) α-sweep over four decades [2⁻¹..2⁻¹²] at fixed K=2, (c) compound K × α decompositions of the same product; (d) foundation's `AndCommitment<TargetCommitment, payload>` is bandwidth-additive + `predicate_count`-additive + identity under `EmptyCommitment`, witnessed empirically across (lz, K) combinations. |
-| **CM** (mainnet readiness) | 6 | `Target::new(nBits)` accepts every mainnet-difficulty value in the chain's history; `mine()` produces well-formed 72-byte `sha256d` κ-labels (with 80-byte `wire_format_header` + 32-byte display-order digest) on synthetic mainnet inputs (`PipelineFailure` unreachable across 400 attempts × 8 difficulty levels); aggregate `CampaignStats` matches PRF baseline at N=10⁴ (χ² goodness-of-fit on stratum + spectrum at α=0.001); empirical α converges to theoretical α at N=10⁴ within ±5%; campaign is consistent under cooperative interruption. |
+| **CM** (mainnet readiness) | 6 | `Target::new(nBits)` accepts every mainnet-difficulty value in the chain's history; `mine_at` produces well-formed 72-byte `sha256d` κ-labels (with 80-byte `wire_format_header` + 32-byte display-order digest) on synthetic mainnet inputs (`PipelineFailure` unreachable across 400 attempts × 8 difficulty levels); aggregate `CampaignStats` matches PRF baseline at N=10⁴ (χ² goodness-of-fit on stratum + spectrum at α=0.001); empirical α converges to theoretical α at N=10⁴ within ±5%; campaign is consistent under cooperative interruption. |
 | **CN** + **CL** | (cross-ref) | Network-invariance (CN-1…4) cross-referenced to V&V §2 + host-loop §5; Lean-formal (CL-1…4) cross-referenced to §4 below. |
 
 Plus 1 negative-conformance witness (`MiningFailure::DidNotAdmit`
@@ -198,9 +199,9 @@ bitcoind:
   the merkle root varies under extranonce roll; version, prev_hash,
   timestamp, bits are template-fixed.
 - `assemble_produces_valid_bitcoin_block_with_supplied_nonce` — the
-  winning nonce (from `mine`'s scan) is spliced into a wire-format
-  `Block` with all header fields preserved; coinbase carries BIP141
-  witness and BIP34 height push.
+  winning nonce (from the bridge's nonce scan over `mine_at`) is
+  spliced into a wire-format `Block` with all header fields preserved;
+  coinbase carries BIP141 witness and BIP34 height push.
 - `from_components_accepts_witness_commitment` — when SegWit is
   active and bitcoind supplies a witness commitment, the coinbase
   output[1] carries the OP_RETURN commitment correctly.
@@ -211,8 +212,8 @@ bitcoind:
   1. `getblocktemplate` for a fresh regtest template.
   2. `PrismMiner::mine_one_block` drives the host-boundary
      template-variation loop: build the block header from the current
-     extranonce, call `prism_btc::mine` (which scans the nonce space),
-     on `DidNotAdmit` roll the extranonce, on `Ok` submit.
+     extranonce, walk the nonce space invoking `prism_btc::mine_at`
+     per candidate, on exhaustion roll the extranonce, on `Ok` submit.
   3. `submitblock` accepts the prism-btc-produced block.
   4. The observer client confirms the chain height advanced by
      exactly 1 and the new tip equals the prism-btc-mined block hash.
