@@ -3,7 +3,7 @@
 //!
 //! Every ψ-pipeline inference exposes a [`KappaObservables`] regardless
 //! of whether the κ-label admits (the lens is total — see
-//! [`crate::pipeline::MiningFailure::DidNotAdmit`]'s payload).
+//! the non-admitting candidate's payload).
 //! [`CampaignStats`] folds those per-attempt observables into a
 //! stack-resident aggregate, giving the host operator typed visibility
 //! into a mining session at scale.
@@ -27,7 +27,6 @@
 //! `#[inline]` and `O(1)`.
 
 use crate::observables::KappaObservables;
-use crate::pipeline::MiningOutcome;
 
 /// Stratum-histogram bin count — bins 0..32 are tracked per-value;
 /// stratum ≥ 32 folds into the last bin. Covers the practical regime
@@ -48,9 +47,8 @@ pub const PADIC_BINS: usize = 8;
 pub struct CampaignStats {
     /// Total ψ-pipeline inferences recorded — admitted + not-admitted.
     pub attempts: u64,
-    /// Subset of attempts that admitted (`mine_at`'s Ok arm — foundation's
-    /// `run_route` evaluated the model's pinned `TargetCommitment` and
-    /// sealed a `Grounded` block-address `AddressWitness`).
+    /// Subset of attempts that the host's PoW admission check
+    /// accepted (digest ≤ target).
     pub admissions: u64,
     /// Stratum histogram: `stratum_hist[k]` counts attempts whose
     /// κ-label has 2-adic valuation `min(k, STRATUM_BINS - 1)`.
@@ -117,11 +115,11 @@ impl CampaignStats {
     }
 
     /// Fold a successful admission into the aggregate — increments
-    /// both `attempts` and `admissions`.
+    /// both `attempts` and `admissions`. Host code calls this when its
+    /// PoW admission check passes for the candidate's digest.
     #[inline]
-    pub fn record_admission(&mut self, outcome: &MiningOutcome) {
-        let digest = outcome.digest();
-        self.record_attempt(&outcome.observables(), &digest);
+    pub fn record_admission(&mut self, observables: &KappaObservables, digest: &[u8; 32]) {
+        self.record_attempt(observables, digest);
         self.admissions = self.admissions.saturating_add(1);
     }
 
@@ -196,16 +194,10 @@ mod tests {
     #[test]
     fn record_admission_increments_both_counts() {
         let mut stats = CampaignStats::new();
-        // Reuse dummy_observables to construct a MiningOutcome-like
-        // bundle via direct field access in the test — round-trip is
-        // covered separately.
         let obs = dummy_observables(0, 0, 0);
         stats.record_attempt(&obs, &[0u8; 32]);
         stats.record_attempt(&obs, &[0u8; 32]);
-        // Synthesize an admission by directly bumping both counters
-        // through record_attempt + the admission count.
-        stats.record_attempt(&obs, &[0u8; 32]);
-        stats.admissions = 1;
+        stats.record_admission(&obs, &[0u8; 32]);
         assert_eq!(stats.attempts, 3);
         assert_eq!(stats.admissions, 1);
         assert!((stats.empirical_alpha() - 1.0 / 3.0).abs() < 1e-12);

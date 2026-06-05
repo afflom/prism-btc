@@ -10,8 +10,8 @@
 //! - [`KappaObservables`] — canonical, always-computed property
 //!   decomposition: triadic coordinates (2-adic stratum + spectrum) +
 //!   p-adic valuations at the small-prime set {2, 3, 5, 7}. Plain
-//!   `Copy` struct, stack-allocated, zero overhead. Always carried by
-//!   [`crate::MiningOutcome`] for every successfully mined block.
+//!   `Copy` struct, stack-allocated, zero overhead. Derived from a
+//!   κ-label's digest on demand by host code.
 //! - [`ExtendedObservables`]`<const N_PAR: usize, const N_REF: usize>`
 //!   — const-generic extension carrying parities at `N_PAR` user-chosen
 //!   ω-frequencies plus ultrametric distances to `N_REF` reference
@@ -31,9 +31,8 @@ use crate::TriadicCoords;
 /// (ANALYSIS.md §3.6) confirmed UOR-uniform on SHA-256d.
 pub const CANONICAL_PRIMES: [u64; 4] = [2, 3, 5, 7];
 
-/// Canonical UOR property landscape of a κ-label — always computed,
-/// always present on [`crate::MiningOutcome`]. The substrate-level
-/// always-on observatory.
+/// Canonical UOR property landscape of a κ-label — derived from a
+/// digest on demand. The substrate-level receiver-side observatory.
 ///
 /// Direct correspondence point: where foundation's
 /// [`prism::pipeline::TypedCommitment`] is the **sender** (commits to

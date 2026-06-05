@@ -15,17 +15,15 @@
 //!    not in a resolver.
 //! 2. [`crate::shapes::hasher::Sha256dHasher`] — the `sha256d` σ-axis
 //!    (double-SHA-256, display-order finalize).
-//! 3. [`crate::commitment::TargetCommitment`] — the cost-model commitment
-//!    (ADR-048 5th parameter): Bitcoin's difficulty target as a
-//!    `SingletonCommitment<LexicographicLessEqThreshold>` over the κ-label
-//!    form (see [`crate::commitment`]).
+//! 3. `EmptyCommitment` — the kernel binds no admission relation in
+//!    the model's 5th slot. The κ-derivation is total over
+//!    well-formed input; PoW admission is a protocol-level
+//!    observation on the κ-label, not a kernel operation.
 //!
 //! The κ-label ψ₉ emits is `sha256d:<64hex>` — exactly the conventional
-//! Bitcoin block hash, in display order. Foundation evaluates the
-//! commitment on that κ-label; admission `kappa_label ≤ target_label` is
-//! Bitcoin's PoW relation `block_hash ≤ target`. The replayable
-//! [`AddressWitness`](uor_addr::AddressWitness) the outcome carries **is**
-//! the proof-of-work witness.
+//! Bitcoin block hash, in display order. The replayable
+//! [`uor_addr::AddressWitness`] the outcome carries re-certifies the
+//! κ-label offline without re-invoking the σ-axis.
 
 use prism::pipeline::{
     output_shape, prism_model, ConstrainedTypeShape, ConstraintRef, IntoBindingValue,
@@ -55,10 +53,10 @@ pub const BLOCK_ADDRESS_LABEL_BYTES: usize = 7 + 1 + 2 * 32;
 /// Borrowed canonical-form Bitcoin block-header handle (ADR-060 borrowed
 /// carrier). A thin, `Copy` borrow of the 80-byte wire-format header
 /// bytes; `as_binding_value` returns the `Borrowed` carrier zero-copy.
-/// [`crate::pipeline::mine_at`] builds it from a
-/// [`crate::domain::BlockHeader`] + candidate nonce via
-/// [`crate::ops::header::serialize_header`] as part of one
-/// admission-recognition.
+/// [`crate::pipeline::address_block`] consumes such a carrier
+/// (built from a [`crate::domain::BlockHeader`] + candidate nonce via
+/// [`crate::ops::header::serialize_header`]) and emits the sealed
+/// κ-label.
 #[derive(Clone, Copy, Debug)]
 pub struct BlockHeaderCarrier<'a>(&'a [u8]);
 
@@ -153,18 +151,14 @@ pub mod verbs {
 
 // ─── The PrismModel ──────────────────────────────────────────────────────
 
-// ADR-048 pins `PrismModel`'s 5th type parameter to the cost-model
-// commitment. `BitcoinAddressModel` binds `C = TargetCommitment` — the
-// alias for `SingletonCommitment<LexicographicLessEqThreshold>` realizing
-// Bitcoin's `block_hash ≤ target` admission relation (ADR-040).
-//
-// Foundation's `run_route` evaluates the commitment on ψ₉'s κ-label output
-// bytes: if `kappa_label ≤ target_label` fails, run_route returns
-// `PipelineFailure::ShapeViolation` and seals no `Grounded`. The per-call
-// target κ-label is published on a per-thread slot by [`mine_at`] (or by
-// the scoped helpers `recognize_under` / `recognize_under_bytes`) before
-// each `forward()`; the publication mechanism is `pub(crate)`
-// infrastructure and is not part of the kernel's public surface.
+// ADR-048's 5th-position TypedCommitment slot is bound to
+// `EmptyCommitment` — the kernel does not embed an admission relation.
+// Bitcoin's `block_hash ≤ target` is a **protocol-level observation**
+// on the κ-label, not a kernel operation; host code that needs PoW
+// admission reads the κ-label's digest and compares to target directly.
+// `run_route` therefore seals a `Grounded<BlockAddressLabel>` for
+// every well-formed carrier; the κ-derivation is total over canonical
+// input.
 prism_model! {
     pub struct BitcoinAddressModel;
     pub struct BitcoinAddressRoute;
@@ -173,7 +167,7 @@ prism_model! {
         PrismBtcBounds,
         Sha256dHasher,
         uor_addr::AddressResolverTuple<Sha256dHasher>,
-        crate::commitment::TargetCommitment
+        prism::pipeline::EmptyCommitment
     > for BitcoinAddressModel {
         type Input = BlockHeaderCarrier<'a>;
         type Output = BlockAddressLabel;
@@ -181,8 +175,8 @@ prism_model! {
         fn route(input: Self::Input) -> Self::Output {
             block_address_inference(input)
         }
-        fn commitment() -> crate::commitment::TargetCommitment {
-            crate::commitment::target_commitment(crate::pipeline::current_thread_target())
+        fn commitment() -> prism::pipeline::EmptyCommitment {
+            prism::pipeline::EmptyCommitment
         }
     }
 }

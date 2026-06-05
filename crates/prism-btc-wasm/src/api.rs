@@ -1,19 +1,22 @@
 use crate::types::{JsBlockAddress, JsBlockHeader};
-use prism_btc::{admit, Bits, BlockHeader, MerkleRoot, Target, Timestamp, Version};
+use prism_btc::{
+    address_block, serialize_header, sha256d_display, Bits, BlockHeader, KappaObservables,
+    MerkleRoot, Target, Timestamp, Version,
+};
 use wasm_bindgen::prelude::*;
 
-/// Mine a block header from JavaScript.
+/// Mine a block header from JavaScript — the **wasm protocol layer**'s
+/// PoW search over the kernel's κ-derivation primitive.
 ///
-/// Realizes [`prism_btc::admit`] — the kernel's admission closure
-/// (the Kleene-star fixed point of per-nonce recognition over the
-/// [`prism_btc::NonceOrbit`]) — and projects the recognized outcome's
-/// receiver-side observables to JS. **No explicit loop**: the closure
-/// is the declarative stream-fold the kernel exposes; the wasm bridge
-/// is the JS-side projection of its result.
+/// The kernel (`prism_btc::address_block`) emits κ-labels for canonical
+/// block headers; admission is a host-side observation. This bridge
+/// walks the 32-bit nonce space, derives each candidate's κ, compares
+/// the digest to the target, and returns the receiver-side coordinates
+/// of the first candidate that admits.
 ///
 /// Returns a `JsBlockAddress` on success, or throws a JS error string
-/// on failure (orbit exhaustion: vary the template — timestamp /
-/// extranonce — and retry).
+/// when the nonce space exhausts without admission (vary the template
+/// — timestamp / extranonce — and retry).
 ///
 /// # Arguments
 /// * `js_header` — block header fields (version, prev_hash, merkle_root, timestamp, bits)
@@ -27,15 +30,22 @@ pub fn mine_block(js_header: &JsBlockHeader, nbits: u32) -> Result<JsBlockAddres
         timestamp: Timestamp(js_header.timestamp),
         bits: Bits(js_header.bits),
     };
+    let target = Target::new(nbits);
 
-    admit(&header, Target::new(nbits))
-        .map(|outcome| {
-            let coords = outcome.observables().coords;
-            JsBlockAddress::new(coords.datum, coords.stratum, coords.spectrum)
-        })
-        .ok_or_else(|| {
-            JsValue::from_str(
-                "nonce orbit exhausted without admission — vary the template (timestamp / extranonce) and retry",
-            )
-        })
+    for nonce in 0u32..=u32::MAX {
+        let wire = serialize_header(&header, nonce);
+        let _ = address_block(&wire); // κ-derivation through the kernel
+        let digest = sha256d_display(&wire);
+        if target.is_satisfied_by_bytes(&digest) {
+            let coords = KappaObservables::from_digest(&digest).coords;
+            return Ok(JsBlockAddress::new(
+                coords.datum,
+                coords.stratum,
+                coords.spectrum,
+            ));
+        }
+    }
+    Err(JsValue::from_str(
+        "nonce space exhausted without admission — vary the template (timestamp / extranonce) and retry",
+    ))
 }

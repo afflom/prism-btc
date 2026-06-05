@@ -1,14 +1,21 @@
-//! Bitcoin Core RPC integration for prism-btc.
+//! Bitcoin Core RPC integration for prism-btc — the **protocol layer**
+//! over the κ-derivation kernel.
 //!
-//! [`PrismMiner::mine_one_block`] is the entry point: fetch a template
-//! via `getblocktemplate`, then address prism-btc's block-header
-//! realization against template variations (extranonce roll) until an
-//! admitting block hash lands; assemble the wire-format block and submit
-//! via `submitblock` (architecture §7).
+//! prism-btc emits κ-labels for canonical-form block headers; this
+//! crate is the **mining protocol** that wraps that κ-derivation in
+//! Bitcoin's mining semantics. It owns:
+//! 1. The RPC adapter (`getblocktemplate` / `submitblock`).
+//! 2. The wire-format assembly (coinbase tx, merkle root, header bytes).
+//! 3. The **PoW search**: walk the 32-bit nonce space, derive each
+//!    candidate's κ via [`prism_btc::address_block`], compare the
+//!    digest to the target, take the first that admits.
+//! 4. The extranonce roll on nonce-space exhaustion.
+//! 5. The campaign observatory aggregating per-attempt observables.
 //!
-//! prism-btc owns the addressing inference (the UOR-ADDR typed-iso surface
-//! foundation's catamorphism evaluates); rust-bitcoin owns the
-//! transaction / script / block container; this crate is the wiring.
+//! The kernel makes no claim about searching; the search lives here,
+//! honest and explicit. Hosts with parallel/GPU/hardware miners
+//! replace this scan with their own implementation while reusing
+//! [`prism_btc::address_block`] as the κ-derivation primitive.
 
 use anyhow::{bail, Context, Result};
 use bitcoin::absolute::LockTime;
@@ -28,8 +35,8 @@ use bitcoincore_rpc::json::{
 use bitcoincore_rpc::{Auth, Client, RpcApi};
 
 use prism_btc::{
-    Bits, BlockHeader, CampaignStats, MerkleRoot, MiningFailure, MiningOutcome, MiningWitness,
-    NonceOrbit, Target, Timestamp, Version,
+    address_block, serialize_header, sha256d_display, Bits, BlockHeader, CampaignStats,
+    KappaObservables, MerkleRoot, MiningWitness, Target, Timestamp, Version,
 };
 
 const COINBASE_WITNESS_RESERVED: [u8; 32] = [0u8; 32];
@@ -130,15 +137,15 @@ impl PrismMiner {
         }
 
         // Template-variation loop: each iteration produces a fresh header
-        // template (distinct merkle root via the rolled extranonce) and a
-        // fresh nonce sweep. `scan_template_nonces` walks the 32-bit
-        // nonce space invoking `mine_at` per candidate; admission is
-        // the kernel returning Ok. On exhaustion the bridge varies the
-        // extranonce. The receiver-side typed lens (KappaObservables)
-        // is **total**: present on every attempt regardless of
-        // admission. Folded into a CampaignStats aggregate across the
-        // session so the operator gets typed visibility into mining
-        // at scale (CONFORMANCE.md CM-3, CM-5).
+        // Template-variation loop: each iteration produces a fresh
+        // header template (distinct merkle root via the rolled
+        // extranonce) and a fresh nonce sweep. The PoW search lives
+        // here — `scan_template_nonces` walks the 32-bit nonce space
+        // and uses `prism_btc::address_block` to derive each
+        // candidate's κ-label, then compares the digest to the target
+        // directly. Every per-candidate observable folds into the
+        // session's CampaignStats aggregate (CONFORMANCE.md CM-3,
+        // CM-5).
         let mut extranonce: u64 = 0;
         let mut campaign = CampaignStats::new();
         loop {
@@ -148,35 +155,30 @@ impl PrismMiner {
                 extranonce,
             )?;
 
-            match scan_template_nonces(&job.header, job.target, &mut campaign)? {
-                Some(outcome) => {
-                    let nonce = outcome.nonce();
-                    let witness = outcome.witness;
-                    let block = job.assemble(nonce);
-                    self.client
-                        .submit_block(&block)
-                        .context("submitblock rejected")?;
-                    return Ok(MinedBlock {
-                        hash: block.block_hash(),
-                        height: template.height,
-                        nonce,
-                        witness,
-                        tx_count: block.txdata.len(),
-                        extranonce_attempts: extranonce,
-                        campaign,
-                    });
-                }
-                None => {
-                    // No nonce for this template's header satisfied the
-                    // target. Vary the extranonce → distinct MerkleRoot →
-                    // distinct header template → a fresh nonce sweep.
-                    extranonce = extranonce.wrapping_add(1);
-                    if extranonce == 0 {
-                        anyhow::bail!(
-                            "u64 extranonce space exhausted for this template without admission"
-                        );
-                    }
-                }
+            if let Some((nonce, witness)) =
+                scan_template_nonces(&job.header, job.target, &mut campaign)
+            {
+                let block = job.assemble(nonce);
+                self.client
+                    .submit_block(&block)
+                    .context("submitblock rejected")?;
+                return Ok(MinedBlock {
+                    hash: block.block_hash(),
+                    height: template.height,
+                    nonce,
+                    witness,
+                    tx_count: block.txdata.len(),
+                    extranonce_attempts: extranonce,
+                    campaign,
+                });
+            }
+            // Nonce space exhausted for this template's header without
+            // a candidate whose digest satisfied the target. Roll the
+            // extranonce → distinct coinbase txid → distinct merkle
+            // root → distinct header template → a fresh nonce sweep.
+            extranonce = extranonce.wrapping_add(1);
+            if extranonce == 0 {
+                bail!("u64 extranonce space exhausted for this template without admission");
             }
         }
     }
@@ -207,56 +209,41 @@ pub struct MinedBlock {
     pub campaign: CampaignStats,
 }
 
-/// Realize the admission closure over one template's [`NonceOrbit`],
-/// folding each per-nonce recognition into `campaign` as it streams by.
+/// **The PoW search.** Walk the 32-bit nonce space for one template,
+/// call [`prism_btc::address_block`] for each candidate, observe the
+/// digest against the target, and take the first that admits. Every
+/// per-candidate observable folds into `campaign`.
 ///
-/// Returns `Ok(Some(outcome))` on the first admission, `Ok(None)` when
-/// the orbit exhausts without admission (the bridge then rolls the
-/// extranonce → distinct template → fresh orbit), and `Err` on a
-/// substrate-level shape violation (defensive — never observed for
-/// well-formed headers).
+/// The kernel exposes only κ-derivation; this function is the bridge's
+/// honest search loop over candidate canonical-form bytes. Hosts with
+/// parallel/GPU/hardware miners replace this body with their own
+/// candidate-stream implementation, reusing `address_block` as the
+/// kernel primitive.
 ///
-/// **No explicit loop.** The body is the orbit composed with
-/// [`Iterator::inspect`] (campaign side-effect on every recognition,
-/// admit or reject) and [`Iterator::find_map`] (the Kleene-star
-/// fixed-point selector — `Some` to short-circuit, `None` to advance).
-/// Per L3 / L5 nothing is held beyond the witness and its canonical
-/// input; the campaign aggregate is the only host-side residue.
+/// Returns `Some((nonce, witness))` on the first admitting candidate
+/// — the nonce that admits, and the κ-derivation witness from the
+/// kernel — or `None` if the entire nonce space exhausts without a
+/// digest satisfying the target.
 fn scan_template_nonces(
     header: &BlockHeader,
     target: Target,
     campaign: &mut CampaignStats,
-) -> Result<Option<MiningOutcome>> {
-    // The orbit's find_map yields one of three terminal states:
-    //   Some(Ok(outcome))  — admission landed; short-circuit
-    //   Some(Err(()))      — substrate violation; short-circuit
-    //   None               — orbit exhausted without admission
-    // (DidNotAdmit returns None from the closure → find_map advances.)
-    let stopped: Option<Result<Box<MiningOutcome>, ()>> = NonceOrbit::new(header, target)
-        .inspect(|recognition| match recognition {
-            Ok(outcome) => campaign.record_admission(outcome),
-            Err(f @ MiningFailure::DidNotAdmit { .. }) => {
-                if let (Some(observables), Some(digest)) = (f.observables(), f.digest()) {
-                    campaign.record_attempt(&observables, &digest);
-                }
-            }
-            Err(MiningFailure::PipelineFailure) => {}
-        })
-        .find_map(|recognition| match recognition {
-            Ok(outcome) => Some(Ok(Box::new(outcome))),
-            Err(MiningFailure::PipelineFailure) => Some(Err(())),
-            Err(MiningFailure::DidNotAdmit { .. }) => None,
-        });
+) -> Option<(u32, MiningWitness)> {
+    for nonce in 0u32..=u32::MAX {
+        // Serialize to canonical form, derive κ via the kernel, observe.
+        let wire = serialize_header(header, nonce);
+        let outcome = address_block(&wire);
+        let digest = sha256d_display(&wire);
+        let observables = KappaObservables::from_digest(&digest);
 
-    match stopped {
-        Some(Ok(outcome)) => Ok(Some(*outcome)),
-        Some(Err(())) => {
-            bail!(
-                "ψ-pipeline shape violation — defensive failure mode, should not occur for well-formed block headers"
-            )
+        // PoW admission check — a host-side observation on the digest.
+        if target.is_satisfied_by_bytes(&digest) {
+            campaign.record_admission(&observables, &digest);
+            return Some((nonce, outcome.witness));
         }
-        None => Ok(None),
+        campaign.record_attempt(&observables, &digest);
     }
+    None
 }
 
 /// All the per-template state a mining attempt needs.

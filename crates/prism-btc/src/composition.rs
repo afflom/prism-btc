@@ -10,8 +10,8 @@
 //! reference realization of ADR-061 for `sha256d`.
 //!
 //! Each operation takes one or two operand κ-labels (`sha256d:<64hex>`,
-//! produced by [`crate::mine_at`] or [`block_label_from_digest`]) and mints a
-//! new `sha256d` κ-label for the composed object by:
+//! produced by [`crate::address_block`] or [`block_label_from_digest`])
+//! and mints a new `sha256d` κ-label for the composed object by:
 //!
 //! 1. **canonicalize** — apply the operation's byte-level discipline
 //!    (ADR-061 §(3)) to the operand digests;
@@ -273,15 +273,20 @@ fn require_sha256d(axis: &str) -> Result<(), CompositionFailure> {
     }
 }
 
-/// Re-emit the `sha256d:<lowercase-hex>` canonical-form bytes of a raw
-/// 32-byte digest into a stack-allocated [u8; LABEL] buffer. The
-/// `sha256d` σ-axis is fixed-width (`len("sha256d") + 1 + 64 = 72`), so
-/// the canonical-form size is a const known at compile time —
-/// [`crate::commitment::target_label_bytes`] is the byte-for-byte
-/// encoder.
+/// Encode a raw 32-byte digest into its `sha256d:<lowercase-hex>`
+/// canonical-form byte sequence — the 72-byte κ-label of the
+/// `sha256d` σ-axis. Stack-allocated, fixed-width.
 #[inline]
 fn emit_canonical(raw: [u8; 32]) -> [u8; LABEL] {
-    crate::commitment::target_label_bytes(raw)
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = [0u8; LABEL];
+    out[..7].copy_from_slice(b"sha256d");
+    out[7] = b':';
+    for (i, &byte) in raw.iter().enumerate() {
+        out[8 + 2 * i] = HEX[(byte >> 4) as usize];
+        out[8 + 2 * i + 1] = HEX[(byte & 0x0F) as usize];
+    }
+    out
 }
 
 const DEGREE_5_TAG: u8 = 0x05;
@@ -320,7 +325,7 @@ const S4_PERMUTATIONS: [[usize; 4]; 24] = [
 /// hash. Inverse of [`KappaLabel::sigma_axis_digest_hex`] for this axis.
 #[must_use]
 pub fn block_label_from_digest(display_digest: &[u8; 32]) -> KappaLabel<LABEL> {
-    let bytes = crate::commitment::target_label_bytes(*display_digest);
+    let bytes = emit_canonical(*display_digest);
     KappaLabel::from_bytes(&bytes).expect("sha256d κ-label is 72 ASCII bytes by construction")
 }
 

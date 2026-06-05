@@ -1,43 +1,23 @@
-//! UOR-optimal mining: composing foundation's canonical commitment
-//! shapes on the κ-label of a freshly mined regtest block.
+//! Worked example: the **κ-derivation kernel + host-side admission +
+//! the generic typed-commitment surface**.
 //!
-//! Demonstrates the cost-model commitment surface foundation publishes
-//! per wiki ADR-048 + ADR-049:
-//!
-//! 1. **Bare admission.** `mine_at` goes through foundation's `run_route`
-//!    with the model's pinned `C = TargetCommitment`. The returned
-//!    `MiningOutcome` carries a κ-label digest that, by construction,
-//!    satisfies `LexicographicLessEqThreshold` (regtest target).
-//!
-//! 2. **K-fold payload composition.** Build `AndCommitment` trees of
-//!    `SingletonCommitment<AffineParity>` leaves via
-//!    [`prism_btc::payload_commitment_k2`] /
-//!    [`prism_btc::payload_commitment_k4`] /
-//!    [`prism_btc::payload_commitment_k8`] and evaluate them on the
-//!    mined digest. Each shape is monomorphized per use site — no
-//!    `Vec`, no dynamic dispatch.
-//!
-//! 3. **Stratum composition.** A `SingletonCommitment<Stratum<2>>`
-//!    over the 2-adic valuation of the κ-label.
-//!
-//! 4. **Composite admission ⊗ payload.** Combine `TargetCommitment`
-//!    with a payload via foundation's `AndCommitment`; show that
-//!    `bandwidth_bits()` is additive and `accept_prob()` is
-//!    multiplicative.
-//!
-//! Note: this example does not mine *through* a custom
-//! `PrismModel<…, C>` because foundation's `TypedCommitment` is sealed
-//! and the model declaration is out of scope for examples. Mining
-//! through a composed `C` requires a derived `prism_model!` declaration
-//! per wiki ADR-048; the spirit "evaluate composed commitments on the
-//! cost-model κ-label" is preserved by acting on the digest directly.
+//! The protocol layer (the host) walks candidate nonces, derives each
+//! one's κ through [`prism_btc::address_block`], and decides admission
+//! by comparing the digest to the target — Bitcoin's `digest ≤ target`,
+//! a host-side observation on the κ-label, **not** a kernel operation.
+//! On top of bare admission the host can compose foundation's typed
+//! commitments (the K-fold AffineParity payloads, the Stratum/
+//! LexicographicLessEqThreshold predicates) over the same digest to
+//! get richer admission gates — the receiver-side machinery the Lean
+//! `prf_prob_tight_wellFormed` theorem applies to.
 //!
 //! Run: `cargo run --release --example optimal_mining`.
 
 use prism_btc::{
-    admit, decode_payload, leak_target, payload_commitment_k2, payload_commitment_k4,
-    payload_commitment_k8, target_commitment, AndCommitment, Bits, BlockHeader, MerkleRoot,
-    SingletonCommitment, Stratum, Target, Timestamp, TypedCommitment, Version,
+    address_block, decode_payload, payload_commitment_k2, payload_commitment_k4,
+    payload_commitment_k8, serialize_header, sha256d_display, AndCommitment, Bits, BlockHeader,
+    LexicographicLessEqThreshold, MerkleRoot, SingletonCommitment, Stratum, Target, Timestamp,
+    TypedCommitment, Version,
 };
 
 const REGTEST_NBITS: u32 = 0x207fffff;
@@ -52,42 +32,47 @@ fn permissive_header(timestamp: u32) -> BlockHeader {
     }
 }
 
-/// Realize the admission closure across a stream of permissive
-/// template variations. Each variation's [`admit`] is the Kleene-star
-/// fixed point over its [`NonceOrbit`]; the first variation that lands
-/// a witness is taken.
-fn mine_one_admitting_block() -> ([u8; 32], u32) {
+/// Protocol-level mining: walk template variations, derive κ for each
+/// candidate via [`address_block`], take the first whose digest admits
+/// the target. The kernel handles only the κ-derivation; the search
+/// and the admission check are this host's concerns.
+fn host_side_mining() -> ([u8; 32], u32) {
     let target = Target::new(REGTEST_NBITS);
-    let outcome = (0u32..512)
-        .find_map(|ts| {
-            let header = permissive_header(1_700_000_000_u32.wrapping_add(ts));
-            admit(&header, target)
-        })
-        .expect("permissive regtest target must admit within 512 template variations");
-    (outcome.digest(), outcome.nonce())
+    for ts in 0u32..512 {
+        let header = permissive_header(1_700_000_000_u32.wrapping_add(ts));
+        for nonce in 0u32..4096 {
+            let wire = serialize_header(&header, nonce);
+            let _outcome = address_block(&wire); // κ-derivation through the kernel
+            let digest = sha256d_display(&wire);
+            if target.is_satisfied_by_bytes(&digest) {
+                return (digest, nonce);
+            }
+        }
+    }
+    panic!("permissive regtest target must admit within 512×4096 candidates");
 }
 
 fn main() {
-    println!("=== UOR-optimal mining (cost-model conformance per ADR-048/049) ===");
+    println!("=== Host-side PoW + generic typed-commitment composition ===");
     println!();
-    println!("σ-projection: SHA-256d. Admission via TargetCommitment");
-    println!("(`SingletonCommitment<LexicographicLessEqThreshold>`).");
+    println!("σ-projection: SHA-256d (the kernel's κ-derivation surface).");
+    println!("Admission: host-side digest ≤ target (NOT a kernel operation).");
     println!("Regtest nBits = 0x{REGTEST_NBITS:08x} (α ≈ 1/2).");
     println!();
 
-    let (digest, nonce) = mine_one_admitting_block();
-    println!("── §1. Bare admission ──────────────────────────────────");
-    println!("  κ-derived nonce      : 0x{nonce:08x}");
+    let (digest, nonce) = host_side_mining();
+    println!("── §1. Bare host-side admission ────────────────────────");
+    println!("  Admitting nonce      : 0x{nonce:08x}");
     println!("  κ-label digest (hex) : {}", hex32(&digest));
     println!();
 
     demo_payload_commitments(&digest);
     demo_stratum_commitment(&digest);
-    demo_composed_target_and_payload(&digest);
+    demo_composed_threshold_and_payload(&digest);
 
     println!();
     println!("Every commitment above is a foundation-sealed `TypedCommitment`,");
-    println!("monomorphized per use site. No Vec, no dynamic dispatch.");
+    println!("composable at the application/host layer over any κ-label.");
 }
 
 fn print_payload_row<C: TypedCommitment>(k: usize, cmt: &C, digest: &[u8; 32], rt: bool) {
@@ -103,12 +88,7 @@ fn print_payload_row<C: TypedCommitment>(k: usize, cmt: &C, digest: &[u8; 32], r
 fn demo_payload_commitments(digest: &[u8; 32]) {
     println!("── §2. K-fold AffineParity payload composition ─────────");
     println!();
-    println!("Decode K=2/4/8 payload bits off the digest's low bit positions");
-    println!("(AffineParity convention: bit_idx/8 is byte index, bit_idx%8 is bit position),");
-    println!("build the matching SingletonCommitment-tree, and check `evaluate` agrees.");
-    println!();
-    println!("  K   bandwidth    accept_prob    evaluate   decode_payload matches");
-    println!("  --  ---------    -----------    --------   ----------------------");
+    println!("  K   bandwidth    accept_prob    evaluate   decode round-trip");
 
     let b2 = decode_payload::<2>(digest);
     print_payload_row(
@@ -131,69 +111,55 @@ fn demo_payload_commitments(digest: &[u8; 32]) {
         digest,
         decode_payload::<8>(digest) == b8,
     );
-
-    println!();
-    println!("Bandwidth is additive over the AndCommitment tree;");
-    println!("accept_prob is multiplicative (per ADR-048 + U2 axiom).");
 }
 
 fn demo_stratum_commitment(digest: &[u8; 32]) {
     println!();
     println!("── §3. Stratum<2> single-observable commitment ─────────");
-    println!();
-    // Pick k = the 2-adic valuation actually observed on this digest, so
-    // the predicate accepts; show the type-level shape regardless.
     let k = prism_btc::p_adic_valuation(digest, 2).min(31);
     let cmt = SingletonCommitment {
         predicate: Stratum::<2> { k },
     };
-    println!("  Stratum<P=2> {{ k = {k} }}  (ν_2(κ-label) over the BE-integer view)");
     println!(
-        "  bandwidth = {:.3} bits, accept_prob = {:.6}, evaluate = {}",
+        "  Stratum<P=2> {{ k = {k} }}  bandwidth = {:.3} bits, accept_prob = {:.6}, evaluate = {}",
         cmt.bandwidth_bits(),
         cmt.accept_prob(),
         cmt.evaluate(digest),
     );
 }
 
-fn demo_composed_target_and_payload(digest: &[u8; 32]) {
+fn demo_composed_threshold_and_payload(digest: &[u8; 32]) {
     println!();
-    println!("── §4. Composite admission ⊗ payload ───────────────────");
-    println!();
-    // TargetCommitment against the regtest target — same bytes the scan used.
-    let target_static = leak_target(Target::new(REGTEST_NBITS).to_bytes());
-    let target_c = target_commitment(target_static);
+    println!("── §4. Composite host-side threshold ⊗ payload ─────────");
+    // Host builds a threshold commitment from its own static target
+    // bytes — no kernel involvement.
+    static TARGET_BYTES: [u8; 32] = [0xff; 32];
+    let threshold = SingletonCommitment {
+        predicate: LexicographicLessEqThreshold {
+            target: &TARGET_BYTES,
+        },
+    };
     let payload = payload_commitment_k4(decode_payload::<4>(digest));
     let composed = AndCommitment {
-        left: target_c,
+        left: threshold,
         right: payload,
     };
 
-    let sum_b = target_c.bandwidth_bits() + payload.bandwidth_bits();
-    let prod_a = target_c.accept_prob() * payload.accept_prob();
+    let sum_b = threshold.bandwidth_bits() + payload.bandwidth_bits();
+    let prod_a = threshold.accept_prob() * payload.accept_prob();
+    println!("  AndCommitment<threshold, PayloadK4>");
+    println!("  predicate_count       = {}", composed.predicate_count());
     println!(
-        "  AndCommitment<TargetCommitment, PayloadK4>: predicate_count = {}",
-        composed.predicate_count(),
-    );
-    println!(
-        "  bandwidth(left)       = {:>7.4} bits",
-        target_c.bandwidth_bits()
-    );
-    println!(
-        "  bandwidth(right)      = {:>7.4} bits",
-        payload.bandwidth_bits()
-    );
-    println!(
-        "  bandwidth(composed)   = {:>7.4} bits   (= left + right ⇒ {})",
+        "  bandwidth(composed)   = {:.4} bits  (= sum ⇒ {})",
         composed.bandwidth_bits(),
-        (composed.bandwidth_bits() - sum_b).abs() < 1e-9,
+        (composed.bandwidth_bits() - sum_b).abs() < 1e-9
     );
     println!(
-        "  accept_prob(composed) = {:>10.6}      (= left·right ⇒ {})",
+        "  accept_prob(composed) = {:.6}      (= product ⇒ {})",
         composed.accept_prob(),
-        (composed.accept_prob() - prod_a).abs() < 1e-12,
+        (composed.accept_prob() - prod_a).abs() < 1e-12
     );
-    println!("  evaluate(κ-label)     = {}", composed.evaluate(digest));
+    println!("  evaluate(digest)      = {}", composed.evaluate(digest));
 }
 
 fn hex32(d: &[u8; 32]) -> String {

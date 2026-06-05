@@ -112,15 +112,16 @@ impl Target {
 }
 
 /// The grounded proof-of-work witness — a UOR-ADDR
-/// [`AddressWitness`](uor_addr::AddressWitness) over the 72-byte
-/// `sha256d:<64hex>` κ-label and the 32-byte content fingerprint.
+/// [`uor_addr::AddressWitness`] over the 72-byte `sha256d:<64hex>`
+/// κ-label and the 32-byte content fingerprint.
 ///
-/// Produced by [`crate::pipeline::mine_at`] via
-/// [`BitcoinAddressModel::forward`](crate::model::BitcoinAddressModel). It
-/// owns a replayable TC-05 `Trace` + the σ-projection fingerprint;
-/// [`AddressWitness::verify`](uor_addr::AddressWitness::verify) re-certifies
-/// the derivation without re-invoking the σ-axis. The catamorphism's seal
-/// **is** Bitcoin's proof-of-work witness.
+/// Produced by [`crate::pipeline::address_block`] via
+/// `BitcoinAddressModel::forward`. It owns a replayable TC-05 `Trace`
+/// + the σ-projection fingerprint;
+/// [`uor_addr::AddressWitness::verify`] re-certifies the derivation
+/// without re-invoking the σ-axis. The catamorphism's seal is the
+/// witness; PoW admission is a separate host-side observation on the
+/// κ-label.
 pub type MiningWitness = uor_addr::AddressWitness<{ crate::model::BLOCK_ADDRESS_LABEL_BYTES }, 32>;
 
 /// PRISM triadic coordinates of a 32-byte block-hash digest.

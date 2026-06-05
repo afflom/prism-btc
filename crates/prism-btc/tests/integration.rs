@@ -1,32 +1,13 @@
-//! Integration tests for prism-btc's UOR-ADDR block-address inference.
+//! Integration tests for prism-btc's UOR-ADDR block-address kernel.
 //!
-//! prism-btc is a UOR-ADDR realization (ADR-060). The host serializes a
-//! [`BlockHeader`] + candidate nonce to the 80-byte wire form
-//! ([`serialize_header`]) — the canonical form — and wraps it in a
-//! [`BlockHeaderCarrier`]. [`BitcoinAddressModel::forward`] runs the
-//! shared ψ-tower: ψ₁–ψ₈ thread the borrowed carrier through and ψ₉ folds
-//! it through the `sha256d` σ-axis to mint the `sha256d:<64hex>` κ-label
-//! (the block hash in display order). Foundation's `run_route` evaluates
-//! the model's pinned `C = TargetCommitment` on the κ-label; admission
-//! `kappa_label ≤ target_label` is Bitcoin's PoW relation.
-//!
-//! These tests pin the surface API: the κ-label shape, determinism,
-//! distinctness, and the fail-closed admission contract through
-//! [`mine_at`] — the kernel's sole admission-recognition entry. Host
-//! iteration over the nonce space is **bridge-layer**, inlined here as
-//! `admit_by_nonce_scan` to drive admitted outcomes against a real
-//! target.
+//! End-to-end coverage of the κ-derivation kernel + the composition
+//! framework (compose_*, merkle_root) + host-side PoW observation.
 
-use prism::pipeline::PrismModel;
 use prism_btc::{
-    admit, mine_at, recognize_under_bytes, serialize_prefix, uor_addr::AddressOutcome,
-    BitcoinAddressModel, Bits, BlockHeader, BlockHeaderCarrier, MerkleRoot, MiningFailure,
-    MiningOutcome, Target, Timestamp, Version,
+    address_block, block_label_from_digest, compose_g2_product, compose_ordered_product,
+    merkle_root, serialize_header, serialize_prefix, sha256d_display, Bits, BlockHeader,
+    KappaObservables, MerkleRoot, Target, Timestamp, Version,
 };
-
-/// Permissive target: ~50% admission. Used for tests that exercise the
-/// ψ-pipeline shape rather than a restrictive admission relation.
-const PERMISSIVE_TARGET_BYTES: [u8; 32] = [0xffu8; 32];
 
 fn easy_header() -> BlockHeader {
     let merkle: [u8; 32] = [
@@ -43,138 +24,91 @@ fn easy_header() -> BlockHeader {
     }
 }
 
-/// Recognize one `(header, nonce)` candidate under a permissive
-/// target — the only public way to drive `BitcoinAddressModel::forward`
-/// directly is via [`recognize_under_bytes`] (the model's pinned
-/// `C = TargetCommitment` reads the target the scope publishes — ADR-048).
-/// Returns the κ-label string.
-fn forward_kappa_label(header: &BlockHeader, nonce: u32) -> String {
-    recognize_under_bytes(PERMISSIVE_TARGET_BYTES, || {
-        let wire = prism_btc::serialize_header(header, nonce);
-        let carrier = BlockHeaderCarrier::new(&wire);
-        let grounded =
-            BitcoinAddressModel::forward(carrier).expect("ψ-pipeline runs on permissive target");
-        let outcome = AddressOutcome::<72, 32>::from_grounded(&grounded)
-            .expect("outcome extracts from the sealed Grounded");
-        outcome.address.as_str().to_owned()
-    })
-}
-
-/// V&V helper: the admission closure as a panic-on-exhaustion call.
-fn admit_by_nonce_scan(header: &BlockHeader, target: Target) -> MiningOutcome {
-    admit(header, target).expect("permissive target should admit within the orbit")
+#[test]
+fn end_to_end_address_derivation_and_witness_replay() {
+    let wire = serialize_header(&easy_header(), 0);
+    let outcome = address_block(&wire);
+    assert!(outcome.address.starts_with("sha256d:"));
+    assert_eq!(outcome.address.len(), 72);
+    let replayed = outcome.witness.verify().expect("witness replays");
+    assert_eq!(replayed, outcome.address);
 }
 
 #[test]
-fn forward_emits_a_seventy_two_byte_sha256d_kappa_label() {
-    // ψ₉ folds the carrier through the `sha256d` σ-axis and emits the
-    // 72-byte `sha256d:<64hex>` κ-label — the conventional Bitcoin block
-    // hash in display order. Foundation evaluates the TargetCommitment on
-    // this κ-label byte sequence.
-    let header = easy_header();
-    let label = forward_kappa_label(&header, 0);
-    assert!(
-        label.starts_with("sha256d:"),
-        "κ-label is the sha256d address"
-    );
-    assert_eq!(label.len(), 72, "sha256d:<64hex> = 7 + 1 + 64 = 72 bytes");
-}
-
-#[test]
-fn forward_kappa_label_is_deterministic_in_the_typed_input() {
-    // The ψ-pipeline is parametric: same (header, nonce) → same κ-label.
-    let header = easy_header();
-    let a = forward_kappa_label(&header, 0x42);
-    let b = forward_kappa_label(&header, 0x42);
-    assert_eq!(a, b, "ψ-pipeline must be deterministic");
-}
-
-#[test]
-fn forward_kappa_label_is_distinct_for_distinct_inputs() {
-    // Distinct typed inputs (distinct nonces) yield distinct κ-labels —
-    // the σ-axis is collision-resistant, so distinct headers content-
-    // address to distinct sha256d block hashes.
-    let header = easy_header();
-    let a = forward_kappa_label(&header, 0x01);
-    let b = forward_kappa_label(&header, 0x02);
-    assert_ne!(a, b, "distinct typed inputs must yield distinct κ-labels");
-}
-
-#[test]
-fn admit_by_nonce_scan_lands_a_witness_against_permissive_target() {
-    // The bridge-layer scan walks the nonce space invoking the kernel's
-    // single-recognition mine_at. For the permissive target (regtest's
-    // 0x207fffff, ~50% admission per κ-derivation) the first admitting
-    // nonce arrives almost immediately. Fail-closed: the kernel returns
-    // Ok only when the digest genuinely satisfies the target (admission
-    // was evaluated inside foundation's run_route via the pinned
-    // TargetCommitment).
+fn host_side_admission_finds_a_witness_for_permissive_target() {
+    // The protocol layer's mining loop, in miniature. The kernel emits
+    // κ-labels; the host checks digest ≤ target.
     let header = easy_header();
     let target = Target::new(0x207fffff);
-    let outcome = admit_by_nonce_scan(&header, target);
+    let admitted = (0u32..1024).find_map(|nonce| {
+        let wire = serialize_header(&header, nonce);
+        let digest = sha256d_display(&wire);
+        if target.is_satisfied_by_bytes(&digest) {
+            let outcome = address_block(&wire);
+            Some((nonce, outcome, digest))
+        } else {
+            None
+        }
+    });
+    let (nonce, outcome, digest) = admitted.expect("permissive target admits within 1024");
 
-    assert!(target.is_satisfied_by_bytes(&outcome.digest()));
-    assert!(outcome.address().starts_with("sha256d:"));
-    assert_eq!(outcome.address().len(), 72);
-    assert_eq!(outcome.wire_format_header.len(), 80);
-    // The replayable witness re-certifies to the same κ-label (TC-05).
-    assert_eq!(
-        outcome.witness.verify().expect("replays"),
-        outcome.address()
-    );
-    // The receiver-side lens projects the block hash's UOR coordinates.
-    assert_eq!(outcome.observables().coords.datum, outcome.digest());
-}
-
-#[test]
-fn mine_at_re_recognizes_the_winning_nonce() {
-    // A single recognition at one nonce against the permissive target,
-    // re-running the bridge's winning nonce — re-derivation (L5) must
-    // produce a byte-identical κ-label and digest.
-    let header = easy_header();
-    let target = Target::new(0x207fffff);
-    let scanned = admit_by_nonce_scan(&header, target);
-    let pinned =
-        mine_at(&header, target, scanned.nonce()).expect("mine_at re-recognizes the winning nonce");
-    assert_eq!(pinned.address().as_str(), scanned.address().as_str());
-    assert_eq!(pinned.digest(), scanned.digest());
-}
-
-#[test]
-fn mine_at_did_not_admit_is_typed_for_restrictive_target() {
-    // A restrictive mainnet-style target rejects nonce 0 for this
-    // template; DidNotAdmit carries the total receiver-side lens.
-    let header = easy_header();
-    let target = Target::new(0x1d00ffff);
-    let failure = mine_at(&header, target, 0).expect_err("restrictive target rejects nonce 0");
-    assert!(matches!(failure, MiningFailure::DidNotAdmit { .. }));
-    let nonce = failure.nonce().expect("DidNotAdmit carries a nonce");
-    let digest = failure.digest().expect("DidNotAdmit carries a digest");
-    let observables = failure
-        .observables()
-        .expect("DidNotAdmit carries observables");
-    assert_eq!(nonce, 0);
-    assert!(!target.is_satisfied_by_bytes(&digest));
-    assert_eq!(observables.coords.datum, digest);
-}
-
-#[test]
-fn wire_format_header_carries_prefix_and_nonce() {
-    // The 80-byte wire-format header the outcome carries is exactly
-    // serialize_prefix(header) ‖ nonce.to_le_bytes() — the bytes
-    // `submitblock` accepts.
-    let header = easy_header();
-    let target = Target::new(0x207fffff);
-    let outcome = admit_by_nonce_scan(&header, target);
+    // Fail-closed at the host layer: the admitted digest genuinely
+    // satisfies the target.
+    assert!(target.is_satisfied_by_bytes(&digest));
+    // The wire format reconstructs to the same bytes the kernel saw.
     let prefix = serialize_prefix(&header);
-    assert_eq!(
-        &outcome.wire_format_header[..76],
-        &prefix[..],
-        "leading 76 bytes are the host-supplied template prefix"
-    );
-    assert_eq!(
-        &outcome.wire_format_header[76..80],
-        &outcome.nonce().to_le_bytes(),
-        "trailing 4 bytes are the winning nonce (canonical LE)"
-    );
+    let mut expected_wire = [0u8; 80];
+    expected_wire[..76].copy_from_slice(&prefix);
+    expected_wire[76..].copy_from_slice(&nonce.to_le_bytes());
+    let actual_wire = serialize_header(&header, nonce);
+    assert_eq!(expected_wire, actual_wire);
+    // The witness re-certifies the κ-label.
+    let replayed = outcome.witness.verify().expect("replays");
+    assert_eq!(replayed, outcome.address);
+}
+
+#[test]
+fn observables_are_a_pure_projection_of_the_digest() {
+    let header = easy_header();
+    let wire = serialize_header(&header, 0xABCDEF);
+    let digest = sha256d_display(&wire);
+    let observables = KappaObservables::from_digest(&digest);
+    assert_eq!(observables.coords.datum, digest);
+    // Deterministic on the digest.
+    let again = KappaObservables::from_digest(&digest);
+    assert_eq!(observables, again);
+}
+
+// ─── Composition surface ───────────────────────────────────────────────
+
+#[test]
+fn composition_g2_is_commutative() {
+    let a = block_label_from_digest(&[0x11; 32]);
+    let b = block_label_from_digest(&[0x22; 32]);
+    let ab = compose_g2_product(&a, &b).expect("g2");
+    let ba = compose_g2_product(&b, &a).expect("g2");
+    assert_eq!(ab.address, ba.address);
+}
+
+#[test]
+fn composition_ordered_product_is_not_commutative() {
+    let a = block_label_from_digest(&[0x11; 32]);
+    let b = block_label_from_digest(&[0x22; 32]);
+    let ab = compose_ordered_product(&a, &b).expect("ordered");
+    let ba = compose_ordered_product(&b, &a).expect("ordered");
+    assert_ne!(ab.address, ba.address);
+}
+
+#[test]
+fn merkle_root_recurrence_matches_bitcoin_discipline_for_three_leaves() {
+    let a = block_label_from_digest(&[0x01; 32]);
+    let b = block_label_from_digest(&[0x02; 32]);
+    let c = block_label_from_digest(&[0x03; 32]);
+    let root = merkle_root(&[a, b, c]).expect("merkle");
+    // Bitcoin's odd-tail discipline: level 1 = [pair(a,b), pair(c,c)];
+    // level 2 = pair(pair(a,b), pair(c,c)).
+    let n12 = compose_ordered_product(&a, &b).unwrap().address;
+    let n33 = compose_ordered_product(&c, &c).unwrap().address;
+    let expected = compose_ordered_product(&n12, &n33).unwrap().address;
+    assert_eq!(root, expected);
 }

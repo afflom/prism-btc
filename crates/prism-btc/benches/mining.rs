@@ -1,14 +1,9 @@
-//! Micro-benchmarks for prism-btc's typed-iso surface.
-//!
-//! Each bench measures one operation on the surface. There are no
-//! "mining throughput" or "candidates per second" metrics here —
-//! prism-btc performs one addressing inference per `(header, nonce)`
-//! (architecture §6 + §14), so the meaningful measurement is the
-//! wall-clock cost of a single `forward()` via [`mine_at`].
+//! Micro-benchmarks for prism-btc's κ-derivation kernel surface.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
 use prism_btc::{
-    mine_at, Bits, BlockHeader, MerkleRoot, Target, Timestamp, TriadicCoords, Version,
+    address_block, serialize_header, Bits, BlockHeader, MerkleRoot, Target, Timestamp,
+    TriadicCoords, Version,
 };
 
 fn permissive_header() -> BlockHeader {
@@ -26,21 +21,16 @@ fn permissive_header() -> BlockHeader {
     }
 }
 
-fn bench_mine_one_structural_inference(c: &mut Criterion) {
-    // One full addressing inference (`mine_at` at a fixed nonce) against a
-    // maximally-permissive target — ψ_1 → ψ_7 → ψ_8 → ψ_9 fold of the
-    // header carrier through the `sha256d` σ-axis plus the commitment
-    // admission check inside `run_route`. Deterministic in the typed
-    // input; the wall-clock per call is constant (independent of target
-    // restrictiveness).
+fn bench_address_block_one_derivation(c: &mut Criterion) {
+    // One full κ-derivation through the ψ-pipeline.
     let header = permissive_header();
-    let target = Target::new(0x207fffff);
-    let mut g = c.benchmark_group("mine");
+    let wire = serialize_header(&header, 0);
+    let mut g = c.benchmark_group("address_block");
     g.throughput(Throughput::Elements(1));
-    g.bench_function("one_structural_inference", |b| {
+    g.bench_function("one_derivation", |b| {
         b.iter(|| {
-            let outcome = mine_at(black_box(&header), black_box(target), black_box(0));
-            black_box(outcome.ok());
+            let outcome = address_block(black_box(&wire));
+            black_box(outcome);
         })
     });
     g.finish();
@@ -77,7 +67,7 @@ fn bench_triadic_coords(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_mine_one_structural_inference,
+    bench_address_block_one_derivation,
     bench_target_check,
     bench_triadic_coords,
 );
